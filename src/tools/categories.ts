@@ -201,19 +201,6 @@ export function registerCategoryTools(
         const budgetId = await context.ynabClient.resolveRealBudgetId(
           input.budget_id,
         );
-        const results: Array<Record<string, unknown>> = [];
-        const undoEntries: Array<{
-          operation: "set_category_budget";
-          description: string;
-          undo_action: {
-            type: "update";
-            entity_type: "category_budget";
-            entity_id: string;
-            expected_state: Record<string, unknown>;
-            restore_state: Record<string, unknown>;
-          };
-        }> = [];
-
         const prefetchResults = await Promise.all(
           input.assignments.map(async (assignment) => ({
             assignment,
@@ -225,60 +212,73 @@ export function registerCategoryTools(
           })),
         );
 
-        for (const { assignment, before } of prefetchResults) {
-          try {
-            if (!before) {
-              results.push({
+        const updateResults = await Promise.all(
+          prefetchResults.map(async ({ assignment, before }) => {
+            try {
+              if (!before) {
+                return {
+                  result: {
+                    assignment,
+                    status: "error",
+                    message: "Category/month not found.",
+                  } as Record<string, unknown>,
+                  undoEntry: null,
+                };
+              }
+
+              const updated = await context.ynabClient.setCategoryBudget(
+                budgetId,
                 assignment,
-                status: "error",
-                message: "Category/month not found.",
-              });
-              continue;
-            }
+              );
 
-            const updated = await context.ynabClient.setCategoryBudget(
-              budgetId,
-              assignment,
-            );
-
-            results.push({
-              category_id: updated.id,
-              month: assignment.month,
-              status: "updated",
-              previous_budgeted_milliunits: before.budgeted,
-              updated_budgeted_milliunits: updated.budgeted,
-              previous_budgeted: milliunitsToCurrency(before.budgeted),
-              updated_budgeted: milliunitsToCurrency(updated.budgeted),
-            });
-
-            undoEntries.push({
-              operation: "set_category_budget",
-              description: `Set budget for category ${assignment.category_id} in ${assignment.month}.`,
-              undo_action: {
-                type: "update",
-                entity_type: "category_budget",
-                entity_id: `${assignment.month}:${assignment.category_id}`,
-                expected_state: {
+              return {
+                result: {
                   category_id: updated.id,
                   month: assignment.month,
-                  budgeted: updated.budgeted,
+                  status: "updated",
+                  previous_budgeted_milliunits: before.budgeted,
+                  updated_budgeted_milliunits: updated.budgeted,
+                  previous_budgeted: milliunitsToCurrency(before.budgeted),
+                  updated_budgeted: milliunitsToCurrency(updated.budgeted),
+                } as Record<string, unknown>,
+                undoEntry: {
+                  operation: "set_category_budget" as const,
+                  description: `Set budget for category ${assignment.category_id} in ${assignment.month}.`,
+                  undo_action: {
+                    type: "update" as const,
+                    entity_type: "category_budget" as const,
+                    entity_id: `${assignment.month}:${assignment.category_id}`,
+                    expected_state: {
+                      category_id: updated.id,
+                      month: assignment.month,
+                      budgeted: updated.budgeted,
+                    },
+                    restore_state: {
+                      category_id: before.id,
+                      month: assignment.month,
+                      budgeted: before.budgeted,
+                    },
+                  },
                 },
-                restore_state: {
-                  category_id: before.id,
-                  month: assignment.month,
-                  budgeted: before.budgeted,
-                },
-              },
-            });
-          } catch (error) {
-            results.push({
-              assignment,
-              status: "error",
-              message:
-                error instanceof Error ? error.message : "Update failed.",
-            });
-          }
-        }
+              };
+            } catch (error) {
+              return {
+                result: {
+                  assignment,
+                  status: "error",
+                  message:
+                    error instanceof Error ? error.message : "Update failed.",
+                } as Record<string, unknown>,
+                undoEntry: null,
+              };
+            }
+          }),
+        );
+
+        const results = updateResults.map((r) => r.result);
+        const undoEntries = updateResults
+          .map((r) => r.undoEntry)
+          .filter((e): e is NonNullable<typeof e> => e !== null);
 
         let undoHistoryIds: string[] = [];
         if (undoEntries.length > 0) {
