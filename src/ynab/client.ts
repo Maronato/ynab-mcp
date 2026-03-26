@@ -1,5 +1,5 @@
 import * as ynab from "ynab";
-
+import { isNotFoundError } from "./errors.js";
 import {
   currencyToMilliunits,
   snapshotScheduledTransaction,
@@ -449,8 +449,9 @@ export class YnabClient {
         transactionId,
       );
       return response.data.transaction;
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFoundError(error)) return null;
+      throw error;
     }
   }
 
@@ -549,8 +550,9 @@ export class YnabClient {
       );
       this.invalidateBudgetCache(resolvedBudgetId, ["categories"]);
       return response.data.transaction;
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFoundError(error)) return null;
+      throw error;
     }
   }
 
@@ -566,8 +568,9 @@ export class YnabClient {
           scheduledTransactionId,
         );
       return response.data.scheduled_transaction;
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFoundError(error)) return null;
+      throw error;
     }
   }
 
@@ -685,8 +688,9 @@ export class YnabClient {
 
       this.invalidateBudgetCache(resolvedBudgetId, ["scheduledTransactions"]);
       return response.data.scheduled_transaction;
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFoundError(error)) return null;
+      throw error;
     }
   }
 
@@ -723,8 +727,9 @@ export class YnabClient {
         categoryId,
       );
       return response.data.category;
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotFoundError(error)) return null;
+      throw error;
     }
   }
 
