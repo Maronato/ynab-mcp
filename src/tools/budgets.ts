@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
@@ -76,13 +76,15 @@ export function registerBudgetTools(
             summary.to_be_budgeted_milliunits,
             settings.currency_format,
           ),
-          account_summary_by_type: summary.account_summary_by_type.map((entry) => ({
-            ...entry,
-            total_balance_display: formatCurrency(
-              entry.total_balance_milliunits,
-              settings.currency_format,
-            ),
-          })),
+          account_summary_by_type: summary.account_summary_by_type.map(
+            (entry) => ({
+              ...entry,
+              total_balance_display: formatCurrency(
+                entry.total_balance_milliunits,
+                settings.currency_format,
+              ),
+            }),
+          ),
         });
       } catch (error) {
         return errorToolResult(

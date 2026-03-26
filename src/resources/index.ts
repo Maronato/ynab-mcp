@@ -1,5 +1,5 @@
 import {
-  McpServer,
+  type McpServer,
   ResourceTemplate,
 } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -7,7 +7,10 @@ import type { AppContext } from "../context.js";
 import { textResource } from "../shared/mcp.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
-export function registerResources(server: McpServer, context: AppContext): void {
+export function registerResources(
+  server: McpServer,
+  context: AppContext,
+): void {
   server.registerResource(
     "budgets",
     "ynab://budgets",

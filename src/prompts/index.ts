@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { promptResult } from "../shared/mcp.js";
@@ -57,7 +57,7 @@ export function registerPrompts(server: McpServer): void {
           `From: ${sinceDate}`,
           `To: ${untilDate ?? "today"}`,
           "",
-          "1) Call `get_spending_analysis` with `group_by: \"both\"`.",
+          '1) Call `get_spending_analysis` with `group_by: "both"`.',
           "2) Provide top categories and payees with percentages of total spending.",
           "3) Highlight unusual patterns and actionable recommendations.",
           "4) If needed, call `search_transactions` for deeper drill-down on specific category/payee groups.",
@@ -83,7 +83,7 @@ export function registerPrompts(server: McpServer): void {
           "",
           `Budget: ${budgetId ?? "last-used"}`,
           "",
-          "1) Call `search_transactions` with one query: `{ \"type\": \"unapproved\", \"sort\": \"date_asc\", \"limit\": 500 }`.",
+          '1) Call `search_transactions` with one query: `{ "type": "unapproved", "sort": "date_asc", "limit": 500 }`.',
           "2) Present transactions in a compact table: date, payee, amount, category, memo.",
           "3) Ask for decisions in batch (approve only, approve+recategorize, edit memo, delete).",
           "4) Build one `update_transactions` request with all approval/edits and one `delete_transactions` request for deletions.",

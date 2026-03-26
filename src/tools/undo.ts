@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
@@ -30,7 +30,9 @@ export function registerUndoTools(
     },
     async (input) => {
       try {
-        const resolvedBudgetId = context.ynabClient.resolveBudgetId(input.budget_id);
+        const resolvedBudgetId = context.ynabClient.resolveBudgetId(
+          input.budget_id,
+        );
         const entries = await context.undoEngine.listHistory(
           resolvedBudgetId,
           input.session,
@@ -82,9 +84,7 @@ export function registerUndoTools(
         return jsonToolResult(result);
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to undo operations.",
+          error instanceof Error ? error.message : "Failed to undo operations.",
         );
       }
     },

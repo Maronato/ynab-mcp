@@ -113,7 +113,10 @@ export class UndoStore {
       }
 
       for (const key of Object.keys(history.id_mappings)) {
-        history.id_mappings[key] = this.resolveMappedIdFromHistory(history, key);
+        history.id_mappings[key] = this.resolveMappedIdFromHistory(
+          history,
+          key,
+        );
       }
 
       await this.writeBudgetHistoryUnsafe(budgetId, history);

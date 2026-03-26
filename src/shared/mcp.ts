@@ -1,4 +1,8 @@
-import type { CallToolResult, GetPromptResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import type {
+  CallToolResult,
+  GetPromptResult,
+  ReadResourceResult,
+} from "@modelcontextprotocol/sdk/types.js";
 
 export function jsonToolResult(value: unknown): CallToolResult {
   return {

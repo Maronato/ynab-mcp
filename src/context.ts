@@ -1,5 +1,5 @@
-import { UndoEngine } from "./undo/engine.js";
-import { YnabClient } from "./ynab/client.js";
+import type { UndoEngine } from "./undo/engine.js";
+import type { YnabClient } from "./ynab/client.js";
 
 export interface AppContext {
   ynabClient: YnabClient;
