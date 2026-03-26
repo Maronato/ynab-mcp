@@ -6,6 +6,7 @@ import { registerAnalysisTools } from "./analysis.js";
 import { registerBudgetTools } from "./budgets.js";
 import { registerCategoryTools } from "./categories.js";
 import { registerScheduledTransactionTools } from "./scheduled.js";
+import { registerSmartTools } from "./smart.js";
 import { registerTransactionTools } from "./transactions.js";
 import { registerUndoTools } from "./undo.js";
 
@@ -16,5 +17,6 @@ export function registerTools(server: McpServer, context: AppContext): void {
   registerCategoryTools(server, context);
   registerAnalysisTools(server, context);
   registerScheduledTransactionTools(server, context);
+  registerSmartTools(server, context);
   registerUndoTools(server, context);
 }

@@ -95,6 +95,8 @@ type Mock = ReturnType<typeof vi.fn>;
 export interface MockAppContext {
   ynabClient: Record<string, Mock>;
   undoEngine: Record<string, Mock>;
+  samplingClient: Record<string, Mock>;
+  payeeProfileAnalyzer: Record<string, Mock>;
 }
 
 export function captureToolHandlers(
@@ -151,6 +153,15 @@ export function createMockContext(): MockAppContext {
       recordEntries: vi.fn().mockResolvedValue([]),
       listHistory: vi.fn().mockResolvedValue([]),
       undoOperations: vi.fn().mockResolvedValue({ results: [], summary: {} }),
+    },
+    samplingClient: {
+      isAvailable: vi.fn(() => false),
+      createMessage: vi.fn(),
+      createJsonMessage: vi.fn(),
+    },
+    payeeProfileAnalyzer: {
+      getProfiles: vi.fn().mockResolvedValue(new Map()),
+      invalidate: vi.fn(),
     },
   };
 }
