@@ -12,6 +12,7 @@ export interface CreateServerOptions {
   accessToken: string;
   dataDirectory: string;
   endpointUrl?: string;
+  version?: string;
 }
 
 export function createYnabMcpServer(options: CreateServerOptions): {
@@ -29,7 +30,7 @@ export function createYnabMcpServer(options: CreateServerOptions): {
 
   const server = new McpServer({
     name: "ynab-mcp-server",
-    version: "0.1.0",
+    version: options.version ?? "0.0.0",
   });
 
   registerTools(server, context);
