@@ -776,3 +776,212 @@ describe("getScheduledTransactions — filtering", () => {
     expect(dates).toEqual([...dates].sort());
   });
 });
+
+describe("getBudgetSummary", () => {
+  beforeEach(() => {
+    mockApi.accounts.getAccounts.mockResolvedValue({
+      data: {
+        accounts: [
+          account({
+            id: "a1",
+            name: "Checking",
+            type: "checking",
+            balance: 500000,
+          }),
+          account({
+            id: "a2",
+            name: "Savings",
+            type: "savings",
+            balance: 1000000,
+          }),
+          account({
+            id: "a3",
+            name: "Credit",
+            type: "creditCard",
+            balance: -200000,
+          }),
+        ],
+        server_knowledge: 1,
+      },
+    });
+    mockApi.months.getPlanMonth.mockResolvedValue({
+      data: {
+        month: {
+          month: "2024-01-01",
+          income: 600000,
+          budgeted: 500000,
+          activity: -400000,
+          to_be_budgeted: 100000,
+          age_of_money: 30,
+          categories: [
+            { id: "c1", balance: 10000, hidden: false, deleted: false },
+            { id: "c2", balance: -5000, hidden: false, deleted: false },
+            { id: "c3", balance: -3000, hidden: true, deleted: false },
+            { id: "c4", balance: -1000, hidden: false, deleted: true },
+          ],
+        },
+      },
+    });
+  });
+
+  it("computes net worth as sum of all account balances", async () => {
+    const summary = await client.getBudgetSummary("b");
+    // 500000 + 1000000 + (-200000) = 1300000
+    expect(summary.net_worth_milliunits).toBe(1300000);
+    expect(summary.net_worth).toBe(1300);
+  });
+
+  it("counts overspent categories (balance < 0, not hidden, not deleted)", async () => {
+    const summary = await client.getBudgetSummary("b");
+    // c2 is overspent (balance < 0, not hidden, not deleted)
+    // c3 is hidden, c4 is deleted — excluded
+    expect(summary.overspent_category_count).toBe(1);
+  });
+
+  it("groups accounts by type with count and total_balance", async () => {
+    const summary = await client.getBudgetSummary("b");
+    const byType = summary.account_summary_by_type;
+
+    const checking = byType.find(
+      (e: { type: string }) => e.type === "checking",
+    );
+    expect(checking).toBeDefined();
+    expect(checking?.count).toBe(1);
+    expect(checking?.total_balance_milliunits).toBe(500000);
+
+    const savings = byType.find((e: { type: string }) => e.type === "savings");
+    expect(savings).toBeDefined();
+    expect(savings?.count).toBe(1);
+    expect(savings?.total_balance).toBe(1000);
+  });
+
+  it("returns month summary fields", async () => {
+    const summary = await client.getBudgetSummary("b");
+    expect(summary.income).toBe(600);
+    expect(summary.budgeted).toBe(500);
+    expect(summary.activity).toBe(-400);
+    expect(summary.to_be_budgeted).toBe(100);
+    expect(summary.age_of_money).toBe(30);
+  });
+});
+
+describe("getCategories with month parameter", () => {
+  beforeEach(() => {
+    // Base category tree (fetched without month)
+    mockApi.categories.getCategories.mockResolvedValue({
+      data: {
+        category_groups: [
+          {
+            id: "g1",
+            name: "Everyday",
+            hidden: false,
+            deleted: false,
+            categories: [
+              {
+                id: "c1",
+                name: "Groceries",
+                hidden: false,
+                deleted: false,
+                budgeted: 0,
+                activity: 0,
+                balance: 0,
+              },
+              {
+                id: "c2",
+                name: "Hidden Cat",
+                hidden: true,
+                deleted: false,
+                budgeted: 0,
+                activity: 0,
+                balance: 0,
+              },
+            ],
+          },
+          {
+            id: "g-deleted",
+            name: "Deleted Group",
+            hidden: false,
+            deleted: true,
+            categories: [],
+          },
+        ],
+        server_knowledge: 1,
+      },
+    });
+    // Month-specific data
+    mockApi.months.getPlanMonth.mockResolvedValue({
+      data: {
+        month: {
+          month: "2024-03-01",
+          income: 0,
+          budgeted: 0,
+          activity: 0,
+          to_be_budgeted: 0,
+          age_of_money: null,
+          categories: [
+            {
+              id: "c1",
+              name: "Groceries",
+              hidden: false,
+              deleted: false,
+              budgeted: 50000,
+              activity: -30000,
+              balance: 20000,
+            },
+            {
+              id: "c2",
+              name: "Hidden Cat",
+              hidden: true,
+              deleted: false,
+              budgeted: 10000,
+              activity: -5000,
+              balance: 5000,
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("overlays month-specific data onto category tree", async () => {
+    const groups = await client.getCategories("b", {
+      month: "2024-03-01",
+      includeHidden: true,
+    });
+
+    const groceries = groups[0].categories.find((c) => c.id === "c1");
+    expect(groceries?.budgeted).toBe(50000);
+    expect(groceries?.activity).toBe(-30000);
+  });
+
+  it("excludes deleted groups", async () => {
+    const groups = await client.getCategories("b", {
+      month: "2024-03-01",
+      includeHidden: true,
+    });
+
+    expect(groups.find((g) => g.id === "g-deleted")).toBeUndefined();
+  });
+
+  it("filters hidden categories when includeHidden is false", async () => {
+    const groups = await client.getCategories("b", {
+      month: "2024-03-01",
+      includeHidden: false,
+    });
+
+    const cats = groups[0].categories;
+    expect(cats.find((c) => c.id === "c2")).toBeUndefined();
+    expect(cats.find((c) => c.id === "c1")).toBeDefined();
+  });
+
+  it("filters by groupId when provided", async () => {
+    const groups = await client.getCategories("b", {
+      month: "2024-03-01",
+      groupId: "g1",
+      includeHidden: true,
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].id).toBe("g1");
+  });
+});

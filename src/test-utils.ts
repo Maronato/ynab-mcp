@@ -1,3 +1,5 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { vi } from "vitest";
 import type { UndoEntry } from "./undo/types.js";
 import type { CurrencyFormatLike } from "./ynab/format.js";
 import type { NameLookup } from "./ynab/types.js";
@@ -82,5 +84,73 @@ export function createMockCurrencyFormat(
     symbol_first: true,
     display_symbol: true,
     ...overrides,
+  };
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: tool handlers have varying signatures
+type ToolHandler = (input: any) => Promise<any>;
+
+type Mock = ReturnType<typeof vi.fn>;
+
+export interface MockAppContext {
+  ynabClient: Record<string, Mock>;
+  undoEngine: Record<string, Mock>;
+}
+
+export function captureToolHandlers(
+  // biome-ignore lint/suspicious/noExplicitAny: test utility accepting any register function
+  registerFn: (server: any, context: any) => void,
+  context: MockAppContext,
+): Record<string, ToolHandler> {
+  const handlers: Record<string, ToolHandler> = {};
+  const mockServer = {
+    registerTool(name: string, _config: unknown, cb: ToolHandler) {
+      handlers[name] = cb;
+    },
+  } as unknown as McpServer;
+
+  registerFn(mockServer, context);
+  return handlers;
+}
+
+export function createMockContext(): MockAppContext {
+  return {
+    ynabClient: {
+      resolveBudgetId: vi.fn((id?: string) => id ?? "last-used"),
+      resolveRealBudgetId: vi.fn(async (id?: string) => id ?? "budget-1"),
+      listBudgets: vi.fn().mockResolvedValue([]),
+      getBudgetSettings: vi.fn().mockResolvedValue({ currency_format: {} }),
+      getBudgetSummary: vi.fn().mockResolvedValue({}),
+      getAccounts: vi.fn().mockResolvedValue([]),
+      getCategories: vi.fn().mockResolvedValue([]),
+      getMonthSummary: vi.fn().mockResolvedValue({ categories: [] }),
+      getPayees: vi.fn().mockResolvedValue([]),
+      getNameLookup: vi.fn().mockResolvedValue({
+        accountById: new Map(),
+        categoryById: new Map(),
+        payeeById: new Map(),
+      }),
+      searchTransactions: vi.fn().mockResolvedValue([]),
+      getTransactionById: vi.fn().mockResolvedValue(null),
+      createTransactions: vi.fn().mockResolvedValue([]),
+      updateTransactions: vi.fn().mockResolvedValue([]),
+      deleteTransaction: vi.fn().mockResolvedValue(null),
+      getScheduledTransactionById: vi.fn().mockResolvedValue(null),
+      getScheduledTransactions: vi.fn().mockResolvedValue([]),
+      createScheduledTransaction: vi.fn().mockResolvedValue({}),
+      updateScheduledTransaction: vi.fn().mockResolvedValue({}),
+      deleteScheduledTransaction: vi.fn().mockResolvedValue(null),
+      setCategoryBudget: vi.fn().mockResolvedValue({}),
+      getMonthCategoryById: vi.fn().mockResolvedValue(null),
+      getTransactionsInRange: vi.fn().mockResolvedValue([]),
+      snapshotTransaction: vi.fn((tx: Record<string, unknown>) => tx),
+      snapshotScheduledTransaction: vi.fn((tx: Record<string, unknown>) => tx),
+    },
+    undoEngine: {
+      getSessionId: vi.fn(() => "test-session"),
+      recordEntries: vi.fn().mockResolvedValue([]),
+      listHistory: vi.fn().mockResolvedValue([]),
+      undoOperations: vi.fn().mockResolvedValue({ results: [], summary: {} }),
+    },
   };
 }
