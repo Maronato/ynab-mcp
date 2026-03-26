@@ -159,6 +159,7 @@ export function registerTransactionTools(
           resolvedBudgetId,
           transactions as CreateTransactionInput[],
         );
+        context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
         const [lookups, settings] = await Promise.all([
           context.ynabClient.getNameLookup(resolvedBudgetId),
           context.ynabClient.getBudgetSettings(resolvedBudgetId),
@@ -256,6 +257,9 @@ export function registerTransactionTools(
               updatesToApply as UpdateTransactionInput[],
             )
           : [];
+        if (updated.length > 0) {
+          context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
+        }
 
         const [lookups, settings] = await Promise.all([
           context.ynabClient.getNameLookup(resolvedBudgetId),
@@ -371,63 +375,64 @@ export function registerTransactionTools(
           })),
         );
 
-        const results: Array<Record<string, unknown>> = [];
-        const undoEntries: Array<{
-          operation: "delete_transaction";
-          description: string;
-          undo_action: {
-            type: "create";
-            entity_type: "transaction";
-            entity_id: string;
-            expected_state: Record<string, unknown>;
-            restore_state: Record<string, unknown>;
-          };
-        }> = [];
+        const deleteResults = await Promise.all(
+          prefetchResults.map(
+            async ({ id: transactionId, transaction: before }) => {
+              if (!before) {
+                return {
+                  result: {
+                    transaction_id: transactionId,
+                    status: "error",
+                    message: "Transaction not found.",
+                  } as Record<string, unknown>,
+                  undoEntry: null,
+                };
+              }
 
-        for (const {
-          id: transactionId,
-          transaction: before,
-        } of prefetchResults) {
-          if (!before) {
-            results.push({
-              transaction_id: transactionId,
-              status: "error",
-              message: "Transaction not found.",
-            });
-            continue;
-          }
+              const deleted = await context.ynabClient.deleteTransaction(
+                resolvedBudgetId,
+                transactionId,
+              );
 
-          const deleted = await context.ynabClient.deleteTransaction(
-            resolvedBudgetId,
-            transactionId,
-          );
+              if (!deleted) {
+                return {
+                  result: {
+                    transaction_id: transactionId,
+                    status: "error",
+                    message: "Delete request failed.",
+                  } as Record<string, unknown>,
+                  undoEntry: null,
+                };
+              }
 
-          if (!deleted) {
-            results.push({
-              transaction_id: transactionId,
-              status: "error",
-              message: "Delete request failed.",
-            });
-            continue;
-          }
-
-          results.push({
-            transaction_id: transactionId,
-            status: "deleted",
-          });
-
-          undoEntries.push({
-            operation: "delete_transaction",
-            description: `Deleted transaction ${transactionId}.`,
-            undo_action: {
-              type: "create",
-              entity_type: "transaction",
-              entity_id: transactionId,
-              expected_state: {},
-              restore_state: snapshotTransaction(before),
+              return {
+                result: {
+                  transaction_id: transactionId,
+                  status: "deleted",
+                } as Record<string, unknown>,
+                undoEntry: {
+                  operation: "delete_transaction" as const,
+                  description: `Deleted transaction ${transactionId}.`,
+                  undo_action: {
+                    type: "create" as const,
+                    entity_type: "transaction" as const,
+                    entity_id: transactionId,
+                    expected_state: {},
+                    restore_state: snapshotTransaction(before),
+                  },
+                },
+              };
             },
-          });
+          ),
+        );
+
+        const results = deleteResults.map((r) => r.result);
+        if (deleteResults.some((r) => r.undoEntry !== null)) {
+          context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
         }
+        const undoEntries = deleteResults
+          .map((r) => r.undoEntry)
+          .filter((e): e is NonNullable<typeof e> => e !== null);
 
         const undoHistoryIds =
           undoEntries.length > 0
