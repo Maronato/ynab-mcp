@@ -34,6 +34,7 @@ export class UndoStore {
         0,
         this.maxEntriesPerBudget,
       );
+      this.pruneIdMappings(current);
       await this.writeBudgetHistoryUnsafe(budgetId, current);
     });
   }
@@ -181,6 +182,20 @@ export class UndoStore {
 
     await writeFile(temporaryPath, content, "utf8");
     await rename(temporaryPath, filePath);
+  }
+
+  private pruneIdMappings(history: UndoHistoryFile): void {
+    const referencedIds = new Set<string>();
+    for (const entry of history.entries) {
+      referencedIds.add(entry.undo_action.entity_id);
+    }
+
+    for (const key of Object.keys(history.id_mappings)) {
+      const resolved = this.resolveMappedIdFromHistory(history, key);
+      if (!referencedIds.has(key) && !referencedIds.has(resolved)) {
+        delete history.id_mappings[key];
+      }
+    }
   }
 
   private async ensureHistoryDirectory(): Promise<void> {
