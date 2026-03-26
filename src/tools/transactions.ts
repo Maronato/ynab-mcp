@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
@@ -6,7 +6,6 @@ import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import {
   formatCurrency,
   formatTransactionForOutput,
-  milliunitsToCurrency,
   snapshotTransaction,
 } from "../ynab/format.js";
 import type {
@@ -154,7 +153,8 @@ export function registerTransactionTools(
     },
     async ({ budget_id: budgetId, transactions }) => {
       try {
-        const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(budgetId);
+        const resolvedBudgetId =
+          await context.ynabClient.resolveRealBudgetId(budgetId);
         const created = await context.ynabClient.createTransactions(
           resolvedBudgetId,
           transactions as CreateTransactionInput[],
@@ -165,7 +165,11 @@ export function registerTransactionTools(
         ]);
 
         const formatted = created.map((transaction) =>
-          formatTransactionForOutput(transaction, lookups, settings.currency_format),
+          formatTransactionForOutput(
+            transaction,
+            lookups,
+            settings.currency_format,
+          ),
         );
 
         const undoEntries = created.map((transaction) => ({
@@ -216,9 +220,13 @@ export function registerTransactionTools(
     },
     async ({ budget_id: budgetId, transactions }) => {
       try {
-        const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(budgetId);
-        const beforeById = new Map<string, ReturnType<typeof snapshotTransaction>>();
-        const missingIds: string[] = [];
+        const resolvedBudgetId =
+          await context.ynabClient.resolveRealBudgetId(budgetId);
+        const beforeById = new Map<
+          string,
+          ReturnType<typeof snapshotTransaction>
+        >();
+        const missingIds = new Set<string>();
 
         const prefetchResults = await Promise.all(
           transactions.map(async (update) => ({
@@ -232,14 +240,14 @@ export function registerTransactionTools(
 
         for (const result of prefetchResults) {
           if (!result.transaction) {
-            missingIds.push(result.id);
+            missingIds.add(result.id);
           } else {
             beforeById.set(result.id, snapshotTransaction(result.transaction));
           }
         }
 
         const updatesToApply = transactions.filter(
-          (update) => !missingIds.includes(update.transaction_id),
+          (update) => !missingIds.has(update.transaction_id),
         );
 
         const updated = updatesToApply.length
@@ -254,7 +262,9 @@ export function registerTransactionTools(
           context.ynabClient.getBudgetSettings(resolvedBudgetId),
         ]);
 
-        const afterById = new Map(updated.map((transaction) => [transaction.id, transaction]));
+        const afterById = new Map(
+          updated.map((transaction) => [transaction.id, transaction]),
+        );
         const undoEntries: Array<{
           operation: "update_transaction";
           description: string;
@@ -305,7 +315,7 @@ export function registerTransactionTools(
           });
         }
 
-        for (const missingId of missingIds) {
+        for (const missingId of missingIds.values()) {
           results.push({
             transaction_id: missingId,
             status: "error",
@@ -348,7 +358,19 @@ export function registerTransactionTools(
     },
     async ({ budget_id: budgetId, transaction_ids: transactionIds }) => {
       try {
-        const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(budgetId);
+        const resolvedBudgetId =
+          await context.ynabClient.resolveRealBudgetId(budgetId);
+
+        const prefetchResults = await Promise.all(
+          transactionIds.map(async (id) => ({
+            id,
+            transaction: await context.ynabClient.getTransactionById(
+              resolvedBudgetId,
+              id,
+            ),
+          })),
+        );
+
         const results: Array<Record<string, unknown>> = [];
         const undoEntries: Array<{
           operation: "delete_transaction";
@@ -362,12 +384,10 @@ export function registerTransactionTools(
           };
         }> = [];
 
-        for (const transactionId of transactionIds) {
-          const before = await context.ynabClient.getTransactionById(
-            resolvedBudgetId,
-            transactionId,
-          );
-
+        for (const {
+          id: transactionId,
+          transaction: before,
+        } of prefetchResults) {
           if (!before) {
             results.push({
               transaction_id: transactionId,
@@ -391,8 +411,6 @@ export function registerTransactionTools(
             continue;
           }
 
-          const beforeSnapshot = snapshotTransaction(before);
-
           results.push({
             transaction_id: transactionId,
             status: "deleted",
@@ -406,7 +424,7 @@ export function registerTransactionTools(
               entity_type: "transaction",
               entity_id: transactionId,
               expected_state: {},
-              restore_state: beforeSnapshot,
+              restore_state: snapshotTransaction(before),
             },
           });
         }

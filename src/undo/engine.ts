@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-
-import { milliunitsToCurrency } from "../ynab/format.js";
-import { YnabClient } from "../ynab/client.js";
 import { matchesExpectedState } from "../shared/object.js";
-import { UndoStore } from "./store.js";
+import type { YnabClient } from "../ynab/client.js";
+import { milliunitsToCurrency } from "../ynab/format.js";
+import type { UndoStore } from "./store.js";
 import type {
   UndoConflict,
   UndoEntry,
@@ -96,7 +95,10 @@ export class UndoEngine {
     const results: UndoExecutionResult[] = [];
 
     for (const [budgetId, groupedEntryIds] of groupedByBudget.entries()) {
-      const entries = await this.store.getEntriesByIds(budgetId, groupedEntryIds);
+      const entries = await this.store.getEntriesByIds(
+        budgetId,
+        groupedEntryIds,
+      );
       const successfullyUndone: string[] = [];
 
       for (let index = 0; index < groupedEntryIds.length; index += 1) {
@@ -136,7 +138,8 @@ export class UndoEngine {
 
     const summary = {
       undone: results.filter((result) => result.status === "undone").length,
-      conflicts: results.filter((result) => result.status === "conflict").length,
+      conflicts: results.filter((result) => result.status === "conflict")
+        .length,
       skipped: results.filter((result) => result.status === "skipped").length,
       errors: results.filter((result) => result.status === "error").length,
     };
@@ -161,9 +164,7 @@ export class UndoEngine {
     force: boolean,
   ): Promise<UndoExecutionResult> {
     const fromDifferentSession = entry.session_id !== this.sessionId;
-    const sessionPrefix = fromDifferentSession
-      ? "[cross-session] "
-      : "";
+    const sessionPrefix = fromDifferentSession ? "[cross-session] " : "";
 
     const resolvedEntityId = await this.store.resolveMappedId(
       entry.budget_id,
@@ -341,7 +342,10 @@ export class UndoEngine {
     const restore = entry.undo_action.restore_state;
 
     if (entry.undo_action.type === "delete") {
-      await this.client.deleteScheduledTransaction(entry.budget_id, resolvedEntityId);
+      await this.client.deleteScheduledTransaction(
+        entry.budget_id,
+        resolvedEntityId,
+      );
       return "Deleted scheduled transaction as undo action.";
     }
 
@@ -378,29 +382,32 @@ export class UndoEngine {
       return "Updated scheduled transaction to restore prior state.";
     }
 
-    const recreated = await this.client.createScheduledTransaction(entry.budget_id, {
-      account_id: asRequiredString(restore.account_id),
-      date: asRequiredString(restore.date),
-      amount: milliunitsToCurrency(asNumber(restore.amount)),
-      payee_id: asOptionalNullableString(restore.payee_id),
-      category_id: asOptionalNullableString(restore.category_id),
-      memo: asOptionalNullableString(restore.memo),
-      frequency: asRequiredString(restore.frequency) as
-        | "never"
-        | "daily"
-        | "weekly"
-        | "everyOtherWeek"
-        | "twiceAMonth"
-        | "every4Weeks"
-        | "monthly"
-        | "everyOtherMonth"
-        | "every3Months"
-        | "every4Months"
-        | "twiceAYear"
-        | "yearly"
-        | "everyOtherYear",
-      flag_color: asOptionalNullableString(restore.flag_color),
-    });
+    const recreated = await this.client.createScheduledTransaction(
+      entry.budget_id,
+      {
+        account_id: asRequiredString(restore.account_id),
+        date: asRequiredString(restore.date),
+        amount: milliunitsToCurrency(asNumber(restore.amount)),
+        payee_id: asOptionalNullableString(restore.payee_id),
+        category_id: asOptionalNullableString(restore.category_id),
+        memo: asOptionalNullableString(restore.memo),
+        frequency: asRequiredString(restore.frequency) as
+          | "never"
+          | "daily"
+          | "weekly"
+          | "everyOtherWeek"
+          | "twiceAMonth"
+          | "every4Weeks"
+          | "monthly"
+          | "everyOtherMonth"
+          | "every3Months"
+          | "every4Months"
+          | "twiceAYear"
+          | "yearly"
+          | "everyOtherYear",
+        flag_color: asOptionalNullableString(restore.flag_color),
+      },
+    );
 
     await this.store.updateIdMappings(
       entry.budget_id,
@@ -435,9 +442,7 @@ export class UndoEngine {
         return null;
       }
 
-      return this.client.snapshotTransaction(
-        transaction,
-      ) as unknown as Record<string, unknown>;
+      return this.client.snapshotTransaction(transaction);
     }
 
     if (entry.undo_action.entity_type === "scheduled_transaction") {
@@ -450,12 +455,12 @@ export class UndoEngine {
         return null;
       }
 
-      return this.client.snapshotScheduledTransaction(
-        transaction,
-      ) as unknown as Record<string, unknown>;
+      return this.client.snapshotScheduledTransaction(transaction);
     }
 
-    const categoryId = asRequiredString(entry.undo_action.restore_state.category_id);
+    const categoryId = asRequiredString(
+      entry.undo_action.restore_state.category_id,
+    );
     const month = asRequiredString(entry.undo_action.restore_state.month);
     const category = await this.client.getMonthCategoryById(
       entry.budget_id,
@@ -483,9 +488,7 @@ function asOptionalString(value: unknown): string | undefined {
   return String(value);
 }
 
-function asOptionalNullableString(
-  value: unknown,
-): string | null | undefined {
+function asOptionalNullableString(value: unknown): string | null | undefined {
   if (value === undefined) {
     return undefined;
   }

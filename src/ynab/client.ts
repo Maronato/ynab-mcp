@@ -10,9 +10,7 @@ import type {
   CreateScheduledTransactionInput,
   CreateTransactionInput,
   NameLookup,
-  ScheduledTransactionSnapshot,
   TransactionSearchQuery,
-  TransactionSnapshot,
   UpdateScheduledTransactionInput,
   UpdateTransactionInput,
 } from "./types.js";
@@ -48,10 +46,11 @@ interface GetScheduledTransactionsOptions {
   categoryId?: string;
 }
 
-const DEFAULT_ACCOUNT_OPTIONS: Required<Pick<GetAccountsOptions, "includeClosed">> =
-  {
-    includeClosed: false,
-  };
+const DEFAULT_ACCOUNT_OPTIONS: Required<
+  Pick<GetAccountsOptions, "includeClosed">
+> = {
+  includeClosed: false,
+};
 
 const DEFAULT_CATEGORIES_OPTIONS: Required<
   Pick<GetCategoriesOptions, "includeHidden">
@@ -71,7 +70,11 @@ export class YnabClient {
   }
 
   resolveBudgetId(budgetId?: string): string {
-    return budgetId ?? "last-used";
+    const id = budgetId ?? "last-used";
+    if (id === "last-used" && this.resolvedLastUsedId) {
+      return this.resolvedLastUsedId;
+    }
+    return id;
   }
 
   async resolveRealBudgetId(budgetId?: string): Promise<string> {
@@ -132,7 +135,8 @@ export class YnabClient {
     );
 
     const overspentCategoryCount = month.categories.filter(
-      (category) => category.balance < 0 && !category.hidden && !category.deleted,
+      (category) =>
+        category.balance < 0 && !category.hidden && !category.deleted,
     ).length;
 
     const accountsByType = new Map<
@@ -223,7 +227,8 @@ export class YnabClient {
 
     if (!mergedOptions.month || mergedOptions.month === "current") {
       await this.refreshCategories(resolvedBudgetId);
-      const categoryGroups = this.getBudgetCache(resolvedBudgetId).categoryGroups;
+      const categoryGroups =
+        this.getBudgetCache(resolvedBudgetId).categoryGroups;
       const entries = [...categoryGroups.values()]
         .filter((group) => !group.deleted)
         .filter((group) =>
@@ -241,6 +246,8 @@ export class YnabClient {
       return entries;
     }
 
+    // Recursive call: fetch the full category tree (no month filter, include hidden)
+    // to get the group structure, then overlay month-specific budget data on top.
     const [month, categoryGroups] = await Promise.all([
       this.getMonthSummary(resolvedBudgetId, mergedOptions.month),
       this.getCategories(resolvedBudgetId, {
@@ -274,7 +281,10 @@ export class YnabClient {
     month = "current",
   ): Promise<ynab.MonthDetail> {
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
-    const response = await this.api.months.getPlanMonth(resolvedBudgetId, month);
+    const response = await this.api.months.getPlanMonth(
+      resolvedBudgetId,
+      month,
+    );
     return response.data.month;
   }
 
@@ -283,7 +293,8 @@ export class YnabClient {
     options: GetScheduledTransactionsOptions = {},
   ): Promise<ynab.ScheduledTransactionDetail[]> {
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
-    const transactions = await this.refreshScheduledTransactions(resolvedBudgetId);
+    const transactions =
+      await this.refreshScheduledTransactions(resolvedBudgetId);
 
     return transactions
       .filter((transaction) => !transaction.deleted)
@@ -292,7 +303,10 @@ export class YnabClient {
           return false;
         }
 
-        if (options.categoryId && transaction.category_id !== options.categoryId) {
+        if (
+          options.categoryId &&
+          transaction.category_id !== options.categoryId
+        ) {
           return false;
         }
 
@@ -317,7 +331,9 @@ export class YnabClient {
       this.getPayees(resolvedBudgetId),
     ]);
 
-    const accountById = new Map(accounts.map((account) => [account.id, account.name]));
+    const accountById = new Map(
+      accounts.map((account) => [account.id, account.name]),
+    );
     const categoryById = new Map<string, string>();
 
     for (const group of categories) {
@@ -345,12 +361,14 @@ export class YnabClient {
       query,
     );
 
-    const minimum = query.amount_min !== undefined
-      ? currencyToMilliunits(query.amount_min)
-      : undefined;
-    const maximum = query.amount_max !== undefined
-      ? currencyToMilliunits(query.amount_max)
-      : undefined;
+    const minimum =
+      query.amount_min !== undefined
+        ? currencyToMilliunits(query.amount_min)
+        : undefined;
+    const maximum =
+      query.amount_max !== undefined
+        ? currencyToMilliunits(query.amount_max)
+        : undefined;
     const memoContains = query.memo_contains?.toLowerCase();
 
     const filtered = source
@@ -364,7 +382,10 @@ export class YnabClient {
           return false;
         }
 
-        if (query.category_id && transaction.category_id !== query.category_id) {
+        if (
+          query.category_id &&
+          transaction.category_id !== query.category_id
+        ) {
           return false;
         }
 
@@ -414,7 +435,7 @@ export class YnabClient {
     });
 
     const limit = query.limit ?? 50;
-    return sorted.slice(0, limit);
+    return limit > 0 ? sorted.slice(0, limit) : sorted;
   }
 
   async getTransactionById(
@@ -438,20 +459,25 @@ export class YnabClient {
     transactions: CreateTransactionInput[],
   ): Promise<ynab.TransactionDetail[]> {
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
-    const payload = {
+    const payload: ynab.PostTransactionsWrapper = {
       transactions: transactions.map((transaction) => ({
         account_id: transaction.account_id,
         date: transaction.date,
         amount: currencyToMilliunits(transaction.amount),
-        payee_id: transaction.payee_id,
-        payee_name: transaction.payee_name,
-        category_id: transaction.category_id,
-        memo: transaction.memo,
-        cleared: transaction.cleared,
+        payee_id: transaction.payee_id ?? undefined,
+        payee_name: transaction.payee_name ?? undefined,
+        category_id: transaction.category_id ?? undefined,
+        memo: transaction.memo ?? undefined,
+        cleared: transaction.cleared as
+          | ynab.TransactionClearedStatus
+          | undefined,
         approved: transaction.approved,
-        flag_color: transaction.flag_color as ynab.TransactionFlagColor,
+        flag_color: transaction.flag_color as
+          | ynab.TransactionFlagColor
+          | null
+          | undefined,
       })),
-    } as unknown as ynab.PostTransactionsWrapper;
+    };
 
     const response = await this.api.transactions.createTransactions(
       resolvedBudgetId,
@@ -467,7 +493,10 @@ export class YnabClient {
     transactions: UpdateTransactionInput[],
   ): Promise<ynab.TransactionDetail[]> {
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
-    const payload = {
+    // The SDK's SaveTransactionWithIdOrImportId type doesn't allow null for
+    // payee_id/category_id/memo, but the YNAB API accepts null to clear fields.
+    // We cast the elements to work around this SDK codegen limitation.
+    const payload: ynab.PatchTransactionsWrapper = {
       transactions: transactions.map((transaction) => ({
         id: transaction.transaction_id,
         ...(transaction.account_id !== undefined && {
@@ -496,8 +525,8 @@ export class YnabClient {
         ...(transaction.flag_color !== undefined && {
           flag_color: transaction.flag_color as ynab.TransactionFlagColor,
         }),
-      })),
-    } as unknown as ynab.PatchTransactionsWrapper;
+      })) as ynab.SaveTransactionWithIdOrImportId[],
+    };
 
     const response = await this.api.transactions.updateTransactions(
       resolvedBudgetId,
@@ -531,10 +560,11 @@ export class YnabClient {
   ): Promise<ynab.ScheduledTransactionDetail | null> {
     try {
       const resolvedBudgetId = this.resolveBudgetId(budgetId);
-      const response = await this.api.scheduledTransactions.getScheduledTransactionById(
-        resolvedBudgetId,
-        scheduledTransactionId,
-      );
+      const response =
+        await this.api.scheduledTransactions.getScheduledTransactionById(
+          resolvedBudgetId,
+          scheduledTransactionId,
+        );
       return response.data.scheduled_transaction;
     } catch {
       return null;
@@ -561,7 +591,8 @@ export class YnabClient {
             payee_name: transaction.payee_name,
             category_id: transaction.category_id,
             memo: transaction.memo,
-            frequency: transaction.frequency as ynab.ScheduledTransactionFrequency,
+            frequency:
+              transaction.frequency as ynab.ScheduledTransactionFrequency,
             flag_color: transaction.flag_color as ynab.TransactionFlagColor,
           },
         },
@@ -579,12 +610,15 @@ export class YnabClient {
   async updateScheduledTransaction(
     budgetId: string | undefined,
     transaction: UpdateScheduledTransactionInput,
+    prefetchedExisting?: ynab.ScheduledTransactionDetail,
   ): Promise<ynab.ScheduledTransactionDetail> {
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
-    const existing = await this.getScheduledTransactionById(
-      resolvedBudgetId,
-      transaction.scheduled_transaction_id,
-    );
+    const existing =
+      prefetchedExisting ??
+      (await this.getScheduledTransactionById(
+        resolvedBudgetId,
+        transaction.scheduled_transaction_id,
+      ));
 
     if (!existing) {
       throw new Error(
@@ -694,14 +728,35 @@ export class YnabClient {
     }
   }
 
-  snapshotTransaction(transaction: ynab.TransactionDetail): TransactionSnapshot {
+  snapshotTransaction(
+    transaction: ynab.TransactionDetail,
+  ): Record<string, unknown> {
     return snapshotTransaction(transaction);
   }
 
   snapshotScheduledTransaction(
     transaction: ynab.ScheduledTransactionDetail,
-  ): ScheduledTransactionSnapshot {
+  ): Record<string, unknown> {
     return snapshotScheduledTransaction(transaction);
+  }
+
+  async getTransactionsInRange(
+    budgetId: string | undefined,
+    sinceDate: string,
+    untilDate?: string,
+  ): Promise<ynab.TransactionDetail[]> {
+    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const response = await this.api.transactions.getTransactions(
+      resolvedBudgetId,
+      sinceDate,
+    );
+
+    const transactions = response.data.transactions;
+    if (!untilDate) {
+      return transactions.filter((t) => !t.deleted);
+    }
+
+    return transactions.filter((t) => !t.deleted && t.date <= untilDate);
   }
 
   private getBudgetCache(budgetId: string): BudgetCache {
@@ -818,7 +873,8 @@ export class YnabClient {
         cache.scheduledTransactions.serverKnowledge,
       );
 
-    cache.scheduledTransactions.serverKnowledge = response.data.server_knowledge;
+    cache.scheduledTransactions.serverKnowledge =
+      response.data.server_knowledge;
 
     for (const transaction of response.data.scheduled_transactions) {
       if (transaction.deleted) {
@@ -879,8 +935,17 @@ export class YnabClient {
   private normalizeHybridTransactions(
     transactions: ynab.HybridTransaction[],
   ): ynab.TransactionDetail[] {
+    // Parent hybrid transactions (type !== "subtransaction") are structurally
+    // identical to TransactionDetail at runtime, but the SDK types don't
+    // reflect this — HybridTransaction lacks the `subtransactions` array field.
     return transactions
       .filter((item) => item.type !== "subtransaction")
-      .map((item) => item as unknown as ynab.TransactionDetail);
+      .map(
+        (item) =>
+          ({
+            ...item,
+            subtransactions: [],
+          }) as unknown as ynab.TransactionDetail,
+      );
   }
 }

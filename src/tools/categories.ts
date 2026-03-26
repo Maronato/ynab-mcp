@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
@@ -83,14 +83,16 @@ export function registerCategoryTools(
                 ? milliunitsToCurrency(category.goal_target)
                 : null,
               goal_target_display:
-                category.goal_target !== null && category.goal_target !== undefined
+                category.goal_target !== null &&
+                category.goal_target !== undefined
                   ? formatCurrency(
                       category.goal_target,
                       settings.currency_format,
                     )
                   : null,
               goal_target_date: category.goal_target_date ?? null,
-              goal_percentage_complete: category.goal_percentage_complete ?? null,
+              goal_percentage_complete:
+                category.goal_percentage_complete ?? null,
             })),
           })),
         });
@@ -128,11 +130,20 @@ export function registerCategoryTools(
         return jsonToolResult({
           month: month.month,
           income: milliunitsToCurrency(month.income),
-          income_display: formatCurrency(month.income, settings.currency_format),
+          income_display: formatCurrency(
+            month.income,
+            settings.currency_format,
+          ),
           budgeted: milliunitsToCurrency(month.budgeted),
-          budgeted_display: formatCurrency(month.budgeted, settings.currency_format),
+          budgeted_display: formatCurrency(
+            month.budgeted,
+            settings.currency_format,
+          ),
           activity: milliunitsToCurrency(month.activity),
-          activity_display: formatCurrency(month.activity, settings.currency_format),
+          activity_display: formatCurrency(
+            month.activity,
+            settings.currency_format,
+          ),
           to_be_budgeted: milliunitsToCurrency(month.to_be_budgeted),
           to_be_budgeted_display: formatCurrency(
             month.to_be_budgeted,
@@ -187,7 +198,9 @@ export function registerCategoryTools(
     },
     async (input) => {
       try {
-        const budgetId = await context.ynabClient.resolveRealBudgetId(input.budget_id);
+        const budgetId = await context.ynabClient.resolveRealBudgetId(
+          input.budget_id,
+        );
         const results: Array<Record<string, unknown>> = [];
         const undoEntries: Array<{
           operation: "set_category_budget";
@@ -201,14 +214,19 @@ export function registerCategoryTools(
           };
         }> = [];
 
-        for (const assignment of input.assignments) {
-          try {
-            const before = await context.ynabClient.getMonthCategoryById(
+        const prefetchResults = await Promise.all(
+          input.assignments.map(async (assignment) => ({
+            assignment,
+            before: await context.ynabClient.getMonthCategoryById(
               budgetId,
               assignment.month,
               assignment.category_id,
-            );
+            ),
+          })),
+        );
 
+        for (const { assignment, before } of prefetchResults) {
+          try {
             if (!before) {
               results.push({
                 assignment,
@@ -256,7 +274,8 @@ export function registerCategoryTools(
             results.push({
               assignment,
               status: "error",
-              message: error instanceof Error ? error.message : "Update failed.",
+              message:
+                error instanceof Error ? error.message : "Update failed.",
             });
           }
         }

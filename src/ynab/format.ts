@@ -1,6 +1,6 @@
 import type { NameLookup } from "./types.js";
 
-interface CurrencyFormatLike {
+export interface CurrencyFormatLike {
   currency_symbol?: string;
   decimal_digits?: number;
   decimal_separator?: string;
@@ -56,7 +56,7 @@ export function snapshotTransaction(transaction: {
   cleared: string;
   approved: boolean;
   flag_color?: string | null;
-}) {
+}): Record<string, unknown> {
   return {
     id: transaction.id,
     account_id: transaction.account_id,
@@ -81,7 +81,7 @@ export function snapshotScheduledTransaction(transaction: {
   memo?: string | null;
   frequency?: string;
   flag_color?: string | null;
-}) {
+}): Record<string, unknown> {
   return {
     id: transaction.id,
     account_id: transaction.account_id,

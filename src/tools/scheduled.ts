@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
@@ -6,7 +6,6 @@ import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import {
   formatCurrency,
   formatScheduledTransactionForOutput,
-  milliunitsToCurrency,
   snapshotScheduledTransaction,
 } from "../ynab/format.js";
 import type {
@@ -30,7 +29,14 @@ const frequencies = [
   "everyOtherYear",
 ] as const;
 
-const flagColors = ["red", "orange", "yellow", "green", "blue", "purple"] as const;
+const flagColors = [
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "blue",
+  "purple",
+] as const;
 
 const getScheduledTransactionsSchema = z.object({
   budget_id: z.string().optional(),
@@ -136,17 +142,16 @@ export function registerScheduledTransactionTools(
     },
     async ({ budget_id: budgetId, transactions }) => {
       try {
-        const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(budgetId);
-        const created = [];
-
-        for (const transaction of transactions) {
-          created.push(
-            await context.ynabClient.createScheduledTransaction(
+        const resolvedBudgetId =
+          await context.ynabClient.resolveRealBudgetId(budgetId);
+        const created = await Promise.all(
+          transactions.map((transaction) =>
+            context.ynabClient.createScheduledTransaction(
               resolvedBudgetId,
               transaction as CreateScheduledTransactionInput,
             ),
-          );
-        }
+          ),
+        );
 
         const [lookups, settings] = await Promise.all([
           context.ynabClient.getNameLookup(resolvedBudgetId),
@@ -207,7 +212,8 @@ export function registerScheduledTransactionTools(
     },
     async ({ budget_id: budgetId, transactions }) => {
       try {
-        const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(budgetId);
+        const resolvedBudgetId =
+          await context.ynabClient.resolveRealBudgetId(budgetId);
         const [lookups, settings] = await Promise.all([
           context.ynabClient.getNameLookup(resolvedBudgetId),
           context.ynabClient.getBudgetSettings(resolvedBudgetId),
@@ -225,12 +231,17 @@ export function registerScheduledTransactionTools(
           };
         }> = [];
 
-        for (const transaction of transactions) {
-          const before = await context.ynabClient.getScheduledTransactionById(
-            resolvedBudgetId,
-            transaction.scheduled_transaction_id,
-          );
+        const prefetchResults = await Promise.all(
+          transactions.map(async (transaction) => ({
+            input: transaction,
+            before: await context.ynabClient.getScheduledTransactionById(
+              resolvedBudgetId,
+              transaction.scheduled_transaction_id,
+            ),
+          })),
+        );
 
+        for (const { input: transaction, before } of prefetchResults) {
           if (!before) {
             results.push({
               scheduled_transaction_id: transaction.scheduled_transaction_id,
@@ -243,6 +254,7 @@ export function registerScheduledTransactionTools(
           const updated = await context.ynabClient.updateScheduledTransaction(
             resolvedBudgetId,
             transaction as UpdateScheduledTransactionInput,
+            before,
           );
 
           results.push({
@@ -301,9 +313,13 @@ export function registerScheduledTransactionTools(
         "Delete one or more scheduled transactions. Each deletion is undoable.",
       inputSchema: deleteScheduledTransactionsSchema,
     },
-    async ({ budget_id: budgetId, scheduled_transaction_ids: scheduledIds }) => {
+    async ({
+      budget_id: budgetId,
+      scheduled_transaction_ids: scheduledIds,
+    }) => {
       try {
-        const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(budgetId);
+        const resolvedBudgetId =
+          await context.ynabClient.resolveRealBudgetId(budgetId);
         const results: Array<Record<string, unknown>> = [];
         const undoEntries: Array<{
           operation: "delete_scheduled_transaction";
@@ -317,12 +333,17 @@ export function registerScheduledTransactionTools(
           };
         }> = [];
 
-        for (const scheduledTransactionId of scheduledIds) {
-          const before = await context.ynabClient.getScheduledTransactionById(
-            resolvedBudgetId,
-            scheduledTransactionId,
-          );
+        const prefetchResults = await Promise.all(
+          scheduledIds.map(async (id) => ({
+            id,
+            before: await context.ynabClient.getScheduledTransactionById(
+              resolvedBudgetId,
+              id,
+            ),
+          })),
+        );
 
+        for (const { id: scheduledTransactionId, before } of prefetchResults) {
           if (!before) {
             results.push({
               scheduled_transaction_id: scheduledTransactionId,
