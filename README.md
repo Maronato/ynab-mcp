@@ -18,13 +18,6 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that c
 - Node.js 20+
 - A [YNAB personal access token](https://app.ynab.com/settings/developer)
 
-### Install and build
-
-```bash
-npm install
-npm run build
-```
-
 ### Configure your MCP client
 
 Add the server to your MCP client configuration. For example, in Claude Desktop's `claude_desktop_config.json`:
@@ -33,8 +26,8 @@ Add the server to your MCP client configuration. For example, in Claude Desktop'
 {
   "mcpServers": {
     "ynab": {
-      "command": "node",
-      "args": ["/absolute/path/to/ynab-mcp/build/index.js"],
+      "command": "npx",
+      "args": ["-y", "@maro-org/ynab-mcp"],
       "env": {
         "YNAB_API_TOKEN": "your_token_here"
       }
@@ -45,9 +38,13 @@ Add the server to your MCP client configuration. For example, in Claude Desktop'
 
 The server communicates over stdio transport, so it works with any MCP-compatible client.
 
-### Run standalone (for testing)
+### From source
 
 ```bash
+git clone https://github.com/maronato/ynab-mcp.git
+cd ynab-mcp
+npm install
+npm run build
 YNAB_API_TOKEN=your_token_here npm start
 ```
 
