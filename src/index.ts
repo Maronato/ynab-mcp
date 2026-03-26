@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";

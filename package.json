@@ -1,11 +1,18 @@
 {
-  "name": "ynab-mcp",
+  "name": "@maro-org/ynab-mcp",
   "version": "0.1.0",
   "description": "MCP server for YNAB with batch operations and robust undo support",
   "type": "module",
   "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "bin": {
+    "ynab-mcp": "build/index.js"
+  },
+  "files": [
+    "build"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "rm -rf build && tsc -p tsconfig.build.json",
     "dev": "tsx watch src/index.ts",
     "start": "node build/index.js",
     "typecheck": "tsc --noEmit",
@@ -14,7 +21,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "ci": "npm run typecheck && npm run lint && npm run test",
-    "prepare": "lefthook install"
+    "prepare": "lefthook install",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maronato/ynab-mcp.git"
   },
   "engines": {
     "node": ">=20"
