@@ -22,6 +22,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC trusted publishing support
         run: npm install -g npm@latest
@@ -40,6 +41,4 @@ jobs:
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
 
       - name: Publish
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ""
+        run: npm publish --provenance --access public
