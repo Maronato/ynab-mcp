@@ -451,6 +451,8 @@ export class YnabClient {
         ? currencyToMilliunits(query.amount_max)
         : undefined;
     const memoContains = query.memo_contains?.toLowerCase();
+    const payeeNameContains = query.payee_name_contains?.toLowerCase();
+    const categoryNameContains = query.category_name_contains?.toLowerCase();
 
     const filtered = source.filter((transaction) => {
       if (query.since_date && transaction.date < query.since_date) {
@@ -488,6 +490,35 @@ export class YnabClient {
         return false;
       }
 
+      if (
+        payeeNameContains &&
+        !(transaction.payee_name ?? "")
+          .toLowerCase()
+          .includes(payeeNameContains)
+      ) {
+        return false;
+      }
+
+      if (
+        categoryNameContains &&
+        !(transaction.category_name ?? "")
+          .toLowerCase()
+          .includes(categoryNameContains)
+      ) {
+        return false;
+      }
+
+      if (
+        query.flag_color !== undefined &&
+        transaction.flag_color !== query.flag_color
+      ) {
+        return false;
+      }
+
+      if (query.exclude_transfers && transaction.transfer_account_id != null) {
+        return false;
+      }
+
       if (query.cleared !== undefined) {
         const isCleared = transaction.cleared !== "uncleared";
         if (isCleared !== query.cleared) {
@@ -502,7 +533,6 @@ export class YnabClient {
         return false;
       }
 
-      // Local equivalent of the server-side `type` filter
       if (query.type === "uncategorized" && transaction.category_id != null) {
         return false;
       }
@@ -580,6 +610,13 @@ export class YnabClient {
           | ynab.TransactionFlagColor
           | null
           | undefined,
+        subtransactions: transaction.subtransactions?.map((sub) => ({
+          amount: currencyToMilliunits(sub.amount),
+          payee_id: sub.payee_id ?? undefined,
+          payee_name: sub.payee_name ?? undefined,
+          category_id: sub.category_id ?? undefined,
+          memo: sub.memo ?? undefined,
+        })),
       })),
     };
 
@@ -635,6 +672,15 @@ export class YnabClient {
         }),
         ...(transaction.flag_color !== undefined && {
           flag_color: transaction.flag_color as ynab.TransactionFlagColor,
+        }),
+        ...(transaction.subtransactions !== undefined && {
+          subtransactions: transaction.subtransactions.map((sub) => ({
+            amount: currencyToMilliunits(sub.amount),
+            payee_id: sub.payee_id ?? undefined,
+            payee_name: sub.payee_name ?? undefined,
+            category_id: sub.category_id ?? undefined,
+            memo: sub.memo ?? undefined,
+          })),
         }),
       })) as ynab.SaveTransactionWithIdOrImportId[],
     };

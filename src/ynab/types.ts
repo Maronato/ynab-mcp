@@ -28,11 +28,23 @@ export interface TransactionSearchQuery {
   amount_min?: number;
   amount_max?: number;
   memo_contains?: string;
+  payee_name_contains?: string;
+  category_name_contains?: string;
+  flag_color?: string;
+  exclude_transfers?: boolean;
   type?: TransactionFilterType;
   cleared?: boolean;
   approved?: boolean;
   limit?: number;
   sort?: TransactionSort;
+}
+
+export interface SubtransactionInput {
+  amount: number;
+  payee_id?: string | null;
+  payee_name?: string | null;
+  category_id?: string | null;
+  memo?: string | null;
 }
 
 export interface CreateTransactionInput {
@@ -46,6 +58,7 @@ export interface CreateTransactionInput {
   cleared?: TransactionClearedStatus;
   approved?: boolean;
   flag_color?: string | null;
+  subtransactions?: SubtransactionInput[];
 }
 
 export interface UpdateTransactionInput {
@@ -60,6 +73,7 @@ export interface UpdateTransactionInput {
   cleared?: TransactionClearedStatus;
   approved?: boolean;
   flag_color?: string | null;
+  subtransactions?: SubtransactionInput[];
 }
 
 export interface CategoryBudgetAssignment {

@@ -24,7 +24,11 @@ const setCategoryBudgetsSchema = z.object({
       z.object({
         category_id: z.string(),
         month: z.string(),
-        budgeted: z.number(),
+        budgeted: z
+          .number()
+          .describe(
+            "Budgeted amount in currency units (e.g., 150.00 for one hundred fifty dollars). Do NOT use milliunits.",
+          ),
       }),
     )
     .min(1),

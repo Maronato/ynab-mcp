@@ -20,9 +20,36 @@ const searchQuerySchema = z.object({
   account_id: z.string().optional(),
   category_id: z.string().optional(),
   payee_id: z.string().optional(),
-  amount_min: z.number().optional(),
-  amount_max: z.number().optional(),
-  memo_contains: z.string().optional(),
+  amount_min: z
+    .number()
+    .optional()
+    .describe("Minimum amount in currency units (e.g., -10.00)."),
+  amount_max: z
+    .number()
+    .optional()
+    .describe("Maximum amount in currency units (e.g., 50.00)."),
+  memo_contains: z
+    .string()
+    .optional()
+    .describe("Case-insensitive substring match on memo."),
+  payee_name_contains: z
+    .string()
+    .optional()
+    .describe(
+      "Case-insensitive substring match on payee name (e.g., 'uber'). No need to resolve payee IDs first.",
+    ),
+  category_name_contains: z
+    .string()
+    .optional()
+    .describe("Case-insensitive substring match on category name."),
+  flag_color: z
+    .enum(["red", "orange", "yellow", "green", "blue", "purple"])
+    .optional()
+    .describe("Filter by flag color."),
+  exclude_transfers: z
+    .boolean()
+    .optional()
+    .describe("Exclude internal account transfers from results."),
   type: z.enum(["uncategorized", "unapproved"]).optional(),
   cleared: z.boolean().optional(),
   approved: z.boolean().optional(),
@@ -46,10 +73,26 @@ const transactionFlagColors = [
 
 const clearedStatuses = ["cleared", "uncleared", "reconciled"] as const;
 
+const subtransactionSchema = z.object({
+  amount: z
+    .number()
+    .describe(
+      "Amount in currency units (e.g., -5.55 for negative five dollars and fifty-five cents). Do NOT use milliunits.",
+    ),
+  payee_id: z.string().nullable().optional(),
+  payee_name: z.string().nullable().optional(),
+  category_id: z.string().nullable().optional(),
+  memo: z.string().nullable().optional(),
+});
+
 const createTransactionItemSchema = z.object({
   account_id: z.string(),
   date: z.string(),
-  amount: z.number(),
+  amount: z
+    .number()
+    .describe(
+      "Amount in currency units (e.g., -5.55 for negative five dollars and fifty-five cents). Do NOT use milliunits.",
+    ),
   payee_name: z.string().nullable().optional(),
   payee_id: z.string().nullable().optional(),
   category_id: z.string().nullable().optional(),
@@ -57,6 +100,13 @@ const createTransactionItemSchema = z.object({
   cleared: z.enum(clearedStatuses).optional(),
   approved: z.boolean().optional(),
   flag_color: z.union([z.enum(transactionFlagColors), z.null()]).optional(),
+  subtransactions: z
+    .array(subtransactionSchema)
+    .optional()
+    .describe(
+      "Split this transaction across multiple categories. Subtransaction amounts must sum to the parent amount. " +
+        "When subtransactions are provided, the parent category_id is typically omitted.",
+    ),
 });
 
 const createTransactionsSchema = z.object({
@@ -68,7 +118,12 @@ const updateTransactionItemSchema = z.object({
   transaction_id: z.string(),
   account_id: z.string().optional(),
   date: z.string().optional(),
-  amount: z.number().optional(),
+  amount: z
+    .number()
+    .optional()
+    .describe(
+      "Amount in currency units (e.g., -5.55 for negative five dollars and fifty-five cents). Do NOT use milliunits.",
+    ),
   payee_name: z.string().nullable().optional(),
   payee_id: z.string().nullable().optional(),
   category_id: z.string().nullable().optional(),
@@ -76,6 +131,12 @@ const updateTransactionItemSchema = z.object({
   cleared: z.enum(clearedStatuses).optional(),
   approved: z.boolean().optional(),
   flag_color: z.union([z.enum(transactionFlagColors), z.null()]).optional(),
+  subtransactions: z
+    .array(subtransactionSchema)
+    .optional()
+    .describe(
+      "Replace existing subtransactions with these splits. Amounts must sum to the parent amount.",
+    ),
 });
 
 const updateTransactionsSchema = z.object({

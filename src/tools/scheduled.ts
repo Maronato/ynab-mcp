@@ -51,7 +51,12 @@ const createScheduledTransactionsSchema = z.object({
       z.object({
         account_id: z.string(),
         date: z.string(),
-        amount: z.number().optional(),
+        amount: z
+          .number()
+          .optional()
+          .describe(
+            "Amount in currency units (e.g., -5.55 for negative five dollars and fifty-five cents). Do NOT use milliunits.",
+          ),
         payee_name: z.string().nullable().optional(),
         payee_id: z.string().nullable().optional(),
         category_id: z.string().nullable().optional(),
@@ -71,7 +76,12 @@ const updateScheduledTransactionsSchema = z.object({
         scheduled_transaction_id: z.string(),
         account_id: z.string().optional(),
         date: z.string().optional(),
-        amount: z.number().optional(),
+        amount: z
+          .number()
+          .optional()
+          .describe(
+            "Amount in currency units (e.g., -5.55 for negative five dollars and fifty-five cents). Do NOT use milliunits.",
+          ),
         payee_name: z.string().nullable().optional(),
         payee_id: z.string().nullable().optional(),
         category_id: z.string().nullable().optional(),
