@@ -36,6 +36,11 @@ export function registerAnalysisTools(
       title: "Get Spending Analysis",
       description:
         "Aggregate spending over a date range and rank by category/payee for quick insights.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
       inputSchema: spendingAnalysisSchema,
     },
     async (input) => {

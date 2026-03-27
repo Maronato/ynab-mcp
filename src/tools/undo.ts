@@ -26,6 +26,11 @@ export function registerUndoTools(
       title: "List Undo History",
       description:
         "List undoable operations with optional session scoping (current session or all sessions).",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
       inputSchema: listUndoHistorySchema,
     },
     async (input) => {
@@ -72,6 +77,12 @@ export function registerUndoTools(
       title: "Undo Operations",
       description:
         "Undo one or more prior operations with conflict detection. Use force=true to override conflicts.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
       inputSchema: undoOperationsSchema,
     },
     async (input) => {

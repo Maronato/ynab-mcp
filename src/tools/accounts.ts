@@ -22,6 +22,11 @@ export function registerAccountTools(
       title: "Get Accounts",
       description:
         "Get accounts with optional filtering by type, on-budget flag, and closed state.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
       inputSchema: getAccountsSchema,
     },
     async (input) => {

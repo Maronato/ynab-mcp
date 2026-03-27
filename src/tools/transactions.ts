@@ -98,6 +98,11 @@ export function registerTransactionTools(
       title: "Search Transactions",
       description:
         "Run one or more transaction searches in a single call with rich filters and sorted results.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
       inputSchema: searchTransactionsSchema,
     },
     async ({ budget_id: budgetId, queries }) => {
@@ -149,6 +154,12 @@ export function registerTransactionTools(
       title: "Create Transactions",
       description:
         "Create one or more transactions in a single call. Each successful creation is undoable.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
       inputSchema: createTransactionsSchema,
     },
     async ({ budget_id: budgetId, transactions }) => {
@@ -217,6 +228,12 @@ export function registerTransactionTools(
       title: "Update Transactions",
       description:
         "Update one or more existing transactions in a single call. Each successful update is undoable.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
       inputSchema: updateTransactionsSchema,
     },
     async ({ budget_id: budgetId, transactions }) => {
@@ -358,6 +375,12 @@ export function registerTransactionTools(
       title: "Delete Transactions",
       description:
         "Delete one or more transactions. Each deletion is undoable by re-creating the transaction.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
       inputSchema: deleteTransactionsSchema,
     },
     async ({ budget_id: budgetId, transaction_ids: transactionIds }) => {

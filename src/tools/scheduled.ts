@@ -98,6 +98,11 @@ export function registerScheduledTransactionTools(
       title: "Get Scheduled Transactions",
       description:
         "Get scheduled transactions with optional account/category filtering.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
       inputSchema: getScheduledTransactionsSchema,
     },
     async (input) => {
@@ -138,6 +143,12 @@ export function registerScheduledTransactionTools(
       title: "Create Scheduled Transactions",
       description:
         "Create one or more scheduled transactions. Each successful creation is undoable.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
       inputSchema: createScheduledTransactionsSchema,
     },
     async ({ budget_id: budgetId, transactions }) => {
@@ -208,6 +219,12 @@ export function registerScheduledTransactionTools(
       title: "Update Scheduled Transactions",
       description:
         "Update one or more scheduled transactions. Each successful update is undoable.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
       inputSchema: updateScheduledTransactionsSchema,
     },
     async ({ budget_id: budgetId, transactions }) => {
@@ -311,6 +328,12 @@ export function registerScheduledTransactionTools(
       title: "Delete Scheduled Transactions",
       description:
         "Delete one or more scheduled transactions. Each deletion is undoable.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
       inputSchema: deleteScheduledTransactionsSchema,
     },
     async ({

@@ -52,6 +52,11 @@ export function registerSmartTools(
         "amount patterns, scheduled transaction matching, and LLM sampling for ambiguous cases. " +
         "Returns categorization suggestions with confidence levels — does NOT apply changes. " +
         "Use the returned update_actions with update_transactions to apply.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
       inputSchema: autoCategorizeSchema,
     },
     async (input) => {
@@ -222,6 +227,11 @@ export function registerSmartTools(
         "Uses LLM sampling to suggest which surplus categories to pull from. " +
         "Returns suggestions — does NOT apply changes. " +
         "Use the returned set_budget_actions with set_category_budgets to apply.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
       inputSchema: coverOverspendingSchema,
     },
     async (input) => {

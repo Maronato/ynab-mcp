@@ -40,6 +40,11 @@ export function registerCategoryTools(
       title: "Get Categories",
       description:
         "Get categories grouped by category group for a given month with optional filters.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
       inputSchema: getCategoriesSchema,
     },
     async (input) => {
@@ -110,6 +115,11 @@ export function registerCategoryTools(
       title: "Get Monthly Budget",
       description:
         "Get month summary with totals and grouped category balances for one month.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
       inputSchema: getMonthlyBudgetSchema,
     },
     async (input) => {
@@ -194,6 +204,12 @@ export function registerCategoryTools(
       title: "Set Category Budgets",
       description:
         "Set budgeted amounts for one or more categories/month pairs in a single request.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
       inputSchema: setCategoryBudgetsSchema,
     },
     async (input) => {

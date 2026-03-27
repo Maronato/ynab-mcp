@@ -18,6 +18,11 @@ export function registerBudgetTools(
     {
       title: "List Budgets",
       description: "List available YNAB budgets with key metadata.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
     },
     async () => {
       try {
@@ -45,6 +50,11 @@ export function registerBudgetTools(
       title: "Get Budget Summary",
       description:
         "Get a high-level budget snapshot (net worth, current month totals, overspending, account totals).",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
       inputSchema: budgetIdSchema,
     },
     async ({ budget_id: budgetId }) => {
