@@ -6,9 +6,11 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that c
 
 - **Batch operations** — search, create, update, and delete transactions in bulk with a single tool call
 - **Spending analysis** — aggregate and rank spending by category or payee over any date range
+- **Smart suggestions** — suggest transaction categories and overspending coverage using local heuristics plus MCP client sampling when available
 - **Undo with conflict detection** — every write operation is tracked and reversible, with automatic conflict checks before restoring state
-- **Delta-aware caching** — uses YNAB's server knowledge tokens to fetch only changed data
-- **MCP resources** — expose budget metadata (accounts, payees, categories) as browsable context
+- **Delta-aware caching with manual sync** — uses YNAB's server knowledge tokens to fetch only changed data and can force a refresh when needed
+- **Read-only safety mode** — disable all write operations via environment variable
+- **MCP resources** — expose both budget metadata and built-in YNAB methodology knowledge as browsable context
 - **Workflow prompts** — pre-built prompts for monthly reviews, spending reports, and transaction triage
 
 ## Quick start
@@ -55,6 +57,7 @@ YNAB_API_TOKEN=your_token_here npm start
 | `YNAB_API_TOKEN` | Yes | Your YNAB personal access token |
 | `YNAB_API_URL` | No | Override the YNAB API base URL |
 | `YNAB_MCP_DATA_DIR` | No | Directory for undo history files (default: `~/.ynab-mcp`) |
+| `YNAB_READ_ONLY` | No | Disable writes when set to `true`/`1` and allow them when set to `false`/`0` |
 
 ## Tools
 
@@ -66,6 +69,7 @@ All write tools support batch operations and record undo history automatically.
 |---|---|
 | `list_budgets` | List all available YNAB budgets |
 | `get_budget_summary` | High-level snapshot: net worth, income, budgeted amount, activity, overspending |
+| `sync_budget_data` | Force-refresh cached budget data after external changes such as bank imports or mobile app edits |
 
 ### Accounts
 
@@ -96,6 +100,15 @@ All write tools support batch operations and record undo history automatically.
 |---|---|
 | `get_spending_analysis` | Aggregate spending by category, payee, or both — ranked by amount with configurable top-N |
 
+### Smart suggestions
+
+These tools are read-only and use MCP client sampling when available.
+
+| Tool | Description |
+|---|---|
+| `suggest_transaction_categories` | Suggest categories for uncategorized or unapproved transactions and return `update_actions` you can apply with `update_transactions` |
+| `suggest_overspending_coverage` | Suggest category rebalancing moves for overspending and return `set_budget_actions` you can apply with `set_category_budgets` |
+
 ### Scheduled transactions
 
 | Tool | Description |
@@ -116,6 +129,8 @@ All write tools support batch operations and record undo history automatically.
 
 MCP resources provide browsable context that clients can read without invoking tools.
 
+### Budget data
+
 | URI | Description |
 |---|---|
 | `ynab://budgets` | All available budgets |
@@ -125,6 +140,16 @@ MCP resources provide browsable context that clients can read without invoking t
 | `ynab://budgets/{budget_id}/accounts` | Accounts and balances |
 
 All parameterized resources support `last-used` as the budget ID and provide auto-completion suggestions.
+
+### Knowledge
+
+| URI | Description |
+|---|---|
+| `ynab://knowledge/terminology` | Core YNAB concepts, terms, transaction states, and month semantics |
+| `ynab://knowledge/credit-cards` | Credit card spending, payments, debt, and returns in YNAB |
+| `ynab://knowledge/goals` | Goal types, underfunded calculations, and budgeting interactions |
+| `ynab://knowledge/overspending` | Cash vs credit overspending and month rollover behavior |
+| `ynab://knowledge/reconciliation` | Reconciliation workflow and transaction status lifecycle |
 
 ## Prompts
 
@@ -138,13 +163,13 @@ Pre-built workflow prompts guide the LLM through multi-step budgeting tasks.
 
 ## Docker / container usage
 
-For persistent undo history in containers, mount a volume to the data directory:
+If you package the server in your own container image, mount a volume to the data directory for persistent undo history:
 
 ```bash
 docker run -e YNAB_API_TOKEN=your_token \
   -e YNAB_MCP_DATA_DIR=/data/ynab-mcp \
   -v ynab-data:/data/ynab-mcp \
-  your-image
+  your-custom-image
 ```
 
 ## Development
@@ -159,30 +184,40 @@ npm run test:watch   # Tests in watch mode
 npm run ci           # Full CI: typecheck + lint + test
 ```
 
+`npm install` also runs `lefthook install` via the `prepare` script.
+
 ### Project structure
 
 ```
 src/
 ├── index.ts              # Entry point — stdio transport setup
 ├── server.ts             # MCP server creation and registration
-├── context.ts            # AppContext type definition
+├── context.ts            # Shared AppContext
 ├── tools/                # MCP tool handlers
-│   ├── budgets.ts        # Budget listing and summaries
+│   ├── budgets.ts        # Budget listing, summaries, and sync
 │   ├── accounts.ts       # Account queries
 │   ├── transactions.ts   # Transaction CRUD + search
 │   ├── categories.ts     # Category queries and budget setting
 │   ├── analysis.ts       # Spending aggregation
 │   ├── scheduled.ts      # Scheduled transaction CRUD
+│   ├── smart.ts          # Suggestion tools for categorization and rebalancing
 │   └── undo.ts           # Undo history and operations
+├── analysis/             # Heuristics for categorization and payee profiling
+├── sampling/             # MCP client sampling wrapper
+├── methodology/          # Bundled YNAB knowledge resources (*.md)
 ├── ynab/                 # YNAB API client layer
-│   ├── client.ts         # YnabClient — cached, delta-aware API wrapper
+│   ├── client.ts         # Cached, delta-aware API wrapper
+│   ├── rate-limiter.ts   # Client-side request guardrail
+│   ├── errors.ts         # YNAB API error helpers
 │   ├── types.ts          # TypeScript interfaces
-│   └── format.ts         # Currency formatting utilities
+│   └── format.ts         # Currency and snapshot formatting
 ├── undo/                 # Undo system
-│   ├── engine.ts         # UndoEngine — conflict detection and execution
-│   ├── store.ts          # UndoStore — disk persistence
+│   ├── engine.ts         # Conflict detection and undo execution
+│   ├── store.ts          # Disk persistence
 │   └── types.ts          # Undo type definitions
 ├── resources/            # MCP resource registrations
+│   └── index.ts
 ├── prompts/              # MCP prompt registrations
-└── shared/               # Shared helpers (MCP result formatting, object comparison)
+│   └── index.ts
+└── shared/               # Shared MCP and object helpers
 ```
