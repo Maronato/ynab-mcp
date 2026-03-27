@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { matchesExpectedState } from "../shared/object.js";
 import type { YnabClient } from "../ynab/client.js";
+import { extractErrorMessage } from "../ynab/errors.js";
 import { milliunitsToCurrency } from "../ynab/format.js";
 import type { UndoStore } from "./store.js";
 import type {
@@ -241,11 +242,7 @@ export class UndoEngine {
       return {
         entry_id: entry.id,
         status: "error",
-        message: `${sessionPrefix}${
-          error instanceof Error
-            ? error.message
-            : "Failed to apply undo operation."
-        }`,
+        message: `${sessionPrefix}${extractErrorMessage(error, "Failed to apply undo operation.")}`,
       };
     }
   }

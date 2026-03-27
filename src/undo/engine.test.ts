@@ -581,7 +581,7 @@ describe("undoOperations — error handling", () => {
     expect(result.results[0].message).toContain("API down");
   });
 
-  it("returns generic message when applyUndo throws a non-Error", async () => {
+  it("extracts message from non-Error thrown values", async () => {
     const entry = createMockUndoEntry({
       session_id: engine.getSessionId(),
       undo_action: {
@@ -600,9 +600,31 @@ describe("undoOperations — error handling", () => {
     const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("error");
-    expect(result.results[0].message).toContain(
-      "Failed to apply undo operation.",
-    );
+    expect(result.results[0].message).toContain("string error");
+  });
+
+  it("extracts detail from YNAB-style error objects", async () => {
+    const entry = createMockUndoEntry({
+      session_id: engine.getSessionId(),
+      undo_action: {
+        type: "delete",
+        entity_type: "transaction",
+        entity_id: "tx-1",
+        expected_state: { id: "tx-1" },
+        restore_state: {},
+      },
+    });
+    mockStore.getEntriesByIds.mockResolvedValue([entry]);
+    mockClient.getTransactionById.mockResolvedValue({ id: "tx-1" });
+    mockClient.snapshotTransaction.mockReturnValue({ id: "tx-1" });
+    mockClient.deleteTransaction.mockRejectedValue({
+      error: { id: "409", name: "conflict", detail: "Resource conflict" },
+    });
+
+    const result = await engine.undoOperations([entry.id], false);
+
+    expect(result.results[0].status).toBe("error");
+    expect(result.results[0].message).toContain("Resource conflict");
   });
 
   it("returns error status when resolveMappedId throws", async () => {

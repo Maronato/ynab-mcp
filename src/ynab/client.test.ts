@@ -1578,6 +1578,28 @@ describe("getTransactionById freshness", () => {
     expect(mockApi.transactions.getTransactionById).toHaveBeenCalled();
   });
 
+  it("returns null for YNAB 404.2 (resource_not_found) errors", async () => {
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [],
+        server_knowledge: 5,
+      },
+    });
+    await client.searchTransactions("b", { since_date: "2024-01-01" });
+
+    // YNAB returns 404.2 for deleted transactions, not 404
+    mockApi.transactions.getTransactionById.mockRejectedValueOnce({
+      error: {
+        id: "404.2",
+        name: "resource_not_found",
+        detail: "Resource not found",
+      },
+    });
+
+    const result = await client.getTransactionById("b", "deleted-tx");
+    expect(result).toBeNull();
+  });
+
   it("does not trigger a full re-fetch for a single-ID lookup", async () => {
     // Populate cache with a date-bounded search
     mockApi.transactions.getTransactions.mockResolvedValueOnce({
