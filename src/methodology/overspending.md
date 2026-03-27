@@ -36,7 +36,7 @@ To cover overspending (Rule 3: Roll With the Punches):
 1. Identify categories with available surplus
 2. Move money from surplus categories to overspent categories
 3. Priority order for sourcing funds:
-   - Categories with excess surplus beyond their goal
+   - Categories with excess surplus beyond their target
    - Categories you can safely reduce this month
    - **Never** take from credit card payment categories (this creates debt)
    - **Avoid** taking from categories with upcoming bills

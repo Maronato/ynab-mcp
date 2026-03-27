@@ -5,16 +5,30 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
-const getCategoriesSchema = z.object({
+const listCategoriesSchema = z.object({
   budget_id: z.string().optional(),
-  month: z.string().optional(),
+  group_id: z.string().optional(),
+  include_hidden: z.boolean().optional(),
+});
+
+const getTargetsSchema = z.object({
+  budget_id: z.string().optional(),
+  month: z
+    .string()
+    .optional()
+    .describe(
+      "Month in YYYY-MM-DD format. Scopes target percentage_complete calculation. Defaults to current month.",
+    ),
   group_id: z.string().optional(),
   include_hidden: z.boolean().optional(),
 });
 
 const getMonthlyBudgetSchema = z.object({
   budget_id: z.string().optional(),
-  month: z.string().optional(),
+  month: z
+    .string()
+    .optional()
+    .describe("Month in YYYY-MM-DD format. Defaults to current month."),
 });
 
 const setCategoryBudgetsSchema = z.object({
@@ -39,18 +53,62 @@ export function registerCategoryTools(
   context: AppContext,
 ): void {
   server.registerTool(
-    "get_categories",
+    "list_categories",
     {
-      title: "Get Categories",
+      title: "List Categories",
       description:
-        "Get categories with goal progress details (goal type, target, target date, percentage complete). " +
-        "Use this when you need goal information. Use get_monthly_budget instead for a quick budget overview with overspending flags.",
+        "Get all categories with their group hierarchy, IDs, and names. " +
+        "No budget figures or target data — lightweight and fast. " +
+        "Use this to resolve category names to IDs before write operations.",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },
-      inputSchema: getCategoriesSchema,
+      inputSchema: listCategoriesSchema,
+    },
+    async (input) => {
+      try {
+        const groups = await context.ynabClient.getCategories(input.budget_id, {
+          groupId: input.group_id,
+          includeHidden: input.include_hidden,
+        });
+
+        return jsonToolResult({
+          budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
+          groups: groups.map((group) => ({
+            id: group.id,
+            name: group.name,
+            hidden: group.hidden,
+            categories: group.categories.map((category) => ({
+              id: category.id,
+              name: category.name,
+              hidden: category.hidden,
+            })),
+          })),
+        });
+      } catch (error) {
+        return errorToolResult(
+          error instanceof Error ? error.message : "Failed to list categories.",
+        );
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_targets",
+    {
+      title: "Get Category Targets",
+      description:
+        "Get categories with target (goal) progress details: target type, target amount, " +
+        "target date, and percentage complete. Use this when you need target/funding information. " +
+        "Categories without targets return null target fields rather than being omitted.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+      inputSchema: getTargetsSchema,
     },
     async (input) => {
       try {
@@ -88,11 +146,11 @@ export function registerCategoryTools(
                 category.balance,
                 settings.currency_format,
               ),
-              goal_type: category.goal_type ?? null,
-              goal_target: category.goal_target
+              target_type: category.goal_type ?? null,
+              target_amount: category.goal_target
                 ? milliunitsToCurrency(category.goal_target)
                 : null,
-              goal_target_display:
+              target_amount_display:
                 category.goal_target !== null &&
                 category.goal_target !== undefined
                   ? formatCurrency(
@@ -100,15 +158,15 @@ export function registerCategoryTools(
                       settings.currency_format,
                     )
                   : null,
-              goal_target_date: category.goal_target_date ?? null,
-              goal_percentage_complete:
+              target_date: category.goal_target_month ?? null,
+              target_percentage_complete:
                 category.goal_percentage_complete ?? null,
             })),
           })),
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error ? error.message : "Failed to get categories.",
+          error instanceof Error ? error.message : "Failed to get targets.",
         );
       }
     },
@@ -119,8 +177,9 @@ export function registerCategoryTools(
     {
       title: "Get Monthly Budget",
       description:
-        "Get a quick month overview with income/budgeted/activity totals and per-category balances with overspending flags. " +
-        "Use this for budget summaries. Use get_categories instead when you need goal progress details.",
+        "Get a month overview with income/budgeted/activity totals and per-category budget figures " +
+        "(budgeted, activity, balance) with overspending flags. Returns all categories — " +
+        "those with no activity show zeroes. No target data.",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -170,26 +229,29 @@ export function registerCategoryTools(
             id: group.id,
             name: group.name,
             categories: group.categories.map((treeCat) => {
-              const category = monthCategoriesById.get(treeCat.id) ?? treeCat;
+              const monthCat = monthCategoriesById.get(treeCat.id);
+              const budgeted = monthCat?.budgeted ?? 0;
+              const activity = monthCat?.activity ?? 0;
+              const balance = monthCat?.balance ?? 0;
               return {
-                id: category.id,
-                name: category.name,
-                budgeted: milliunitsToCurrency(category.budgeted),
+                id: treeCat.id,
+                name: treeCat.name,
+                budgeted: milliunitsToCurrency(budgeted),
                 budgeted_display: formatCurrency(
-                  category.budgeted,
+                  budgeted,
                   settings.currency_format,
                 ),
-                activity: milliunitsToCurrency(category.activity),
+                activity: milliunitsToCurrency(activity),
                 activity_display: formatCurrency(
-                  category.activity,
+                  activity,
                   settings.currency_format,
                 ),
-                balance: milliunitsToCurrency(category.balance),
+                balance: milliunitsToCurrency(balance),
                 balance_display: formatCurrency(
-                  category.balance,
+                  balance,
                   settings.currency_format,
                 ),
-                overspent: category.balance < 0,
+                overspent: balance < 0,
               };
             }),
           })),

@@ -30,7 +30,7 @@ export function registerPrompts(server: McpServer): void {
           "- `ynab://knowledge/terminology` — Core concepts and terms",
           "- `ynab://knowledge/overspending` — Cash vs credit overspending rules",
           "- `ynab://knowledge/credit-cards` — Credit card payment mechanics",
-          "- `ynab://knowledge/goals` — Goal types and underfunded calculations",
+          "- `ynab://knowledge/targets` — Target types and underfunded calculations",
           "",
           "1) Call `get_budget_summary` for high-level context.",
           `2) Call \`get_monthly_budget\` with month=${monthValue}.`,

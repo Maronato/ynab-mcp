@@ -11,6 +11,7 @@ import type { AppContext } from "../context.js";
 import { SamplingNotAvailableError } from "../sampling/client.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
+import type { NameLookup } from "../ynab/types.js";
 
 interface LlmCategorizationResult {
   transaction_id: string;
@@ -30,6 +31,24 @@ const autoCategorizeSchema = z.object({
   budget_id: z.string().optional(),
   since_date: z.string().optional(),
   include_unapproved: z.boolean().optional(),
+  include_transfers: z
+    .boolean()
+    .optional()
+    .describe(
+      "Include internal account transfers in results. Defaults to false since transfers cannot be categorized.",
+    ),
+  include_approved_uncategorized: z
+    .boolean()
+    .optional()
+    .describe(
+      "Include approved transactions that have no category. Defaults to true — set to false to only see unapproved transactions.",
+    ),
+  approve: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, update_actions will include approved: true so categorization and approval happen in one pass. Defaults to true.",
+    ),
   limit: z.number().int().min(1).max(200).optional(),
   history_months: z.number().int().min(1).max(36).optional(),
 });
@@ -66,12 +85,15 @@ export function registerSmartTools(
         );
         const limit = input.limit ?? 50;
         const includeUnapproved = input.include_unapproved ?? true;
+        const includeTransfers = input.include_transfers ?? false;
+        const includeApprovedUncategorized =
+          input.include_approved_uncategorized ?? true;
+        const shouldApprove = input.approve ?? true;
         const sinceDate = input.since_date ?? getDefaultSinceDate();
         const historyMonths = input.history_months;
 
-        // Fetch all needed data in parallel
         const [
-          uncategorized,
+          uncategorizedRaw,
           unapprovedRaw,
           profiles,
           scheduledTransactions,
@@ -82,6 +104,7 @@ export function registerSmartTools(
           context.ynabClient.searchTransactions(resolvedBudgetId, {
             type: "uncategorized",
             since_date: sinceDate,
+            exclude_transfers: !includeTransfers,
             limit,
             sort: "date_desc",
           }),
@@ -89,6 +112,7 @@ export function registerSmartTools(
             ? context.ynabClient.searchTransactions(resolvedBudgetId, {
                 approved: false,
                 since_date: sinceDate,
+                exclude_transfers: !includeTransfers,
                 limit,
                 sort: "date_desc",
               })
@@ -103,22 +127,33 @@ export function registerSmartTools(
           context.ynabClient.getBudgetSettings(resolvedBudgetId),
         ]);
 
+        // Split uncategorized into unapproved-uncategorized and approved-uncategorized
+        const unapprovedUncategorized = uncategorizedRaw.filter(
+          (tx) => !tx.approved,
+        );
+        const approvedUncategorized = includeApprovedUncategorized
+          ? uncategorizedRaw.filter((tx) => tx.approved)
+          : [];
+
         // Filter unapproved to only those that already have a category (YNAB auto-assigned)
+        const seenIds = new Set(uncategorizedRaw.map((tx) => tx.id));
         const unapprovedCategorized = unapprovedRaw.filter(
-          (tx) => tx.category_id && !uncategorized.some((u) => u.id === tx.id),
+          (tx) => tx.category_id && !seenIds.has(tx.id),
         );
 
         const flatCategories: FlatCategory[] = categoryGroups.flatMap((group) =>
           group.categories.map((cat) => ({
             id: cat.id,
             name: cat.name,
+            group_id: group.id,
             group_name: group.name,
           })),
         );
 
         // Build target transactions
         const targets: TargetTransaction[] = [
-          ...uncategorized.map((tx) => toTarget(tx, lookups, false)),
+          ...unapprovedUncategorized.map((tx) => toTarget(tx, lookups, false)),
+          ...approvedUncategorized.map((tx) => toTarget(tx, lookups, false)),
           ...unapprovedCategorized.map((tx) => toTarget(tx, lookups, true)),
         ];
 
@@ -176,6 +211,13 @@ export function registerSmartTools(
           confidenceSummary[s.confidence] += 1;
         }
 
+        const categoryGroupById = new Map(
+          flatCategories.map((c) => [
+            c.id,
+            { group_id: c.group_id, group_name: c.group_name },
+          ]),
+        );
+
         const formattedSuggestions = suggestions.map((s) => ({
           transaction_id: s.transaction_id,
           date: s.date,
@@ -185,20 +227,33 @@ export function registerSmartTools(
           memo: s.memo,
           current_category_id: s.current_category_id,
           current_category_name: s.current_category_name,
+          current_category_group_id: s.current_category_id
+            ? (categoryGroupById.get(s.current_category_id)?.group_id ?? null)
+            : null,
+          current_category_group_name: s.current_category_id
+            ? (categoryGroupById.get(s.current_category_id)?.group_name ?? null)
+            : null,
           suggested_category_id: s.suggested_category_id,
           suggested_category_name: s.suggested_category_name,
+          suggested_category_group_id: s.suggested_category_id
+            ? (categoryGroupById.get(s.suggested_category_id)?.group_id ?? null)
+            : null,
+          suggested_category_group_name: s.suggested_category_id
+            ? (categoryGroupById.get(s.suggested_category_id)?.group_name ??
+              null)
+            : null,
           confidence: s.confidence,
           method: s.method,
           reasoning: s.reasoning,
           signals: s.signals,
         }));
 
-        // Pre-build update actions for the client LLM
         const updateActions = suggestions
           .filter((s) => s.suggested_category_id)
           .map((s) => ({
             transaction_id: s.transaction_id,
             category_id: s.suggested_category_id,
+            ...(shouldApprove ? { approved: true } : {}),
           }));
 
         return jsonToolResult({
@@ -254,7 +309,7 @@ export function registerSmartTools(
           balance_display: string;
           budgeted: number;
           activity: number;
-          goal_type: string | null;
+          target_type: string | null;
         }> = [];
 
         const surplus: Array<{
@@ -264,9 +319,9 @@ export function registerSmartTools(
           balance: number;
           balance_display: string;
           budgeted: number;
-          goal_type: string | null;
-          goal_target: number | null;
-          goal_percentage_complete: number | null;
+          target_type: string | null;
+          target_amount: number | null;
+          target_percentage_complete: number | null;
         }> = [];
 
         for (const group of categoryGroups) {
@@ -285,7 +340,7 @@ export function registerSmartTools(
                 ),
                 budgeted: milliunitsToCurrency(cat.budgeted),
                 activity: milliunitsToCurrency(cat.activity),
-                goal_type: cat.goal_type ?? null,
+                target_type: cat.goal_type ?? null,
               });
             } else if (cat.balance > 0) {
               surplus.push({
@@ -298,11 +353,12 @@ export function registerSmartTools(
                   settings.currency_format,
                 ),
                 budgeted: milliunitsToCurrency(cat.budgeted),
-                goal_type: cat.goal_type ?? null,
-                goal_target: cat.goal_target
+                target_type: cat.goal_type ?? null,
+                target_amount: cat.goal_target
                   ? milliunitsToCurrency(cat.goal_target)
                   : null,
-                goal_percentage_complete: cat.goal_percentage_complete ?? null,
+                target_percentage_complete:
+                  cat.goal_percentage_complete ?? null,
               });
             }
           }
@@ -418,16 +474,21 @@ export function registerSmartTools(
           validSuggestions.push(suggestion);
         }
 
-        const formattedSuggestions = validSuggestions.map((s) => ({
-          ...s,
-          from_category_name: surplusById.get(s.from_category_id)?.name ?? null,
-          to_category_name:
-            overspent.find((o) => o.id === s.to_category_id)?.name ?? null,
-          amount_display: formatCurrency(
-            Math.round(s.amount * 1000),
-            settings.currency_format,
-          ),
-        }));
+        const formattedSuggestions = validSuggestions.map((s) => {
+          const from = surplusById.get(s.from_category_id);
+          const to = overspent.find((o) => o.id === s.to_category_id);
+          return {
+            ...s,
+            from_category_name: from?.name ?? null,
+            from_category_group_name: from?.group_name ?? null,
+            to_category_name: to?.name ?? null,
+            to_category_group_name: to?.group_name ?? null,
+            amount_display: formatCurrency(
+              Math.round(s.amount * 1000),
+              settings.currency_format,
+            ),
+          };
+        });
 
         // Pre-build set_budget_actions for the client LLM
         // Each move requires adjusting both source and destination budgets
@@ -525,10 +586,7 @@ interface TransactionLike {
 
 function toTarget(
   tx: TransactionLike,
-  lookups: {
-    payeeById: Map<string, string>;
-    categoryById: Map<string, string>;
-  },
+  lookups: NameLookup,
   isUnapprovedReview: boolean,
 ): TargetTransaction {
   return {
@@ -542,7 +600,7 @@ function toTarget(
     category_id: isUnapprovedReview ? (tx.category_id ?? null) : null,
     category_name:
       isUnapprovedReview && tx.category_id
-        ? (lookups.categoryById.get(tx.category_id) ?? null)
+        ? (lookups.categoryById.get(tx.category_id)?.name ?? null)
         : null,
     memo: tx.memo ?? null,
     approved: tx.approved,
@@ -560,7 +618,7 @@ async function buildDeterministicRebalance(
     balance: number;
     budgeted: number;
     activity: number;
-    goal_type: string | null;
+    target_type: string | null;
   }>,
   surplus: Array<{
     id: string;
@@ -568,9 +626,9 @@ async function buildDeterministicRebalance(
     group_name: string;
     balance: number;
     budgeted: number;
-    goal_type: string | null;
-    goal_target: number | null;
-    goal_percentage_complete: number | null;
+    target_type: string | null;
+    target_amount: number | null;
+    target_percentage_complete: number | null;
   }>,
   settings: { currency_format: Parameters<typeof formatCurrency>[1] },
 ) {
@@ -823,7 +881,7 @@ function buildRebalancePrompt(
     group_name: string;
     balance: number;
     balance_display: string;
-    goal_type: string | null;
+    target_type: string | null;
   }>,
   surplus: Array<{
     id: string;
@@ -831,9 +889,9 @@ function buildRebalancePrompt(
     group_name: string;
     balance: number;
     balance_display: string;
-    goal_type: string | null;
-    goal_target: number | null;
-    goal_percentage_complete: number | null;
+    target_type: string | null;
+    target_amount: number | null;
+    target_percentage_complete: number | null;
   }>,
 ): string {
   return [
@@ -877,7 +935,7 @@ Respond ONLY with a JSON array. Each element must have:
 Rules:
 - Never move more than a category's available balance.
 - Prioritize covering essential categories (rent, utilities, groceries) first.
-- Prefer taking from categories with the largest surplus relative to their goal.
+- Prefer taking from categories with the largest surplus relative to their target.
 - Minimize the number of moves.
 - Only move exactly enough to cover each overspent category's deficit.
 - Return valid JSON only, no markdown fences or extra text.`;

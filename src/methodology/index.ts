@@ -32,11 +32,11 @@ const topics: ReadonlyArray<{
     file: "credit-cards.md",
   },
   {
-    name: "goals",
-    title: "YNAB Goals",
+    name: "targets",
+    title: "YNAB Targets",
     description:
-      "Goal types (Target Category Balance, Monthly Savings Builder, Needed for Spending), underfunded calculations, and goal interactions with budgeting.",
-    file: "goals.md",
+      "Target types (Target Category Balance, Monthly Savings Builder, Needed for Spending), underfunded calculations, and target interactions with budgeting.",
+    file: "targets.md",
   },
   {
     name: "overspending",

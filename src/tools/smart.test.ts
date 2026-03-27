@@ -97,9 +97,18 @@ function setupDefaultMocks(context: ReturnType<typeof createMockContext>) {
   context.ynabClient.getNameLookup.mockResolvedValue(
     createMockNameLookup({
       categoryById: new Map([
-        ["cat-groceries", "Groceries"],
-        ["cat-dining", "Dining Out"],
-        ["cat-electric", "Electric"],
+        [
+          "cat-groceries",
+          { name: "Groceries", group_id: "group-2", group_name: "Everyday" },
+        ],
+        [
+          "cat-dining",
+          { name: "Dining Out", group_id: "group-2", group_name: "Everyday" },
+        ],
+        [
+          "cat-electric",
+          { name: "Electric", group_id: "group-1", group_name: "Bills" },
+        ],
       ]),
     }),
   );
@@ -161,9 +170,12 @@ describe("suggest_transaction_categories", () => {
     expect(content.suggestion_count).toBe(1);
     expect(content.confidence_summary.definitive).toBe(1);
     expect(content.suggestions[0].suggested_category_id).toBe("cat-groceries");
+    expect(content.suggestions[0].suggested_category_group_name).toBe(
+      "Everyday",
+    );
     expect(content.suggestions[0].confidence).toBe("definitive");
     expect(content.update_actions).toEqual([
-      { transaction_id: "tx-1", category_id: "cat-groceries" },
+      { transaction_id: "tx-1", category_id: "cat-groceries", approved: true },
     ]);
   });
 
@@ -250,6 +262,130 @@ describe("suggest_transaction_categories", () => {
     expect(content.suggestions[0].suggested_category_id).toBe("cat-groceries");
     expect(content.suggestions[0].method).toContain("llm");
     expect(context.samplingClient.createJsonMessage).toHaveBeenCalled();
+  });
+
+  it("excludes transfers by default", async () => {
+    const { context, handlers } = setup();
+    context.ynabClient.searchTransactions.mockResolvedValue([]);
+    setupDefaultMocks(context);
+
+    await handlers.suggest_transaction_categories({
+      budget_id: "budget-1",
+    });
+
+    for (const call of context.ynabClient.searchTransactions.mock.calls) {
+      expect(call[1]).toHaveProperty("exclude_transfers", true);
+    }
+  });
+
+  it("passes exclude_transfers=false when include_transfers is true", async () => {
+    const { context, handlers } = setup();
+    context.ynabClient.searchTransactions.mockResolvedValue([]);
+    setupDefaultMocks(context);
+
+    await handlers.suggest_transaction_categories({
+      budget_id: "budget-1",
+      include_transfers: true,
+    });
+
+    for (const call of context.ynabClient.searchTransactions.mock.calls) {
+      expect(call[1]).toHaveProperty("exclude_transfers", false);
+    }
+  });
+
+  it("includes approved uncategorized transactions by default", async () => {
+    const { context, handlers } = setup();
+    const approvedUncategorized = createMockTransaction({
+      id: "tx-approved",
+      category_id: null,
+      approved: true,
+    });
+    const unapprovedUncategorized = createMockTransaction({
+      id: "tx-unapproved",
+      category_id: null,
+      approved: false,
+    });
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([approvedUncategorized, unapprovedUncategorized])
+      .mockResolvedValueOnce([]);
+    setupDefaultMocks(context);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(new Map());
+
+    const result = await handlers.suggest_transaction_categories({
+      budget_id: "budget-1",
+    });
+    const content = JSON.parse(result.content[0].text);
+
+    expect(content.suggestion_count).toBe(2);
+    const ids = content.suggestions.map(
+      (s: { transaction_id: string }) => s.transaction_id,
+    );
+    expect(ids).toContain("tx-approved");
+    expect(ids).toContain("tx-unapproved");
+  });
+
+  it("excludes approved uncategorized when include_approved_uncategorized is false", async () => {
+    const { context, handlers } = setup();
+    const approvedUncategorized = createMockTransaction({
+      id: "tx-approved",
+      category_id: null,
+      approved: true,
+    });
+    const unapprovedUncategorized = createMockTransaction({
+      id: "tx-unapproved",
+      category_id: null,
+      approved: false,
+    });
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([approvedUncategorized, unapprovedUncategorized])
+      .mockResolvedValueOnce([]);
+    setupDefaultMocks(context);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(new Map());
+
+    const result = await handlers.suggest_transaction_categories({
+      budget_id: "budget-1",
+      include_approved_uncategorized: false,
+    });
+    const content = JSON.parse(result.content[0].text);
+
+    expect(content.suggestion_count).toBe(1);
+    expect(content.suggestions[0].transaction_id).toBe("tx-unapproved");
+  });
+
+  it("omits approved field from update_actions when approve is false", async () => {
+    const { context, handlers } = setup();
+    const tx = createMockTransaction({
+      id: "tx-1",
+      category_id: null,
+      payee_id: "payee-1",
+      approved: false,
+    });
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([tx])
+      .mockResolvedValueOnce([]);
+    setupDefaultMocks(context);
+    const profiles = new Map([
+      [
+        "payee-1",
+        makeProfile({
+          payee_id: "payee-1",
+          category_counts: new Map([["cat-groceries", 20]]),
+          recency_weighted: new Map([["cat-groceries", 15]]),
+          total_count: 20,
+        }),
+      ],
+    ]);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(profiles);
+
+    const result = await handlers.suggest_transaction_categories({
+      budget_id: "budget-1",
+      approve: false,
+    });
+    const content = JSON.parse(result.content[0].text);
+
+    expect(content.update_actions[0].approved).toBeUndefined();
+    expect(content.update_actions[0].transaction_id).toBe("tx-1");
+    expect(content.update_actions[0].category_id).toBe("cat-groceries");
   });
 
   it("returns suggestions without LLM when sampling unavailable", async () => {

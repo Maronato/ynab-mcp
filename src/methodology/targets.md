@@ -1,10 +1,10 @@
-# YNAB Goals
+# YNAB Targets
 
 ## Overview
 
-Goals help you plan and track funding for categories. Each category can have one goal that defines a target amount, a timeframe, or both. Goals drive the "Underfunded" calculation, which tells you how much more you need to assign to stay on track.
+Targets help you plan and track funding for categories. Each category can have one target that defines a target amount, a timeframe, or both. Targets drive the "Underfunded" calculation, which tells you how much more you need to assign to stay on track.
 
-## Goal Types
+## Target Types
 
 ### Target Category Balance ("Savings Balance")
 - **Purpose**: Build up to a specific balance in the category
@@ -33,7 +33,7 @@ Goals help you plan and track funding for categories. Each category can have one
 
 ## Underfunded
 
-"Underfunded" is the amount you need to assign to a category to keep its goal on track this month. It appears as an orange indicator on the category.
+"Underfunded" is the amount you need to assign to a category to keep its target on track this month. It appears as an orange indicator on the category.
 
 - If a category is fully funded for the month, it shows a green checkmark
 - If a category has more than needed, it shows a green indicator with the surplus
@@ -41,16 +41,16 @@ Goals help you plan and track funding for categories. Each category can have one
 
 **Quick Budget actions use underfunded**: The "Underfunded" quick budget option assigns exactly the underfunded amount to each selected category.
 
-## Goal Interactions with Budgeting
+## Target Interactions with Budgeting
 
-- Goals don't move money automatically — they only inform you how much to assign
-- Available balance from previous months counts toward goals. If your "Emergency Fund" goal is $10,000 and you already have $8,000 available, only $2,000 (or its monthly portion) shows as underfunded
-- Spending from a category with a Savings Balance goal increases the underfunded amount
-- Monthly goals (Savings Builder, monthly Needed for Spending) reset their funding requirement each month regardless of surplus
+- Targets don't move money automatically — they only inform you how much to assign
+- Available balance from previous months counts toward targets. If your "Emergency Fund" target is $10,000 and you already have $8,000 available, only $2,000 (or its monthly portion) shows as underfunded
+- Spending from a category with a Savings Balance target increases the underfunded amount
+- Monthly targets (Savings Builder, monthly Needed for Spending) reset their funding requirement each month regardless of surplus
 
 ## Common Patterns
 
 - **Bills**: Use "Needed for Spending" with a monthly repeat for recurring bills
-- **Savings**: Use "Target Category Balance" with a target date for specific savings goals
+- **Savings**: Use "Target Category Balance" with a target date for specific savings targets
 - **Subscriptions**: Use "Needed for Spending" with the billing cycle date
 - **Irregular expenses**: Use "Needed for Spending" with the due date, start funding months in advance

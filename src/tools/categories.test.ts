@@ -27,6 +27,165 @@ beforeEach(() => {
   });
 });
 
+describe("list_categories", () => {
+  it("returns group hierarchy with IDs and names only", async () => {
+    ctx.ynabClient.getCategories.mockResolvedValue([
+      {
+        id: "group-1",
+        name: "Everyday",
+        hidden: false,
+        categories: [
+          { id: "cat-1", name: "Groceries", hidden: false },
+          { id: "cat-2", name: "Dining", hidden: true },
+        ],
+      },
+    ]);
+
+    const handler = tools.list_categories;
+    const result = parseResult(await handler({}));
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0].id).toBe("group-1");
+    expect(result.groups[0].name).toBe("Everyday");
+    expect(result.groups[0].categories).toHaveLength(2);
+    expect(result.groups[0].categories[0]).toEqual({
+      id: "cat-1",
+      name: "Groceries",
+      hidden: false,
+    });
+  });
+
+  it("does not include budget or target fields", async () => {
+    ctx.ynabClient.getCategories.mockResolvedValue([
+      {
+        id: "group-1",
+        name: "Group",
+        hidden: false,
+        categories: [
+          {
+            id: "cat-1",
+            name: "Cat",
+            hidden: false,
+            budgeted: 50000,
+            activity: -20000,
+            balance: 30000,
+            goal_type: "TB",
+          },
+        ],
+      },
+    ]);
+
+    const handler = tools.list_categories;
+    const result = parseResult(await handler({}));
+
+    const cat = result.groups[0].categories[0];
+    expect(cat.budgeted).toBeUndefined();
+    expect(cat.activity).toBeUndefined();
+    expect(cat.balance).toBeUndefined();
+    expect(cat.goal_type).toBeUndefined();
+    expect(cat.target_type).toBeUndefined();
+  });
+
+  it("passes group_id and include_hidden to client", async () => {
+    ctx.ynabClient.getCategories.mockResolvedValue([]);
+
+    const handler = tools.list_categories;
+    await handler({ group_id: "g-1", include_hidden: true });
+
+    expect(ctx.ynabClient.getCategories).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        groupId: "g-1",
+        includeHidden: true,
+      }),
+    );
+  });
+});
+
+describe("get_targets", () => {
+  it("returns categories with target_* field naming", async () => {
+    ctx.ynabClient.getCategories.mockResolvedValue([
+      {
+        id: "group-1",
+        name: "Bills",
+        hidden: false,
+        categories: [
+          {
+            id: "cat-1",
+            name: "Rent",
+            hidden: false,
+            budgeted: 430000,
+            activity: -430000,
+            balance: 0,
+            goal_type: "NEED",
+            goal_target: 430000,
+            goal_target_month: "2024-02-01",
+            goal_percentage_complete: 100,
+          },
+        ],
+      },
+    ]);
+
+    const handler = tools.get_targets;
+    const result = parseResult(await handler({}));
+
+    const cat = result.groups[0].categories[0];
+    expect(cat.target_type).toBe("NEED");
+    expect(cat.target_amount).toBe(430);
+    expect(cat.target_date).toBe("2024-02-01");
+    expect(cat.target_percentage_complete).toBe(100);
+
+    expect(cat.goal_type).toBeUndefined();
+    expect(cat.goal_target).toBeUndefined();
+  });
+
+  it("returns null target fields for categories without targets", async () => {
+    ctx.ynabClient.getCategories.mockResolvedValue([
+      {
+        id: "group-1",
+        name: "Everyday",
+        hidden: false,
+        categories: [
+          {
+            id: "cat-1",
+            name: "Groceries",
+            hidden: false,
+            budgeted: 50000,
+            activity: -30000,
+            balance: 20000,
+            goal_type: null,
+            goal_target: null,
+            goal_target_month: null,
+            goal_percentage_complete: null,
+          },
+        ],
+      },
+    ]);
+
+    const handler = tools.get_targets;
+    const result = parseResult(await handler({}));
+
+    const cat = result.groups[0].categories[0];
+    expect(cat.target_type).toBeNull();
+    expect(cat.target_amount).toBeNull();
+    expect(cat.target_amount_display).toBeNull();
+    expect(cat.target_date).toBeNull();
+    expect(cat.target_percentage_complete).toBeNull();
+  });
+
+  it("passes month to client for scoped progress", async () => {
+    ctx.ynabClient.getCategories.mockResolvedValue([]);
+
+    const handler = tools.get_targets;
+    await handler({ month: "2024-06-01" });
+
+    expect(ctx.ynabClient.getCategories).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ month: "2024-06-01" }),
+    );
+  });
+});
+
 describe("get_monthly_budget", () => {
   it("joins month categories with category tree structure", async () => {
     const monthCategory = {
@@ -61,14 +220,7 @@ describe("get_monthly_budget", () => {
     expect(result.groups[0].categories[0].balance).toBe(20);
   });
 
-  it("falls back to tree category when month data is missing", async () => {
-    const treeCat = {
-      id: "cat-orphan",
-      name: "Orphan",
-      budgeted: 0,
-      activity: 0,
-      balance: 0,
-    };
+  it("shows zeroes for categories missing from month data (never truncates)", async () => {
     ctx.ynabClient.getMonthSummary.mockResolvedValue({
       month: "2024-01-01",
       income: 0,
@@ -76,22 +228,29 @@ describe("get_monthly_budget", () => {
       activity: 0,
       to_be_budgeted: 0,
       age_of_money: null,
-      categories: [], // month has no data for this category
+      categories: [], // month has no data for these categories
     });
     ctx.ynabClient.getCategories.mockResolvedValue([
       {
         id: "group-1",
         name: "Group",
-        categories: [treeCat],
+        categories: [
+          { id: "cat-rent", name: "Rent" },
+          { id: "cat-utils", name: "Utilities" },
+        ],
       },
     ]);
 
     const handler = tools.get_monthly_budget;
     const result = parseResult(await handler({}));
 
-    // Should fall back to treeCat values
-    expect(result.groups[0].categories[0].name).toBe("Orphan");
-    expect(result.groups[0].categories[0].budgeted).toBe(0);
+    expect(result.groups[0].categories).toHaveLength(2);
+    for (const cat of result.groups[0].categories) {
+      expect(cat.budgeted).toBe(0);
+      expect(cat.activity).toBe(0);
+      expect(cat.balance).toBe(0);
+      expect(cat.overspent).toBe(false);
+    }
   });
 
   it("computes overspent flag correctly", async () => {
@@ -162,6 +321,40 @@ describe("get_monthly_budget", () => {
     expect(result.activity).toBe(-350);
     expect(result.to_be_budgeted).toBe(100);
     expect(result.age_of_money).toBe(45);
+  });
+
+  it("does not include target fields", async () => {
+    ctx.ynabClient.getMonthSummary.mockResolvedValue({
+      month: "2024-01-01",
+      income: 0,
+      budgeted: 0,
+      activity: 0,
+      to_be_budgeted: 0,
+      age_of_money: null,
+      categories: [
+        {
+          id: "cat-1",
+          name: "Rent",
+          budgeted: 430000,
+          activity: 0,
+          balance: 430000,
+        },
+      ],
+    });
+    ctx.ynabClient.getCategories.mockResolvedValue([
+      {
+        id: "group-1",
+        name: "Group",
+        categories: [{ id: "cat-1", name: "Rent" }],
+      },
+    ]);
+
+    const handler = tools.get_monthly_budget;
+    const result = parseResult(await handler({}));
+
+    const cat = result.groups[0].categories[0];
+    expect(cat.target_type).toBeUndefined();
+    expect(cat.goal_type).toBeUndefined();
   });
 });
 
