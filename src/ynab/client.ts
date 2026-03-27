@@ -58,6 +58,10 @@ const DEFAULT_CATEGORIES_OPTIONS: Required<
   includeHidden: false,
 };
 
+const RATE_LIMIT_MAX = 200;
+const RATE_LIMIT_THRESHOLD = 190;
+const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
 export class YnabClient {
   private readonly api: ynab.API;
 
@@ -67,13 +71,74 @@ export class YnabClient {
 
   readonly readOnly: boolean;
 
+  private readonly apiCallTimestamps: number[] = [];
+
   constructor(
     accessToken: string,
     endpointUrl?: string,
     options?: { readOnly?: boolean },
   ) {
-    this.api = new ynab.API(accessToken, endpointUrl);
+    this.api = this.withRateLimit(new ynab.API(accessToken, endpointUrl));
     this.readOnly = options?.readOnly ?? false;
+  }
+
+  private trackApiCall(): void {
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW_MS;
+
+    // Prune old entries when the array grows large
+    if (this.apiCallTimestamps.length > RATE_LIMIT_MAX * 2) {
+      const firstValid = this.apiCallTimestamps.findIndex(
+        (t) => t > windowStart,
+      );
+      if (firstValid > 0) {
+        this.apiCallTimestamps.splice(0, firstValid);
+      }
+    }
+
+    const recentCount = this.apiCallTimestamps.filter(
+      (t) => t > windowStart,
+    ).length;
+
+    if (recentCount >= RATE_LIMIT_THRESHOLD) {
+      const oldest = this.apiCallTimestamps.find((t) => t > windowStart)!;
+      const resetMinutes = Math.ceil(
+        (oldest + RATE_LIMIT_WINDOW_MS - now) / 60000,
+      );
+      throw new Error(
+        `YNAB API rate limit approaching (${recentCount}/${RATE_LIMIT_MAX} requests in the last hour). ` +
+          `Try again in ~${resetMinutes} minutes.`,
+      );
+    }
+
+    this.apiCallTimestamps.push(now);
+  }
+
+  /**
+   * Wraps the ynab API so that every SDK method call automatically
+   * passes through the rate limiter.
+   */
+  private withRateLimit(api: ynab.API): ynab.API {
+    const client = this;
+    return new Proxy(api, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== "object" || value === null) return value;
+
+        // Wrap each sub-API (e.g. api.transactions, api.accounts)
+        return new Proxy(value as object, {
+          get(subTarget, subProp, subReceiver) {
+            const method = Reflect.get(subTarget, subProp, subReceiver);
+            if (typeof method !== "function") return method;
+
+            return (...args: unknown[]) => {
+              client.trackApiCall();
+              return (method as Function).apply(subTarget, args);
+            };
+          },
+        });
+      },
+    });
   }
 
   private assertWriteAllowed(): void {
