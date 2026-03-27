@@ -39,7 +39,8 @@ export function registerCategoryTools(
     {
       title: "Get Categories",
       description:
-        "Get categories grouped by category group for a given month with optional filters.",
+        "Get categories with goal progress details (goal type, target, target date, percentage complete). " +
+        "Use this when you need goal information. Use get_monthly_budget instead for a quick budget overview with overspending flags.",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -114,7 +115,8 @@ export function registerCategoryTools(
     {
       title: "Get Monthly Budget",
       description:
-        "Get month summary with totals and grouped category balances for one month.",
+        "Get a quick month overview with income/budgeted/activity totals and per-category balances with overspending flags. " +
+        "Use this for budget summaries. Use get_categories instead when you need goal progress details.",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

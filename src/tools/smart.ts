@@ -318,15 +318,15 @@ export function registerSmartTools(
         }
 
         if (!context.samplingClient.isAvailable()) {
-          return jsonToolResult({
-            budget_id: resolvedBudgetId,
+          const deterministicResult = await buildDeterministicRebalance(
+            context,
+            resolvedBudgetId,
             month,
-            sampling_available: false,
-            message:
-              "Sampling not available. Returning overspent and surplus categories for manual rebalancing.",
-            overspent_categories: overspent,
-            surplus_categories: surplus,
-          });
+            overspent,
+            surplus,
+            settings,
+          );
+          return jsonToolResult(deterministicResult);
         }
 
         let suggestions: RebalanceSuggestion[];
@@ -546,6 +546,131 @@ function toTarget(
         : null,
     memo: tx.memo ?? null,
     approved: tx.approved,
+  };
+}
+
+async function buildDeterministicRebalance(
+  context: AppContext,
+  budgetId: string,
+  month: string,
+  overspent: Array<{
+    id: string;
+    name: string;
+    group_name: string;
+    balance: number;
+    budgeted: number;
+    activity: number;
+    goal_type: string | null;
+  }>,
+  surplus: Array<{
+    id: string;
+    name: string;
+    group_name: string;
+    balance: number;
+    budgeted: number;
+    goal_type: string | null;
+    goal_target: number | null;
+    goal_percentage_complete: number | null;
+  }>,
+  settings: { currency_format: Parameters<typeof formatCurrency>[1] },
+) {
+  const resolvedMonth = month === "current" ? getCurrentMonth() : month;
+
+  const sortedOverspent = [...overspent].sort((a, b) => a.balance - b.balance);
+  const sortedSurplus = [...surplus].sort((a, b) => b.balance - a.balance);
+  const remainingBalance = new Map(sortedSurplus.map((s) => [s.id, s.balance]));
+
+  const suggestions: Array<{
+    from_category_id: string;
+    from_category_name: string;
+    to_category_id: string;
+    to_category_name: string;
+    amount: number;
+    amount_display: string;
+    reasoning: string;
+  }> = [];
+
+  for (const category of sortedOverspent) {
+    let deficit = Math.abs(category.balance);
+
+    for (const source of sortedSurplus) {
+      if (deficit <= 0) break;
+      const available = remainingBalance.get(source.id) ?? 0;
+      if (available <= 0) continue;
+
+      const moveAmount = Math.min(deficit, available);
+      remainingBalance.set(source.id, available - moveAmount);
+      deficit -= moveAmount;
+
+      suggestions.push({
+        from_category_id: source.id,
+        from_category_name: source.name,
+        to_category_id: category.id,
+        to_category_name: category.name,
+        amount: moveAmount,
+        amount_display: formatCurrency(
+          Math.round(moveAmount * 1000),
+          settings.currency_format,
+        ),
+        reasoning: `Cover ${category.name} deficit from largest available surplus.`,
+      });
+    }
+  }
+
+  const involvedCategoryIds = new Set<string>();
+  for (const s of suggestions) {
+    involvedCategoryIds.add(s.from_category_id);
+    involvedCategoryIds.add(s.to_category_id);
+  }
+
+  const currentBudgets = await Promise.all(
+    [...involvedCategoryIds].map(async (catId) => ({
+      id: catId,
+      category: await context.ynabClient.getMonthCategoryById(
+        budgetId,
+        resolvedMonth,
+        catId,
+      ),
+    })),
+  );
+
+  const budgetAdjustments = new Map<
+    string,
+    { currentBudgeted: number; delta: number }
+  >();
+
+  for (const { id, category } of currentBudgets) {
+    if (category) {
+      budgetAdjustments.set(id, {
+        currentBudgeted: category.budgeted,
+        delta: 0,
+      });
+    }
+  }
+
+  for (const suggestion of suggestions) {
+    const amountMilliunits = Math.round(suggestion.amount * 1000);
+    const from = budgetAdjustments.get(suggestion.from_category_id);
+    const to = budgetAdjustments.get(suggestion.to_category_id);
+    if (from) from.delta -= amountMilliunits;
+    if (to) to.delta += amountMilliunits;
+  }
+
+  const setBudgetActions = [...budgetAdjustments.entries()]
+    .filter(([, adj]) => adj.delta !== 0)
+    .map(([catId, adj]) => ({
+      category_id: catId,
+      month: resolvedMonth,
+      budgeted: milliunitsToCurrency(adj.currentBudgeted + adj.delta),
+    }));
+
+  return {
+    budget_id: budgetId,
+    month: resolvedMonth,
+    sampling_available: false,
+    suggestion_count: suggestions.length,
+    suggestions,
+    set_budget_actions: setBudgetActions,
   };
 }
 

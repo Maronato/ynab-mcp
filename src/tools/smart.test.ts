@@ -296,13 +296,22 @@ describe("suggest_overspending_coverage", () => {
     expect(content.message).toContain("No overspent");
   });
 
-  it("returns raw data when sampling unavailable", async () => {
+  it("returns deterministic suggestions when sampling unavailable", async () => {
     const { context, handlers } = setup();
     context.ynabClient.getCategories.mockResolvedValue(makeCategoryGroups());
     context.ynabClient.getBudgetSettings.mockResolvedValue({
       currency_format: createMockCurrencyFormat(),
     });
     context.samplingClient.isAvailable.mockReturnValue(false);
+    context.ynabClient.getMonthCategoryById.mockImplementation(
+      async (_budgetId: string, _month: string, catId: string) => {
+        const cats: Record<string, { id: string; budgeted: number }> = {
+          "cat-groceries": { id: "cat-groceries", budgeted: 500000 },
+          "cat-electric": { id: "cat-electric", budgeted: 100000 },
+        };
+        return cats[catId] ?? null;
+      },
+    );
 
     const result = await handlers.suggest_overspending_coverage({
       budget_id: "budget-1",
@@ -310,8 +319,12 @@ describe("suggest_overspending_coverage", () => {
     const content = JSON.parse(result.content[0].text);
 
     expect(content.sampling_available).toBe(false);
-    expect(content.overspent_categories).toHaveLength(1);
-    expect(content.surplus_categories).toHaveLength(2);
+    expect(content.suggestion_count).toBeGreaterThan(0);
+    expect(content.suggestions[0].from_category_id).toBe("cat-groceries");
+    expect(content.suggestions[0].to_category_id).toBe("cat-electric");
+    expect(content.suggestions[0].amount).toBe(50);
+    expect(content.set_budget_actions).toBeDefined();
+    expect(content.set_budget_actions.length).toBeGreaterThan(0);
   });
 
   it("returns suggestions with set_budget_actions (read-only)", async () => {

@@ -17,6 +17,12 @@ const spendingAnalysisSchema = z.object({
   top_n: z.number().int().min(1).max(100).default(10),
   category_ids: z.array(z.string()).optional(),
   account_ids: z.array(z.string()).optional(),
+  include_transfers: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Include internal account transfers in results. Defaults to false since transfers inflate spending totals.",
+    ),
 });
 
 interface AggregateEntry {
@@ -78,6 +84,11 @@ export function registerAnalysisTools(
 
         for (const transaction of transactions) {
           if (transaction.amount >= 0) continue;
+          if (
+            !input.include_transfers &&
+            transaction.transfer_account_id != null
+          )
+            continue;
           if (accountIdSet && !accountIdSet.has(transaction.account_id))
             continue;
           if (

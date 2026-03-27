@@ -61,7 +61,7 @@ describe("undo_operations", () => {
 
     const result = parseResult(
       await tools.undo_operations({
-        entries: ["budget-1::1::abc"],
+        undo_history_ids: ["budget-1::1::abc"],
         force: true,
       }),
     );

@@ -12,7 +12,12 @@ const listUndoHistorySchema = z.object({
 });
 
 const undoOperationsSchema = z.object({
-  entries: z.array(z.string()).min(1),
+  undo_history_ids: z
+    .array(z.string())
+    .min(1)
+    .describe(
+      "The undo entry IDs to undo (returned as undo_history_ids by write tools).",
+    ),
   force: z.boolean().default(false),
 });
 
@@ -88,7 +93,7 @@ export function registerUndoTools(
     async (input) => {
       try {
         const result = await context.undoEngine.undoOperations(
-          input.entries,
+          input.undo_history_ids,
           input.force,
         );
 
