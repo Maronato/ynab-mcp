@@ -90,8 +90,9 @@ All write tools support batch operations and record undo history automatically.
 
 | Tool | Description |
 |---|---|
-| `get_categories` | Category hierarchy (groups and categories) for a given month |
-| `get_monthly_budget` | Detailed monthly budget data |
+| `list_categories` | Lightweight category directory with group hierarchy, IDs, and names |
+| `get_targets` | Target progress and underfunded data for categories in a given month |
+| `get_monthly_budget` | Detailed monthly budget data with per-category budgeted, activity, and balance figures |
 | `set_category_budgets` | Batch set budgeted amounts for categories in specific months |
 
 ### Spending analysis
@@ -147,7 +148,7 @@ All parameterized resources support `last-used` as the budget ID and provide aut
 |---|---|
 | `ynab://knowledge/terminology` | Core YNAB concepts, terms, transaction states, and month semantics |
 | `ynab://knowledge/credit-cards` | Credit card spending, payments, debt, and returns in YNAB |
-| `ynab://knowledge/goals` | Goal types, underfunded calculations, and budgeting interactions |
+| `ynab://knowledge/targets` | Target types, underfunded calculations, and budgeting interactions |
 | `ynab://knowledge/overspending` | Cash vs credit overspending and month rollover behavior |
 | `ynab://knowledge/reconciliation` | Reconciliation workflow and transaction status lifecycle |
 

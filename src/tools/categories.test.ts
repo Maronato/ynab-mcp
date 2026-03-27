@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 describe("list_categories", () => {
-  it("returns group hierarchy with IDs and names only", async () => {
+  it("returns group hierarchy with self-contained category identity", async () => {
     ctx.ynabClient.getCategories.mockResolvedValue([
       {
         id: "group-1",
@@ -51,6 +51,8 @@ describe("list_categories", () => {
     expect(result.groups[0].categories[0]).toEqual({
       id: "cat-1",
       name: "Groceries",
+      category_group_id: "group-1",
+      category_group_name: "Everyday",
       hidden: false,
     });
   });
@@ -118,8 +120,12 @@ describe("get_targets", () => {
             activity: -430000,
             balance: 0,
             goal_type: "NEED",
+            goal_needs_whole_amount: true,
             goal_target: 430000,
-            goal_target_month: "2024-02-01",
+            goal_target_date: "2024-02-10",
+            goal_months_to_budget: 1,
+            goal_under_funded: 430000,
+            goal_overall_funded: 0,
             goal_percentage_complete: 100,
           },
         ],
@@ -131,12 +137,21 @@ describe("get_targets", () => {
 
     const cat = result.groups[0].categories[0];
     expect(cat.target_type).toBe("NEED");
+    expect(cat.target_needs_whole_amount).toBe(true);
     expect(cat.target_amount).toBe(430);
-    expect(cat.target_date).toBe("2024-02-01");
+    expect(cat.target_date).toBe("2024-02-10");
+    expect(cat.target_months_to_budget).toBe(1);
+    expect(cat.target_underfunded).toBe(430);
+    expect(cat.target_overall_funded).toBe(0);
     expect(cat.target_percentage_complete).toBe(100);
+    expect(cat.category_group_id).toBe("group-1");
+    expect(cat.category_group_name).toBe("Bills");
 
     expect(cat.goal_type).toBeUndefined();
     expect(cat.goal_target).toBeUndefined();
+    expect(cat.budgeted).toBeUndefined();
+    expect(cat.activity).toBeUndefined();
+    expect(cat.balance).toBeUndefined();
   });
 
   it("returns null target fields for categories without targets", async () => {
@@ -154,8 +169,12 @@ describe("get_targets", () => {
             activity: -30000,
             balance: 20000,
             goal_type: null,
+            goal_needs_whole_amount: null,
             goal_target: null,
-            goal_target_month: null,
+            goal_target_date: null,
+            goal_months_to_budget: null,
+            goal_under_funded: null,
+            goal_overall_funded: null,
             goal_percentage_complete: null,
           },
         ],
@@ -167,9 +186,15 @@ describe("get_targets", () => {
 
     const cat = result.groups[0].categories[0];
     expect(cat.target_type).toBeNull();
+    expect(cat.target_needs_whole_amount).toBeNull();
     expect(cat.target_amount).toBeNull();
     expect(cat.target_amount_display).toBeNull();
     expect(cat.target_date).toBeNull();
+    expect(cat.target_months_to_budget).toBeNull();
+    expect(cat.target_underfunded).toBeNull();
+    expect(cat.target_underfunded_display).toBeNull();
+    expect(cat.target_overall_funded).toBeNull();
+    expect(cat.target_overall_funded_display).toBeNull();
     expect(cat.target_percentage_complete).toBeNull();
   });
 
@@ -218,6 +243,8 @@ describe("get_monthly_budget", () => {
     expect(result.groups[0].categories[0].budgeted).toBe(50);
     expect(result.groups[0].categories[0].activity).toBe(-30);
     expect(result.groups[0].categories[0].balance).toBe(20);
+    expect(result.groups[0].categories[0].category_group_id).toBe("group-1");
+    expect(result.groups[0].categories[0].category_group_name).toBe("Everyday");
   });
 
   it("shows zeroes for categories missing from month data (never truncates)", async () => {
@@ -355,6 +382,27 @@ describe("get_monthly_budget", () => {
     const cat = result.groups[0].categories[0];
     expect(cat.target_type).toBeUndefined();
     expect(cat.goal_type).toBeUndefined();
+  });
+
+  it("passes include_hidden to client for uncommon hidden-category workflows", async () => {
+    ctx.ynabClient.getMonthSummary.mockResolvedValue({
+      month: "2024-01-01",
+      income: 0,
+      budgeted: 0,
+      activity: 0,
+      to_be_budgeted: 0,
+      age_of_money: null,
+      categories: [],
+    });
+    ctx.ynabClient.getCategories.mockResolvedValue([]);
+
+    const handler = tools.get_monthly_budget;
+    await handler({ include_hidden: true });
+
+    expect(ctx.ynabClient.getCategories).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ includeHidden: true }),
+    );
   });
 });
 

@@ -29,6 +29,12 @@ const getMonthlyBudgetSchema = z.object({
     .string()
     .optional()
     .describe("Month in YYYY-MM-DD format. Defaults to current month."),
+  include_hidden: z
+    .boolean()
+    .optional()
+    .describe(
+      "Include hidden categories in the monthly budget output. Defaults to false for a cleaner review surface.",
+    ),
 });
 
 const setCategoryBudgetsSchema = z.object({
@@ -83,6 +89,8 @@ export function registerCategoryTools(
             categories: group.categories.map((category) => ({
               id: category.id,
               name: category.name,
+              category_group_id: group.id,
+              category_group_name: group.name,
               hidden: category.hidden,
             })),
           })),
@@ -100,8 +108,9 @@ export function registerCategoryTools(
     {
       title: "Get Category Targets",
       description:
-        "Get categories with target (goal) progress details: target type, target amount, " +
-        "target date, and percentage complete. Use this when you need target/funding information. " +
+        "Get categories with target progress details only: target type, amount, date, " +
+        "underfunded amount, months remaining, and percentage complete. " +
+        "Use this when you need target-specific guidance rather than monthly budget balances. " +
         "Categories without targets return null target fields rather than being omitted.",
       annotations: {
         readOnlyHint: true,
@@ -130,26 +139,17 @@ export function registerCategoryTools(
             categories: group.categories.map((category) => ({
               id: category.id,
               name: category.name,
+              category_group_id: group.id,
+              category_group_name: group.name,
               hidden: category.hidden,
-              budgeted: milliunitsToCurrency(category.budgeted),
-              budgeted_display: formatCurrency(
-                category.budgeted,
-                settings.currency_format,
-              ),
-              activity: milliunitsToCurrency(category.activity),
-              activity_display: formatCurrency(
-                category.activity,
-                settings.currency_format,
-              ),
-              balance: milliunitsToCurrency(category.balance),
-              balance_display: formatCurrency(
-                category.balance,
-                settings.currency_format,
-              ),
               target_type: category.goal_type ?? null,
-              target_amount: category.goal_target
-                ? milliunitsToCurrency(category.goal_target)
-                : null,
+              target_needs_whole_amount:
+                category.goal_needs_whole_amount ?? null,
+              target_amount:
+                category.goal_target !== null &&
+                category.goal_target !== undefined
+                  ? milliunitsToCurrency(category.goal_target)
+                  : null,
               target_amount_display:
                 category.goal_target !== null &&
                 category.goal_target !== undefined
@@ -158,7 +158,34 @@ export function registerCategoryTools(
                       settings.currency_format,
                     )
                   : null,
-              target_date: category.goal_target_month ?? null,
+              target_date: category.goal_target_date ?? null,
+              target_months_to_budget: category.goal_months_to_budget ?? null,
+              target_underfunded:
+                category.goal_under_funded !== null &&
+                category.goal_under_funded !== undefined
+                  ? milliunitsToCurrency(category.goal_under_funded)
+                  : null,
+              target_underfunded_display:
+                category.goal_under_funded !== null &&
+                category.goal_under_funded !== undefined
+                  ? formatCurrency(
+                      category.goal_under_funded,
+                      settings.currency_format,
+                    )
+                  : null,
+              target_overall_funded:
+                category.goal_overall_funded !== null &&
+                category.goal_overall_funded !== undefined
+                  ? milliunitsToCurrency(category.goal_overall_funded)
+                  : null,
+              target_overall_funded_display:
+                category.goal_overall_funded !== null &&
+                category.goal_overall_funded !== undefined
+                  ? formatCurrency(
+                      category.goal_overall_funded,
+                      settings.currency_format,
+                    )
+                  : null,
               target_percentage_complete:
                 category.goal_percentage_complete ?? null,
             })),
@@ -178,8 +205,8 @@ export function registerCategoryTools(
       title: "Get Monthly Budget",
       description:
         "Get a month overview with income/budgeted/activity totals and per-category budget figures " +
-        "(budgeted, activity, balance) with overspending flags. Returns all categories — " +
-        "those with no activity show zeroes. No target data.",
+        "(budgeted, activity, balance) with overspending flags. Returns all visible categories by default — " +
+        "set include_hidden=true to include hidden ones. Categories with no activity show zeroes. No target data.",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -193,7 +220,7 @@ export function registerCategoryTools(
         const [month, categoryTree, settings] = await Promise.all([
           context.ynabClient.getMonthSummary(input.budget_id, monthValue),
           context.ynabClient.getCategories(input.budget_id, {
-            includeHidden: false,
+            includeHidden: input.include_hidden,
           }),
           context.ynabClient.getBudgetSettings(input.budget_id),
         ]);
@@ -228,6 +255,7 @@ export function registerCategoryTools(
           groups: categoryTree.map((group) => ({
             id: group.id,
             name: group.name,
+            hidden: group.hidden,
             categories: group.categories.map((treeCat) => {
               const monthCat = monthCategoriesById.get(treeCat.id);
               const budgeted = monthCat?.budgeted ?? 0;
@@ -236,6 +264,9 @@ export function registerCategoryTools(
               return {
                 id: treeCat.id,
                 name: treeCat.name,
+                category_group_id: group.id,
+                category_group_name: group.name,
+                hidden: treeCat.hidden,
                 budgeted: milliunitsToCurrency(budgeted),
                 budgeted_display: formatCurrency(
                   budgeted,

@@ -34,9 +34,10 @@ export function registerPrompts(server: McpServer): void {
           "",
           "1) Call `get_budget_summary` for high-level context.",
           `2) Call \`get_monthly_budget\` with month=${monthValue}.`,
-          "3) Identify overspent categories and largest outflows.",
-          "4) Call `search_transactions` for suspicious or large transactions that need categorization fixes.",
-          "5) Suggest concrete actions (reassign budget, recategorize, adjust scheduled transactions).",
+          `3) Call \`get_targets\` with month=${monthValue} when target funding guidance is needed.`,
+          "4) Identify overspent categories, underfunded targets, and largest outflows.",
+          "5) Call `search_transactions` for suspicious or large transactions that need categorization fixes.",
+          "6) Suggest concrete actions (reassign budget, recategorize, adjust scheduled transactions).",
         ].join("\n"),
       );
     },
