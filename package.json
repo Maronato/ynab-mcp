@@ -1,6 +1,6 @@
 {
   "name": "@maro-org/ynab-mcp",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "description": "MCP server for YNAB with batch operations and robust undo support",
   "type": "module",
   "main": "build/index.js",
