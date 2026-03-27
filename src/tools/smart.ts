@@ -10,8 +10,14 @@ import {
 import type { AppContext } from "../context.js";
 import { SamplingNotAvailableError } from "../sampling/client.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { extractErrorMessage } from "../ynab/errors.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 import type { NameLookup } from "../ynab/types.js";
+
+const INTERNAL_GROUP_NAMES = new Set([
+  "Internal Master Category",
+  "Credit Card Payments",
+]);
 
 interface LlmCategorizationResult {
   transaction_id: string;
@@ -265,9 +271,10 @@ export function registerSmartTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to analyze transactions for categorization.",
+          extractErrorMessage(
+            error,
+            "Failed to analyze transactions for categorization.",
+          ),
         );
       }
     },
@@ -325,6 +332,8 @@ export function registerSmartTools(
         }> = [];
 
         for (const group of categoryGroups) {
+          if (INTERNAL_GROUP_NAMES.has(group.name)) continue;
+
           for (const cat of group.categories) {
             if (cat.hidden || cat.deleted) continue;
 
@@ -409,9 +418,7 @@ export function registerSmartTools(
             throw error;
           }
           return errorToolResult(
-            `Failed to get rebalancing suggestions from LLM: ${
-              error instanceof Error ? error.message : "Unknown error"
-            }`,
+            `Failed to get rebalancing suggestions from LLM: ${extractErrorMessage(error)}`,
           );
         }
 
@@ -553,9 +560,7 @@ export function registerSmartTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to analyze overspending.",
+          extractErrorMessage(error, "Failed to analyze overspending."),
         );
       }
     },

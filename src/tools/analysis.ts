@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { extractErrorMessage } from "../ynab/errors.js";
 import {
   type CurrencyFormatLike,
   formatCurrency,
@@ -72,6 +73,13 @@ export function registerAnalysisTools(
           context.ynabClient.getBudgetSettings(input.budget_id),
         ]);
 
+        const internalCategoryIds = new Set<string>();
+        for (const [id, info] of lookups.categoryById) {
+          if (info.group_name === "Internal Master Category") {
+            internalCategoryIds.add(id);
+          }
+        }
+
         // Single-pass aggregation: filter, sum, and group without extra copies.
         let totalSpendingMilliunits = 0;
         let transactionCount = 0;
@@ -89,6 +97,7 @@ export function registerAnalysisTools(
             transaction.transfer_account_id != null
           )
             continue;
+          if (internalCategoryIds.has(transaction.category_id ?? "")) continue;
           if (accountIdSet && !accountIdSet.has(transaction.account_id))
             continue;
           if (
@@ -192,9 +201,7 @@ export function registerAnalysisTools(
         return jsonToolResult(result);
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to compute spending analysis.",
+          extractErrorMessage(error, "Failed to compute spending analysis."),
         );
       }
     },
