@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -323,6 +323,31 @@ describe("concurrency", () => {
     // All 10 entries should be present (no data loss from races)
     expect(result).toHaveLength(10);
   });
+
+  it("serializes concurrent operations across separate store instances", async () => {
+    const storeA = new UndoStore(dataDir);
+    const storeB = new UndoStore(dataDir);
+    const entries = Array.from({ length: 12 }, (_, i) =>
+      entry(`budget-1::cross-${i}::e`),
+    );
+
+    await Promise.all(
+      entries.map((undoEntry, index) =>
+        (index % 2 === 0 ? storeA : storeB).appendEntries(BUDGET_ID, [
+          undoEntry,
+        ]),
+      ),
+    );
+
+    const result = await store.listEntries(BUDGET_ID, {
+      sessionScope: "all",
+      sessionId: "any",
+      limit: 100,
+      includeUndone: true,
+    });
+
+    expect(result).toHaveLength(12);
+  });
 });
 
 describe("error handling", () => {
@@ -337,20 +362,29 @@ describe("error handling", () => {
     expect(result).toEqual([]);
   });
 
-  it("throws for corrupt JSON in history file", async () => {
+  it("recovers from corrupt JSON by quarantining the file", async () => {
     const { mkdir } = await import("node:fs/promises");
     const historyDir = join(dataDir, "history");
     await mkdir(historyDir, { recursive: true });
     const filePath = join(historyDir, `${encodeURIComponent(BUDGET_ID)}.json`);
     await writeFile(filePath, "not valid json{{{");
 
-    await expect(
-      store.listEntries(BUDGET_ID, {
-        sessionScope: "all",
-        sessionId: "any",
-        limit: 100,
-        includeUndone: true,
-      }),
-    ).rejects.toThrow();
+    const result = await store.listEntries(BUDGET_ID, {
+      sessionScope: "all",
+      sessionId: "any",
+      limit: 100,
+      includeUndone: true,
+    });
+
+    expect(result).toEqual([]);
+
+    const files = await readdir(historyDir);
+    expect(files).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          new RegExp(`^${encodeURIComponent(BUDGET_ID)}\\.json\\.corrupt-`),
+        ),
+      ]),
+    );
   });
 });

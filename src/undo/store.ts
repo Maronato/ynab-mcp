@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import type { UndoEntry, UndoHistoryFile, UndoSessionScope } from "./types.js";
 
@@ -7,6 +8,9 @@ const DEFAULT_HISTORY: UndoHistoryFile = {
   entries: [],
   id_mappings: {},
 };
+const LOCK_RETRY_MS = 25;
+const LOCK_TIMEOUT_MS = 5_000;
+const LOCK_STALE_MS = 30_000;
 
 interface ListHistoryOptions {
   sessionScope: UndoSessionScope;
@@ -163,7 +167,13 @@ export class UndoStore {
             : {},
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      const nodeError = error as NodeJS.ErrnoException;
+      if (nodeError.code === "ENOENT") {
+        return { ...DEFAULT_HISTORY };
+      }
+
+      if (error instanceof SyntaxError) {
+        await this.quarantineCorruptHistoryFile(filePath);
         return { ...DEFAULT_HISTORY };
       }
 
@@ -206,6 +216,70 @@ export class UndoStore {
     return join(this.historyDirectory, `${encodeURIComponent(budgetId)}.json`);
   }
 
+  private getBudgetLockPath(budgetId: string): string {
+    return join(this.historyDirectory, `${encodeURIComponent(budgetId)}.lock`);
+  }
+
+  private async quarantineCorruptHistoryFile(filePath: string): Promise<void> {
+    const corruptPath = `${filePath}.corrupt-${process.pid}-${Date.now()}`;
+
+    try {
+      await rename(filePath, corruptPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  private async acquireBudgetFileLock(
+    budgetId: string,
+  ): Promise<() => Promise<void>> {
+    await this.ensureHistoryDirectory();
+    const lockPath = this.getBudgetLockPath(budgetId);
+    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+
+    while (true) {
+      try {
+        await mkdir(lockPath);
+        return async () => {
+          await rm(lockPath, { recursive: true, force: true });
+        };
+      } catch (error) {
+        const nodeError = error as NodeJS.ErrnoException;
+        if (nodeError.code !== "EEXIST") {
+          throw error;
+        }
+
+        if (await this.isBudgetLockStale(lockPath)) {
+          await rm(lockPath, { recursive: true, force: true });
+          continue;
+        }
+
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `Timed out waiting for undo history lock for budget "${budgetId}".`,
+          );
+        }
+
+        await sleep(LOCK_RETRY_MS);
+      }
+    }
+  }
+
+  private async isBudgetLockStale(lockPath: string): Promise<boolean> {
+    try {
+      const lockStats = await stat(lockPath);
+      return Date.now() - lockStats.mtimeMs > LOCK_STALE_MS;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return true;
+      }
+
+      throw error;
+    }
+  }
+
   private async withBudgetLock<T>(
     budgetId: string,
     callback: () => Promise<T>,
@@ -223,10 +297,15 @@ export class UndoStore {
     );
 
     await previous;
+    let releaseFileLock: (() => Promise<void>) | undefined;
 
     try {
+      // Combine a per-process queue with an on-disk lock so separate MCP
+      // server processes do not race on the same history file.
+      releaseFileLock = await this.acquireBudgetFileLock(budgetId);
       return await callback();
     } finally {
+      await releaseFileLock?.();
       releaseLock?.();
       if (this.budgetLocks.get(budgetId) === current) {
         this.budgetLocks.delete(budgetId);

@@ -79,52 +79,75 @@ export class UndoEngine {
     entryIds: string[],
     force: boolean,
   ): Promise<UndoResult> {
-    const groupedByBudget = new Map<string, string[]>();
+    const groupedByBudget = new Map<
+      string,
+      Array<{ entryId: string; index: number }>
+    >();
+    const indexedResults: Array<{
+      index: number;
+      result: UndoExecutionResult;
+    }> = [];
 
-    for (const entryId of entryIds) {
+    for (const [index, entryId] of entryIds.entries()) {
       const budgetId = this.extractBudgetId(entryId);
       if (!budgetId) {
+        indexedResults.push({
+          index,
+          result: {
+            entry_id: entryId,
+            status: "error",
+            message:
+              "Invalid undo entry ID. Expected format '<budget_id>::<timestamp>::<suffix>'.",
+          },
+        });
         continue;
       }
 
       const existing = groupedByBudget.get(budgetId) ?? [];
-      existing.push(entryId);
+      existing.push({ entryId, index });
       groupedByBudget.set(budgetId, existing);
     }
 
-    const results: UndoExecutionResult[] = [];
-
-    for (const [budgetId, groupedEntryIds] of groupedByBudget.entries()) {
+    for (const [budgetId, groupedEntries] of groupedByBudget.entries()) {
       const entries = await this.store.getEntriesByIds(
         budgetId,
-        groupedEntryIds,
+        groupedEntries.map(({ entryId }) => entryId),
       );
       const successfullyUndone: string[] = [];
 
-      for (let index = 0; index < groupedEntryIds.length; index += 1) {
-        const entryId = groupedEntryIds[index];
+      for (let index = 0; index < groupedEntries.length; index += 1) {
+        const { entryId, index: originalIndex } = groupedEntries[index];
         const entry = entries[index];
 
         if (!entry) {
-          results.push({
-            entry_id: entryId,
-            status: "error",
-            message: "Undo entry not found.",
+          indexedResults.push({
+            index: originalIndex,
+            result: {
+              entry_id: entryId,
+              status: "error",
+              message: "Undo entry not found.",
+            },
           });
           continue;
         }
 
         if (entry.status !== "active") {
-          results.push({
-            entry_id: entry.id,
-            status: "skipped",
-            message: "Undo entry is already undone.",
+          indexedResults.push({
+            index: originalIndex,
+            result: {
+              entry_id: entry.id,
+              status: "skipped",
+              message: "Undo entry is already undone.",
+            },
           });
           continue;
         }
 
         const execution = await this.undoSingleEntry(entry, force);
-        results.push(execution);
+        indexedResults.push({
+          index: originalIndex,
+          result: execution,
+        });
 
         if (execution.status === "undone") {
           successfullyUndone.push(entry.id);
@@ -135,6 +158,10 @@ export class UndoEngine {
         await this.store.markEntriesUndone(budgetId, successfullyUndone);
       }
     }
+
+    const results = indexedResults
+      .sort((left, right) => left.index - right.index)
+      .map(({ result }) => result);
 
     const summary = {
       undone: results.filter((result) => result.status === "undone").length,
@@ -151,12 +178,20 @@ export class UndoEngine {
   }
 
   private extractBudgetId(entryId: string): string | null {
-    const separatorIndex = entryId.indexOf("::");
-    if (separatorIndex < 0) {
+    const firstSeparatorIndex = entryId.indexOf("::");
+    if (firstSeparatorIndex <= 0) {
       return null;
     }
 
-    return entryId.slice(0, separatorIndex);
+    const secondSeparatorIndex = entryId.indexOf("::", firstSeparatorIndex + 2);
+    if (
+      secondSeparatorIndex <= firstSeparatorIndex + 2 ||
+      secondSeparatorIndex + 2 >= entryId.length
+    ) {
+      return null;
+    }
+
+    return entryId.slice(0, firstSeparatorIndex);
   }
 
   private async undoSingleEntry(

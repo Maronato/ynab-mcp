@@ -87,11 +87,16 @@ describe("listHistory", () => {
 });
 
 describe("undoOperations — entry resolution", () => {
-  it("skips entry IDs that cannot be parsed (no :: separator)", async () => {
+  it("returns an error for entry IDs that cannot be parsed", async () => {
     const result = await engine.undoOperations(["invalid-id"], false);
 
-    expect(result.results).toHaveLength(0);
-    expect(result.summary.errors).toBe(0);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]).toMatchObject({
+      entry_id: "invalid-id",
+      status: "error",
+    });
+    expect(result.results[0].message).toContain("Invalid undo entry ID");
+    expect(result.summary.errors).toBe(1);
   });
 
   it("returns error status for entries not found in store", async () => {
