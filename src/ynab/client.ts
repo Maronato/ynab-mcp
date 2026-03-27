@@ -531,15 +531,20 @@ export class YnabClient {
     transactionId: string,
   ): Promise<ynab.TransactionDetail | null> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
-
-    // Ensure the cache is fresh (delta refresh if stale/TTL-expired)
-    await this.ensureTransactionsCovered(resolvedBudgetId);
-
     const cache = this.getBudgetCache(resolvedBudgetId);
-    const cached = cache.transactions.byId.get(transactionId);
+    const txCache = cache.transactions;
+
+    // Delta refresh only — never trigger a full re-fetch for a single-ID
+    // lookup. ensureTransactionsCovered(budgetId) with no sinceDate would
+    // compare coveredSinceDate <= "", which is false for any populated
+    // cache, causing an unnecessary full re-fetch of ALL transactions.
+    if (txCache.serverKnowledge != null && this.needsRefresh(txCache)) {
+      await this.refreshTransactions(resolvedBudgetId);
+    }
+
+    const cached = txCache.byId.get(transactionId);
     if (cached) return cached;
 
-    // Fallback to API for transactions outside the cached date range
     try {
       const response = await this.api.transactions.getTransactionById(
         resolvedBudgetId,

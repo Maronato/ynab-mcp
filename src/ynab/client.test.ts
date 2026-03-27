@@ -1577,4 +1577,66 @@ describe("getTransactionById freshness", () => {
     expect(result?.id).toBe("t-old");
     expect(mockApi.transactions.getTransactionById).toHaveBeenCalled();
   });
+
+  it("does not trigger a full re-fetch for a single-ID lookup", async () => {
+    // Populate cache with a date-bounded search
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [tx({ id: "t-march", date: "2024-03-15" })],
+        server_knowledge: 5,
+      },
+    });
+    await client.searchTransactions("b", { since_date: "2024-03-01" });
+
+    mockApi.transactions.getTransactions.mockClear();
+
+    // Per-ID endpoint works fine
+    mockApi.transactions.getTransactionById.mockResolvedValueOnce({
+      data: { transaction: tx({ id: "t-old", date: "2024-01-01" }) },
+    });
+
+    const result = await client.getTransactionById("b", "t-old");
+
+    // Must use the per-ID endpoint, NOT the bulk getTransactions endpoint.
+    // Before the fix, ensureTransactionsCovered(budgetId) with no sinceDate
+    // would see coveredSinceDate ("2024-03-01") <= "" as false and trigger
+    // a full re-fetch through getTransactions.
+    expect(mockApi.transactions.getTransactions).not.toHaveBeenCalled();
+    expect(mockApi.transactions.getTransactionById).toHaveBeenCalledWith(
+      "b",
+      "t-old",
+    );
+    expect(result?.id).toBe("t-old");
+  });
+
+  it("survives a failing bulk endpoint during single-ID lookup", async () => {
+    // Populate cache with a date-bounded search
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [tx({ id: "t-march", date: "2024-03-15" })],
+        server_knowledge: 5,
+      },
+    });
+    await client.searchTransactions("b", { since_date: "2024-03-01" });
+
+    // Bulk endpoint fails (rate limit, timeout, etc.)
+    mockApi.transactions.getTransactions.mockRejectedValue(
+      new Error("Rate limit exceeded"),
+    );
+
+    // Per-ID endpoint works fine
+    mockApi.transactions.getTransactionById.mockResolvedValueOnce({
+      data: { transaction: tx({ id: "t-deleted", date: "2024-01-01" }) },
+    });
+
+    // Before the fix, this would throw "Rate limit exceeded" because
+    // getTransactionById called ensureTransactionsCovered() which triggered
+    // fullFetchTransactions() through the bulk endpoint. This is the exact
+    // failure path that caused "undo delete" to always fail: the undo engine's
+    // getCurrentState calls getTransactionById for the deleted transaction,
+    // which triggered the unnecessary full re-fetch.
+    const result = await client.getTransactionById("b", "t-deleted");
+
+    expect(result?.id).toBe("t-deleted");
+  });
 });
