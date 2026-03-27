@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { extractErrorMessage } from "../ynab/errors.js";
 import { formatCurrency } from "../ynab/format.js";
 
 const budgetIdSchema = z.object({
@@ -38,7 +39,7 @@ export function registerBudgetTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error ? error.message : "Failed to list budgets.",
+          extractErrorMessage(error, "Failed to list budgets."),
         );
       }
     },
@@ -98,9 +99,7 @@ export function registerBudgetTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to get budget summary.",
+          extractErrorMessage(error, "Failed to get budget summary."),
         );
       }
     },
@@ -131,9 +130,7 @@ export function registerBudgetTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to sync budget data.",
+          extractErrorMessage(error, "Failed to sync budget data."),
         );
       }
     },

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { extractErrorMessage } from "../ynab/errors.js";
 
 const listUndoHistorySchema = z.object({
   budget_id: z.string().optional(),
@@ -68,9 +69,7 @@ export function registerUndoTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to list undo history.",
+          extractErrorMessage(error, "Failed to list undo history."),
         );
       }
     },
@@ -100,7 +99,7 @@ export function registerUndoTools(
         return jsonToolResult(result);
       } catch (error) {
         return errorToolResult(
-          error instanceof Error ? error.message : "Failed to undo operations.",
+          extractErrorMessage(error, "Failed to undo operations."),
         );
       }
     },

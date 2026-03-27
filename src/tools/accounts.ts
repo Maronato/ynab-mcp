@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { extractErrorMessage } from "../ynab/errors.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
 const getAccountsSchema = z.object({
@@ -67,7 +68,7 @@ export function registerAccountTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error ? error.message : "Failed to get accounts.",
+          extractErrorMessage(error, "Failed to get accounts."),
         );
       }
     },

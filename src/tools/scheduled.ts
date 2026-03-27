@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { extractErrorMessage } from "../ynab/errors.js";
 import {
   formatCurrency,
   formatScheduledTransactionForOutput,
@@ -153,9 +154,7 @@ export function registerScheduledTransactionTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to get scheduled transactions.",
+          extractErrorMessage(error, "Failed to get scheduled transactions."),
         );
       }
     },
@@ -237,7 +236,7 @@ export function registerScheduledTransactionTools(
             results.push({
               input_index: inputIndex,
               status: "error",
-              message: getErrorMessage(
+              message: extractErrorMessage(
                 error,
                 "Failed to create scheduled transaction.",
               ),
@@ -264,9 +263,10 @@ export function registerScheduledTransactionTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to create scheduled transactions.",
+          extractErrorMessage(
+            error,
+            "Failed to create scheduled transactions.",
+          ),
         );
       }
     },
@@ -359,7 +359,7 @@ export function registerScheduledTransactionTools(
             results.push({
               scheduled_transaction_id: transaction.scheduled_transaction_id,
               status: "error",
-              message: getErrorMessage(
+              message: extractErrorMessage(
                 error,
                 "Failed to update scheduled transaction.",
               ),
@@ -384,9 +384,10 @@ export function registerScheduledTransactionTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to update scheduled transactions.",
+          extractErrorMessage(
+            error,
+            "Failed to update scheduled transactions.",
+          ),
         );
       }
     },
@@ -481,7 +482,7 @@ export function registerScheduledTransactionTools(
             results.push({
               scheduled_transaction_id: scheduledTransactionId,
               status: "error",
-              message: getErrorMessage(
+              message: extractErrorMessage(
                 error,
                 "Failed to delete scheduled transaction.",
               ),
@@ -506,15 +507,12 @@ export function registerScheduledTransactionTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to delete scheduled transactions.",
+          extractErrorMessage(
+            error,
+            "Failed to delete scheduled transactions.",
+          ),
         );
       }
     },
   );
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
 }

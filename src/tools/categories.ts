@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { extractErrorMessage } from "../ynab/errors.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
 const listCategoriesSchema = z.object({
@@ -97,7 +98,7 @@ export function registerCategoryTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error ? error.message : "Failed to list categories.",
+          extractErrorMessage(error, "Failed to list categories."),
         );
       }
     },
@@ -193,7 +194,7 @@ export function registerCategoryTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error ? error.message : "Failed to get targets.",
+          extractErrorMessage(error, "Failed to get targets."),
         );
       }
     },
@@ -289,9 +290,7 @@ export function registerCategoryTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to get monthly budget.",
+          extractErrorMessage(error, "Failed to get monthly budget."),
         );
       }
     },
@@ -381,8 +380,7 @@ export function registerCategoryTools(
                 result: {
                   assignment,
                   status: "error",
-                  message:
-                    error instanceof Error ? error.message : "Update failed.",
+                  message: extractErrorMessage(error, "Update failed."),
                 } as Record<string, unknown>,
                 undoEntry: null,
               };
@@ -411,9 +409,7 @@ export function registerCategoryTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to set category budgets.",
+          extractErrorMessage(error, "Failed to set category budgets."),
         );
       }
     },

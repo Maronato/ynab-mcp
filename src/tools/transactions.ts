@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { extractErrorMessage } from "../ynab/errors.js";
 import {
   formatCurrency,
   formatTransactionForOutput,
@@ -206,9 +207,7 @@ export function registerTransactionTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to search transactions.",
+          extractErrorMessage(error, "Failed to search transactions."),
         );
       }
     },
@@ -290,9 +289,7 @@ export function registerTransactionTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to create transactions.",
+          extractErrorMessage(error, "Failed to create transactions."),
         );
       }
     },
@@ -437,9 +434,7 @@ export function registerTransactionTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to update transactions.",
+          extractErrorMessage(error, "Failed to update transactions."),
         );
       }
     },
@@ -534,7 +529,10 @@ export function registerTransactionTools(
             results.push({
               transaction_id: transactionId,
               status: "error",
-              message: getErrorMessage(error, "Failed to delete transaction."),
+              message: extractErrorMessage(
+                error,
+                "Failed to delete transaction.",
+              ),
             });
           }
         }
@@ -560,15 +558,9 @@ export function registerTransactionTools(
         });
       } catch (error) {
         return errorToolResult(
-          error instanceof Error
-            ? error.message
-            : "Failed to delete transactions.",
+          extractErrorMessage(error, "Failed to delete transactions."),
         );
       }
     },
   );
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
 }
