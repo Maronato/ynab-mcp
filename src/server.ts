@@ -15,13 +15,16 @@ export interface CreateServerOptions {
   dataDirectory: string;
   endpointUrl?: string;
   version?: string;
+  readOnly?: boolean;
 }
 
 export function createYnabMcpServer(options: CreateServerOptions): {
   server: McpServer;
   context: AppContext;
 } {
-  const ynabClient = new YnabClient(options.accessToken, options.endpointUrl);
+  const ynabClient = new YnabClient(options.accessToken, options.endpointUrl, {
+    readOnly: options.readOnly,
+  });
   const undoStore = new UndoStore(options.dataDirectory);
   const undoEngine = new UndoEngine(ynabClient, undoStore);
 

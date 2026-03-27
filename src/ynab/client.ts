@@ -65,8 +65,24 @@ export class YnabClient {
 
   private resolvedLastUsedId: string | null = null;
 
-  constructor(accessToken: string, endpointUrl?: string) {
+  readonly readOnly: boolean;
+
+  constructor(
+    accessToken: string,
+    endpointUrl?: string,
+    options?: { readOnly?: boolean },
+  ) {
     this.api = new ynab.API(accessToken, endpointUrl);
+    this.readOnly = options?.readOnly ?? false;
+  }
+
+  private assertWriteAllowed(): void {
+    if (this.readOnly) {
+      throw new Error(
+        "Write operations are disabled (read-only mode). " +
+          "Set YNAB_READ_ONLY=false to enable writes.",
+      );
+    }
   }
 
   resolveBudgetId(budgetId?: string): string {
@@ -459,6 +475,7 @@ export class YnabClient {
     budgetId: string | undefined,
     transactions: CreateTransactionInput[],
   ): Promise<ynab.TransactionDetail[]> {
+    this.assertWriteAllowed();
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
     const payload: ynab.PostTransactionsWrapper = {
       transactions: transactions.map((transaction) => ({
@@ -497,6 +514,7 @@ export class YnabClient {
     budgetId: string | undefined,
     transactions: UpdateTransactionInput[],
   ): Promise<ynab.TransactionDetail[]> {
+    this.assertWriteAllowed();
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
     // The SDK's SaveTransactionWithIdOrImportId type doesn't allow null for
     // payee_id/category_id/memo, but the YNAB API accepts null to clear fields.
@@ -550,6 +568,7 @@ export class YnabClient {
     budgetId: string | undefined,
     transactionId: string,
   ): Promise<ynab.TransactionDetail | null> {
+    this.assertWriteAllowed();
     try {
       const resolvedBudgetId = this.resolveBudgetId(budgetId);
       const response = await this.api.transactions.deleteTransaction(
@@ -586,6 +605,7 @@ export class YnabClient {
     budgetId: string | undefined,
     transaction: CreateScheduledTransactionInput,
   ): Promise<ynab.ScheduledTransactionDetail> {
+    this.assertWriteAllowed();
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
     const response =
       await this.api.scheduledTransactions.createScheduledTransaction(
@@ -623,6 +643,7 @@ export class YnabClient {
     transaction: UpdateScheduledTransactionInput,
     prefetchedExisting?: ynab.ScheduledTransactionDetail,
   ): Promise<ynab.ScheduledTransactionDetail> {
+    this.assertWriteAllowed();
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
     const existing =
       prefetchedExisting ??
@@ -686,6 +707,7 @@ export class YnabClient {
     budgetId: string | undefined,
     scheduledTransactionId: string,
   ): Promise<ynab.ScheduledTransactionDetail | null> {
+    this.assertWriteAllowed();
     try {
       const resolvedBudgetId = this.resolveBudgetId(budgetId);
       const response =
@@ -709,6 +731,7 @@ export class YnabClient {
     budgetId: string | undefined,
     assignment: CategoryBudgetAssignment,
   ): Promise<ynab.Category> {
+    this.assertWriteAllowed();
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
     const response = await this.api.categories.updateMonthCategory(
       resolvedBudgetId,

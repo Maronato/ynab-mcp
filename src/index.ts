@@ -23,11 +23,26 @@ async function main(): Promise<void> {
     process.env.YNAB_MCP_DATA_DIR ?? join(homedir(), ".ynab-mcp");
   await mkdir(dataDirectory, { recursive: true });
 
+  const readOnlyEnv = process.env.YNAB_READ_ONLY;
+  let readOnly = false;
+  if (readOnlyEnv !== undefined) {
+    if (readOnlyEnv === "true" || readOnlyEnv === "1") {
+      readOnly = true;
+    } else if (readOnlyEnv === "false" || readOnlyEnv === "0") {
+      readOnly = false;
+    } else {
+      throw new Error(
+        `Invalid YNAB_READ_ONLY value "${readOnlyEnv}". Use "true", "false", "1", or "0".`,
+      );
+    }
+  }
+
   const { server } = createYnabMcpServer({
     accessToken,
     endpointUrl,
     dataDirectory,
     version,
+    readOnly,
   });
 
   const transport = new StdioServerTransport();
