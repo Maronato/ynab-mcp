@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { YnabClient } from "./client.js";
 
@@ -1038,5 +1038,492 @@ describe("getCategories with month parameter", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].id).toBe("g1");
+  });
+});
+
+// ===== Issue 3: Read-only mode =====
+
+describe("read-only mode", () => {
+  let readOnlyClient: YnabClient;
+
+  beforeEach(() => {
+    readOnlyClient = new YnabClient("fake-token", undefined, {
+      readOnly: true,
+    });
+    (readOnlyClient as unknown as { api: unknown }).api = createMockApi();
+  });
+
+  it("throws on createTransactions", async () => {
+    await expect(
+      readOnlyClient.createTransactions("b", [
+        { account_id: "a", date: "2024-01-01", amount: 10 },
+      ]),
+    ).rejects.toThrow("Write operations are disabled (read-only mode)");
+  });
+
+  it("throws on updateTransactions", async () => {
+    await expect(
+      readOnlyClient.updateTransactions("b", [
+        { transaction_id: "t1", amount: 20 },
+      ]),
+    ).rejects.toThrow("read-only mode");
+  });
+
+  it("throws on deleteTransaction", async () => {
+    await expect(readOnlyClient.deleteTransaction("b", "t1")).rejects.toThrow(
+      "read-only mode",
+    );
+  });
+
+  it("throws on createScheduledTransaction", async () => {
+    await expect(
+      readOnlyClient.createScheduledTransaction("b", {
+        account_id: "a",
+        date: "2024-01-01",
+        amount: 10,
+        frequency: "monthly",
+      }),
+    ).rejects.toThrow("read-only mode");
+  });
+
+  it("throws on updateScheduledTransaction", async () => {
+    await expect(
+      readOnlyClient.updateScheduledTransaction("b", {
+        scheduled_transaction_id: "st1",
+        amount: 20,
+      }),
+    ).rejects.toThrow("read-only mode");
+  });
+
+  it("throws on deleteScheduledTransaction", async () => {
+    await expect(
+      readOnlyClient.deleteScheduledTransaction("b", "st1"),
+    ).rejects.toThrow("read-only mode");
+  });
+
+  it("throws on setCategoryBudget", async () => {
+    await expect(
+      readOnlyClient.setCategoryBudget("b", {
+        category_id: "c1",
+        month: "2024-01-01",
+        budgeted: 100,
+      }),
+    ).rejects.toThrow("read-only mode");
+  });
+
+  it("includes guidance to set YNAB_READ_ONLY=false", async () => {
+    await expect(
+      readOnlyClient.createTransactions("b", [
+        { account_id: "a", date: "2024-01-01", amount: 10 },
+      ]),
+    ).rejects.toThrow("YNAB_READ_ONLY=false");
+  });
+
+  it("allows read operations when read-only is enabled", async () => {
+    const roMockApi = createMockApi();
+    (readOnlyClient as unknown as { api: unknown }).api = roMockApi;
+    roMockApi.accounts.getAccounts.mockResolvedValue({
+      data: {
+        accounts: [account({ id: "a1" })],
+        server_knowledge: 1,
+      },
+    });
+
+    const result = await readOnlyClient.getAccounts("b", {
+      includeClosed: true,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("a1");
+  });
+
+  it("defaults to readOnly false when option not provided", () => {
+    expect(client.readOnly).toBe(false);
+  });
+});
+
+// ===== Issue 4: Transaction cache window expansion =====
+
+describe("transaction cache window expansion", () => {
+  it("full-fetches when requesting older data than cached window", async () => {
+    // First search: covers from March 1
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [tx({ id: "t-march", date: "2024-03-15" })],
+        server_knowledge: 10,
+      },
+    });
+
+    await client.searchTransactions("b", { since_date: "2024-03-01" });
+
+    // Second search: requests from January — older than cached window
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [
+          tx({ id: "t-jan", date: "2024-01-10" }),
+          tx({ id: "t-march-2", date: "2024-03-20" }),
+        ],
+        server_knowledge: 15,
+      },
+    });
+
+    const result = await client.searchTransactions("b", {
+      since_date: "2024-01-01",
+      limit: 500,
+    });
+
+    // Should have done a full re-fetch (2 API calls total)
+    expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(2);
+
+    // Second call should NOT pass server_knowledge (full fetch, not delta)
+    expect(mockApi.transactions.getTransactions).toHaveBeenNthCalledWith(
+      2,
+      "b",
+      "2024-01-01",
+    );
+
+    // Old cached data (t-march) should be gone, replaced by new fetch
+    expect(result.find((t) => t.id === "t-march")).toBeUndefined();
+    expect(result.find((t) => t.id === "t-jan")).toBeDefined();
+    expect(result.find((t) => t.id === "t-march-2")).toBeDefined();
+  });
+
+  it("uses delta refresh when requesting same or newer date", async () => {
+    // First search populates cache
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [tx({ id: "t1", date: "2024-01-15" })],
+        server_knowledge: 10,
+      },
+    });
+
+    await client.searchTransactions("b", { since_date: "2024-01-01" });
+
+    // syncBudgetData marks stale AND calls refreshTransactions — provide delta response
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [tx({ id: "t2", date: "2024-02-01" })],
+        server_knowledge: 15,
+      },
+    });
+    await client.syncBudgetData("b");
+
+    // The sync's refresh call should have used delta (passed SK=10)
+    expect(mockApi.transactions.getTransactions).toHaveBeenNthCalledWith(
+      2,
+      "b",
+      "2024-01-01",
+      undefined,
+      10,
+    );
+
+    // Both old and new transactions should be present (delta merge)
+    const result = await client.searchTransactions("b", {
+      since_date: "2024-01-01",
+      limit: 500,
+    });
+    expect(result.find((t) => t.id === "t1")).toBeDefined();
+    expect(result.find((t) => t.id === "t2")).toBeDefined();
+  });
+});
+
+// ===== Issue 5: Optimistic updates =====
+
+describe("optimistic cache updates", () => {
+  beforeEach(() => {
+    // Populate the transaction cache first
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: {
+        transactions: [tx({ id: "existing", date: "2024-01-15" })],
+        server_knowledge: 10,
+      },
+    });
+  });
+
+  it("created transaction appears in cache without extra API call", async () => {
+    // Populate cache
+    await client.searchTransactions("b", { since_date: "2024-01-01" });
+
+    const createdTx = tx({
+      id: "new-tx",
+      date: "2024-01-20",
+      amount: -30000,
+    });
+    mockApi.transactions.createTransactions.mockResolvedValue({
+      data: { transactions: [createdTx] },
+    });
+
+    await client.createTransactions("b", [
+      { account_id: "acc-1", date: "2024-01-20", amount: -30 },
+    ]);
+
+    // Reset the getTransactions mock call count
+    mockApi.transactions.getTransactions.mockClear();
+
+    const results = await client.searchTransactions("b", {
+      since_date: "2024-01-01",
+      limit: 500,
+    });
+
+    // No additional API call for getTransactions
+    expect(mockApi.transactions.getTransactions).not.toHaveBeenCalled();
+    // New transaction is in results
+    expect(results.find((t) => t.id === "new-tx")).toBeDefined();
+    // Existing transaction still present
+    expect(results.find((t) => t.id === "existing")).toBeDefined();
+  });
+
+  it("does not add transaction with date outside cached window", async () => {
+    // Populate cache with since_date "2024-03-01"
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [tx({ id: "march-tx", date: "2024-03-15" })],
+        server_knowledge: 10,
+      },
+    });
+    await client.searchTransactions("b", { since_date: "2024-03-01" });
+
+    const oldTx = tx({ id: "old-tx", date: "2024-01-05" });
+    mockApi.transactions.createTransactions.mockResolvedValue({
+      data: { transactions: [oldTx] },
+    });
+
+    await client.createTransactions("b", [
+      { account_id: "acc-1", date: "2024-01-05", amount: -10 },
+    ]);
+
+    mockApi.transactions.getTransactions.mockClear();
+
+    const results = await client.searchTransactions("b", {
+      since_date: "2024-03-01",
+      limit: 500,
+    });
+
+    // Old-dated transaction should NOT be in the cache
+    expect(results.find((t) => t.id === "old-tx")).toBeUndefined();
+    expect(results.find((t) => t.id === "march-tx")).toBeDefined();
+  });
+
+  it("deleted transaction disappears from cache immediately", async () => {
+    // Populate cache
+    await client.searchTransactions("b", { since_date: "2024-01-01" });
+
+    mockApi.transactions.deleteTransaction.mockResolvedValue({
+      data: { transaction: tx({ id: "existing", deleted: true }) },
+    });
+
+    await client.deleteTransaction("b", "existing");
+
+    mockApi.transactions.getTransactions.mockClear();
+
+    const results = await client.searchTransactions("b", {
+      since_date: "2024-01-01",
+      limit: 500,
+    });
+
+    expect(mockApi.transactions.getTransactions).not.toHaveBeenCalled();
+    expect(results.find((t) => t.id === "existing")).toBeUndefined();
+  });
+
+  it("marks accounts and categories stale after delete (not payees)", async () => {
+    // Warm up all caches
+    mockApi.accounts.getAccounts.mockResolvedValue({
+      data: { accounts: [], server_knowledge: 1 },
+    });
+    mockApi.categories.getCategories.mockResolvedValue({
+      data: { category_groups: [], server_knowledge: 1 },
+    });
+    mockApi.payees.getPayees.mockResolvedValue({
+      data: { payees: [], server_knowledge: 1 },
+    });
+
+    await client.getAccounts("b");
+    await client.getCategories("b");
+    await client.getPayees("b");
+
+    // Populate tx cache
+    await client.searchTransactions("b", { since_date: "2024-01-01" });
+
+    mockApi.transactions.deleteTransaction.mockResolvedValue({
+      data: { transaction: tx({ id: "existing", deleted: true }) },
+    });
+
+    await client.deleteTransaction("b", "existing");
+
+    // Clear mocks to track new calls
+    mockApi.accounts.getAccounts.mockClear();
+    mockApi.categories.getCategories.mockClear();
+    mockApi.payees.getPayees.mockClear();
+
+    mockApi.accounts.getAccounts.mockResolvedValue({
+      data: { accounts: [], server_knowledge: 2 },
+    });
+    mockApi.categories.getCategories.mockResolvedValue({
+      data: { category_groups: [], server_knowledge: 2 },
+    });
+
+    // These should trigger API calls (stale)
+    await client.getAccounts("b");
+    await client.getCategories("b");
+    // This should NOT trigger an API call (not stale)
+    await client.getPayees("b");
+
+    expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(1);
+    expect(mockApi.categories.getCategories).toHaveBeenCalledTimes(1);
+    expect(mockApi.payees.getPayees).not.toHaveBeenCalled();
+  });
+});
+
+// ===== Issue 7: TTL expiration =====
+
+describe("TTL expiration", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("serves from cache within TTL window", async () => {
+    mockApi.accounts.getAccounts.mockResolvedValue({
+      data: { accounts: [account({ id: "a1" })], server_knowledge: 10 },
+    });
+
+    await client.getAccounts("b");
+
+    // Advance 59 minutes (within 1 hour TTL)
+    vi.advanceTimersByTime(59 * 60 * 1000);
+
+    await client.getAccounts("b");
+
+    // Only one API call — second served from cache
+    expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(1);
+  });
+
+  it("triggers delta refresh after TTL expires", async () => {
+    mockApi.accounts.getAccounts
+      .mockResolvedValueOnce({
+        data: { accounts: [account({ id: "a1" })], server_knowledge: 10 },
+      })
+      .mockResolvedValueOnce({
+        data: { accounts: [], server_knowledge: 11 },
+      });
+
+    await client.getAccounts("b");
+
+    // Advance past 1 hour TTL
+    vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+
+    await client.getAccounts("b");
+
+    // Two API calls — second was a delta refresh
+    expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(2);
+    // Delta refresh passes server_knowledge
+    expect(mockApi.accounts.getAccounts).toHaveBeenNthCalledWith(2, "b", 10);
+  });
+
+  it("transaction cache triggers delta refresh after TTL", async () => {
+    mockApi.transactions.getTransactions
+      .mockResolvedValueOnce({
+        data: {
+          transactions: [tx({ id: "t1", date: "2024-01-15" })],
+          server_knowledge: 5,
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          transactions: [tx({ id: "t2", date: "2024-01-20" })],
+          server_knowledge: 8,
+        },
+      });
+
+    await client.searchTransactions("b", { since_date: "2024-01-01" });
+
+    // Advance past TTL
+    vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+
+    const result = await client.searchTransactions("b", {
+      since_date: "2024-01-01",
+      limit: 500,
+    });
+
+    expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(2);
+    // Delta: passes sinceDate, undefined, and server_knowledge
+    expect(mockApi.transactions.getTransactions).toHaveBeenNthCalledWith(
+      2,
+      "b",
+      "2024-01-01",
+      undefined,
+      5,
+    );
+
+    // Both original and delta transactions present
+    expect(result.find((t) => t.id === "t1")).toBeDefined();
+    expect(result.find((t) => t.id === "t2")).toBeDefined();
+  });
+});
+
+// ===== Issue 1: getTransactionById freshness =====
+
+describe("getTransactionById freshness", () => {
+  it("checks cache freshness before returning cached transaction", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T12:00:00Z"));
+
+    try {
+      // Populate cache
+      mockApi.transactions.getTransactions.mockResolvedValueOnce({
+        data: {
+          transactions: [tx({ id: "t1", date: "2024-01-15", memo: "Old" })],
+          server_knowledge: 5,
+        },
+      });
+
+      await client.searchTransactions("b", { since_date: "2024-01-01" });
+
+      // Advance past TTL to make cache stale
+      vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+
+      // Delta refresh returns updated transaction
+      mockApi.transactions.getTransactions.mockResolvedValueOnce({
+        data: {
+          transactions: [tx({ id: "t1", date: "2024-01-15", memo: "Updated" })],
+          server_knowledge: 8,
+        },
+      });
+
+      const result = await client.getTransactionById("b", "t1");
+
+      // Should have refreshed (2 getTransactions calls)
+      expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(2);
+      expect(result?.memo).toBe("Updated");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to API for transactions outside cached window", async () => {
+    // Populate cache with March data
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [tx({ id: "t-march", date: "2024-03-15" })],
+        server_knowledge: 5,
+      },
+    });
+
+    await client.searchTransactions("b", { since_date: "2024-03-01" });
+
+    // Look up a transaction not in cache
+    mockApi.transactions.getTransactionById.mockResolvedValue({
+      data: {
+        transaction: tx({ id: "t-old", date: "2024-01-01", memo: "Ancient" }),
+      },
+    });
+
+    const result = await client.getTransactionById("b", "t-old");
+
+    expect(result?.id).toBe("t-old");
+    expect(mockApi.transactions.getTransactionById).toHaveBeenCalled();
   });
 });
