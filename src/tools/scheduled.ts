@@ -42,6 +42,18 @@ const getScheduledTransactionsSchema = z.object({
   budget_id: z.string().optional(),
   account_id: z.string().optional(),
   category_id: z.string().optional(),
+  due_after: z
+    .string()
+    .optional()
+    .describe(
+      "Only include transactions with next due date on or after this date (YYYY-MM-DD).",
+    ),
+  due_before: z
+    .string()
+    .optional()
+    .describe(
+      "Only include transactions with next due date on or before this date (YYYY-MM-DD).",
+    ),
 });
 
 const createScheduledTransactionsSchema = z.object({
@@ -121,6 +133,8 @@ export function registerScheduledTransactionTools(
           context.ynabClient.getScheduledTransactions(input.budget_id, {
             accountId: input.account_id,
             categoryId: input.category_id,
+            dueAfter: input.due_after,
+            dueBefore: input.due_before,
           }),
           context.ynabClient.getNameLookup(input.budget_id),
           context.ynabClient.getBudgetSettings(input.budget_id),

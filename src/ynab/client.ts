@@ -29,11 +29,18 @@ const KNOWN_SUB_APIS = new Set([
   "months",
 ]);
 
+interface SyncDeltas {
+  added: number;
+  updated: number;
+  deleted: number;
+}
+
 interface CollectionCache<T> {
   byId: Map<string, T>;
   serverKnowledge?: number;
   stale: boolean;
   lastRefreshedAt: number;
+  lastDeltas?: SyncDeltas;
 }
 
 interface TransactionCache {
@@ -42,6 +49,7 @@ interface TransactionCache {
   serverKnowledge?: number;
   stale: boolean;
   lastRefreshedAt: number;
+  lastDeltas?: SyncDeltas;
 }
 
 type StaleableCollectionKey =
@@ -76,6 +84,8 @@ interface GetCategoriesOptions {
 interface GetScheduledTransactionsOptions {
   accountId?: string;
   categoryId?: string;
+  dueAfter?: string;
+  dueBefore?: string;
 }
 
 const DEFAULT_ACCOUNT_OPTIONS: Required<
@@ -348,8 +358,7 @@ export class YnabClient {
       .map((group) => ({
         ...group,
         categories: group.categories
-          .map((category) => categoriesById.get(category.id))
-          .filter((category): category is ynab.Category => Boolean(category))
+          .map((category) => categoriesById.get(category.id) ?? category)
           .filter((category) => !category.deleted)
           .filter((category) =>
             mergedOptions.includeHidden ? true : !category.hidden,
@@ -391,6 +400,14 @@ export class YnabClient {
           return false;
         }
 
+        if (options.dueAfter && transaction.date_next < options.dueAfter) {
+          return false;
+        }
+
+        if (options.dueBefore && transaction.date_next > options.dueBefore) {
+          return false;
+        }
+
         return true;
       })
       .sort((left, right) => left.date_next.localeCompare(right.date_next));
@@ -415,11 +432,18 @@ export class YnabClient {
     const accountById = new Map(
       accounts.map((account) => [account.id, account.name]),
     );
-    const categoryById = new Map<string, string>();
+    const categoryById = new Map<
+      string,
+      { name: string; group_id: string; group_name: string }
+    >();
 
     for (const group of categories) {
       for (const category of group.categories) {
-        categoryById.set(category.id, category.name);
+        categoryById.set(category.id, {
+          name: category.name,
+          group_id: group.id,
+          group_name: group.name,
+        });
       }
     }
 
@@ -519,11 +543,11 @@ export class YnabClient {
         return false;
       }
 
-      if (query.cleared !== undefined) {
-        const isCleared = transaction.cleared !== "uncleared";
-        if (isCleared !== query.cleared) {
-          return false;
-        }
+      if (
+        query.cleared !== undefined &&
+        transaction.cleared !== query.cleared
+      ) {
+        return false;
       }
 
       if (
@@ -989,29 +1013,20 @@ export class YnabClient {
    * Called by the `sync_budget_data` tool.
    */
   async syncBudgetData(budgetId?: string): Promise<{
-    accounts: number;
-    categories: number;
-    payees: number;
-    scheduledTransactions: number;
-    transactions: number;
+    accounts: { added: number; updated: number; deleted: number };
+    categories: { added: number; updated: number; deleted: number };
+    payees: { added: number; updated: number; deleted: number };
+    scheduled_transactions: { added: number; updated: number; deleted: number };
+    transactions: { added: number; updated: number; deleted: number };
   }> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const cache = this.getBudgetCache(resolvedBudgetId);
 
-    // Mark all stale to force delta refresh
     cache.accounts.stale = true;
     cache.categories.stale = true;
     cache.payees.stale = true;
     cache.scheduledTransactions.stale = true;
     cache.transactions.stale = true;
-
-    const beforeCounts = {
-      accounts: cache.accounts.byId.size,
-      categories: cache.categories.byId.size,
-      payees: cache.payees.byId.size,
-      scheduledTransactions: cache.scheduledTransactions.byId.size,
-      transactions: cache.transactions.byId.size,
-    };
 
     await Promise.all([
       this.refreshAccounts(resolvedBudgetId),
@@ -1026,14 +1041,13 @@ export class YnabClient {
           ),
     ]);
 
+    const zero = { added: 0, updated: 0, deleted: 0 };
     return {
-      accounts: cache.accounts.byId.size - beforeCounts.accounts,
-      categories: cache.categories.byId.size - beforeCounts.categories,
-      payees: cache.payees.byId.size - beforeCounts.payees,
-      scheduledTransactions:
-        cache.scheduledTransactions.byId.size -
-        beforeCounts.scheduledTransactions,
-      transactions: cache.transactions.byId.size - beforeCounts.transactions,
+      accounts: cache.accounts.lastDeltas ?? zero,
+      categories: cache.categories.lastDeltas ?? zero,
+      payees: cache.payees.lastDeltas ?? zero,
+      scheduled_transactions: cache.scheduledTransactions.lastDeltas ?? zero,
+      transactions: cache.transactions.lastDeltas ?? zero,
     };
   }
 
@@ -1052,16 +1066,22 @@ export class YnabClient {
       cache.accounts.serverKnowledge,
     );
 
+    const deltas = { added: 0, updated: 0, deleted: 0 };
     cache.accounts.serverKnowledge = response.data.server_knowledge;
     for (const account of response.data.accounts) {
       if (account.deleted) {
-        cache.accounts.byId.delete(account.id);
+        if (cache.accounts.byId.delete(account.id)) deltas.deleted++;
+      } else if (cache.accounts.byId.has(account.id)) {
+        cache.accounts.byId.set(account.id, account);
+        deltas.updated++;
       } else {
         cache.accounts.byId.set(account.id, account);
+        deltas.added++;
       }
     }
     cache.accounts.stale = false;
     cache.accounts.lastRefreshedAt = Date.now();
+    cache.accounts.lastDeltas = deltas;
 
     return [...cache.accounts.byId.values()];
   }
@@ -1079,6 +1099,7 @@ export class YnabClient {
       cache.categories.serverKnowledge,
     );
 
+    const deltas = { added: 0, updated: 0, deleted: 0 };
     cache.categories.serverKnowledge = response.data.server_knowledge;
     for (const group of response.data.category_groups) {
       if (group.deleted) {
@@ -1089,14 +1110,19 @@ export class YnabClient {
 
       for (const category of group.categories) {
         if (category.deleted) {
-          cache.categories.byId.delete(category.id);
+          if (cache.categories.byId.delete(category.id)) deltas.deleted++;
+        } else if (cache.categories.byId.has(category.id)) {
+          cache.categories.byId.set(category.id, category);
+          deltas.updated++;
         } else {
           cache.categories.byId.set(category.id, category);
+          deltas.added++;
         }
       }
     }
     cache.categories.stale = false;
     cache.categories.lastRefreshedAt = Date.now();
+    cache.categories.lastDeltas = deltas;
 
     return [...cache.categoryGroups.values()];
   }
@@ -1112,16 +1138,22 @@ export class YnabClient {
       cache.payees.serverKnowledge,
     );
 
+    const deltas = { added: 0, updated: 0, deleted: 0 };
     cache.payees.serverKnowledge = response.data.server_knowledge;
     for (const payee of response.data.payees) {
       if (payee.deleted) {
-        cache.payees.byId.delete(payee.id);
+        if (cache.payees.byId.delete(payee.id)) deltas.deleted++;
+      } else if (cache.payees.byId.has(payee.id)) {
+        cache.payees.byId.set(payee.id, payee);
+        deltas.updated++;
       } else {
         cache.payees.byId.set(payee.id, payee);
+        deltas.added++;
       }
     }
     cache.payees.stale = false;
     cache.payees.lastRefreshedAt = Date.now();
+    cache.payees.lastDeltas = deltas;
 
     return [...cache.payees.byId.values()];
   }
@@ -1140,17 +1172,24 @@ export class YnabClient {
         cache.scheduledTransactions.serverKnowledge,
       );
 
+    const deltas = { added: 0, updated: 0, deleted: 0 };
     cache.scheduledTransactions.serverKnowledge =
       response.data.server_knowledge;
     for (const transaction of response.data.scheduled_transactions) {
       if (transaction.deleted) {
-        cache.scheduledTransactions.byId.delete(transaction.id);
+        if (cache.scheduledTransactions.byId.delete(transaction.id))
+          deltas.deleted++;
+      } else if (cache.scheduledTransactions.byId.has(transaction.id)) {
+        cache.scheduledTransactions.byId.set(transaction.id, transaction);
+        deltas.updated++;
       } else {
         cache.scheduledTransactions.byId.set(transaction.id, transaction);
+        deltas.added++;
       }
     }
     cache.scheduledTransactions.stale = false;
     cache.scheduledTransactions.lastRefreshedAt = Date.now();
+    cache.scheduledTransactions.lastDeltas = deltas;
 
     return [...cache.scheduledTransactions.byId.values()];
   }
@@ -1223,16 +1262,22 @@ export class YnabClient {
       txCache.serverKnowledge,
     );
 
+    const deltas = { added: 0, updated: 0, deleted: 0 };
     for (const tx of response.data.transactions) {
       if (tx.deleted) {
-        txCache.byId.delete(tx.id);
+        if (txCache.byId.delete(tx.id)) deltas.deleted++;
+      } else if (txCache.byId.has(tx.id)) {
+        txCache.byId.set(tx.id, tx);
+        deltas.updated++;
       } else {
         txCache.byId.set(tx.id, tx);
+        deltas.added++;
       }
     }
     txCache.serverKnowledge = response.data.server_knowledge;
     txCache.stale = false;
     txCache.lastRefreshedAt = Date.now();
+    txCache.lastDeltas = deltas;
   }
 
   // ---------------------------------------------------------------------------

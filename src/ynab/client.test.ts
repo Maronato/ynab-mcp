@@ -385,20 +385,30 @@ describe("searchTransactions — filtering", () => {
     expect(result.find((t) => t.id === "t3")).toBeUndefined();
   });
 
-  it("filters by cleared: true (not uncleared)", async () => {
+  it("filters by cleared: 'cleared'", async () => {
     const result = await client.searchTransactions("b", {
-      cleared: true,
+      cleared: "cleared",
     });
-    expect(result.every((t) => t.cleared !== "uncleared")).toBe(true);
+    expect(result.every((t) => t.cleared === "cleared")).toBe(true);
     expect(result.find((t) => t.id === "t2")).toBeUndefined();
+    expect(result.find((t) => t.id === "t3")).toBeUndefined();
   });
 
-  it("filters by cleared: false (uncleared)", async () => {
+  it("filters by cleared: 'uncleared'", async () => {
     const result = await client.searchTransactions("b", {
-      cleared: false,
+      cleared: "uncleared",
     });
     expect(result.every((t) => t.cleared === "uncleared")).toBe(true);
     expect(result).toHaveLength(1);
+  });
+
+  it("filters by cleared: 'reconciled'", async () => {
+    const result = await client.searchTransactions("b", {
+      cleared: "reconciled",
+    });
+    expect(result.every((t) => t.cleared === "reconciled")).toBe(true);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("t3");
   });
 
   it("filters by approved", async () => {
@@ -445,14 +455,12 @@ describe("searchTransactions — filtering", () => {
 
     const result = await client.searchTransactions("b", {
       account_id: "acc-1",
-      cleared: true,
+      cleared: "cleared",
     });
-    // acc-1 + cleared (not "uncleared"): t1, t3
-    expect(result).toHaveLength(2);
+    // acc-1 + cleared="cleared": only t1
+    expect(result).toHaveLength(1);
     expect(
-      result.every(
-        (t) => t.account_id === "acc-1" && t.cleared !== "uncleared",
-      ),
+      result.every((t) => t.account_id === "acc-1" && t.cleared === "cleared"),
     ).toBe(true);
   });
 });
@@ -698,6 +706,82 @@ describe("delta-aware caching", () => {
   });
 });
 
+describe("syncBudgetData — structured deltas", () => {
+  it("returns added/updated/deleted counts per collection", async () => {
+    mockApi.accounts.getAccounts
+      .mockResolvedValueOnce({
+        data: {
+          accounts: [account({ id: "a1" }), account({ id: "a2" })],
+          server_knowledge: 1,
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          accounts: [
+            account({ id: "a2", name: "Renamed" }),
+            account({ id: "a2", deleted: true }),
+            account({ id: "a3" }),
+          ],
+          server_knowledge: 2,
+        },
+      });
+
+    await client.getAccounts("b", { includeClosed: true });
+    const deltas = await client.syncBudgetData("b");
+
+    expect(deltas.accounts.added).toBe(1);
+    expect(deltas.accounts.deleted).toBe(1);
+  });
+
+  it("returns zeroes when nothing changed", async () => {
+    mockApi.accounts.getAccounts.mockResolvedValue({
+      data: { accounts: [], server_knowledge: 1 },
+    });
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: { transactions: [], server_knowledge: 1 },
+    });
+
+    const deltas = await client.syncBudgetData("b");
+
+    expect(deltas.accounts).toEqual({ added: 0, updated: 0, deleted: 0 });
+    expect(deltas.categories).toEqual({ added: 0, updated: 0, deleted: 0 });
+    expect(deltas.payees).toEqual({ added: 0, updated: 0, deleted: 0 });
+    expect(deltas.scheduled_transactions).toEqual({
+      added: 0,
+      updated: 0,
+      deleted: 0,
+    });
+    expect(deltas.transactions).toEqual({
+      added: 0,
+      updated: 0,
+      deleted: 0,
+    });
+  });
+
+  it("tracks updates for existing items returned in delta", async () => {
+    mockApi.accounts.getAccounts
+      .mockResolvedValueOnce({
+        data: {
+          accounts: [account({ id: "a1", name: "Before" })],
+          server_knowledge: 1,
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          accounts: [account({ id: "a1", name: "After" })],
+          server_knowledge: 2,
+        },
+      });
+
+    await client.getAccounts("b", { includeClosed: true });
+    const deltas = await client.syncBudgetData("b");
+
+    expect(deltas.accounts.updated).toBe(1);
+    expect(deltas.accounts.added).toBe(0);
+    expect(deltas.accounts.deleted).toBe(0);
+  });
+});
+
 describe("cache staleness after mutations", () => {
   it("marks payees and categories stale after creating transactions (preserves SK for delta)", async () => {
     // Warm up caches
@@ -864,6 +948,33 @@ describe("getScheduledTransactions — filtering", () => {
     const result = await client.getScheduledTransactions("b");
     const dates = result.map((s) => s.date_next);
     expect(dates).toEqual([...dates].sort());
+  });
+
+  it("filters by dueAfter", async () => {
+    const result = await client.getScheduledTransactions("b", {
+      dueAfter: "2024-02-01",
+    });
+    expect(result.every((s) => s.date_next >= "2024-02-01")).toBe(true);
+    expect(result.find((s) => s.id === "s2")).toBeUndefined();
+    expect(result).toHaveLength(2);
+  });
+
+  it("filters by dueBefore", async () => {
+    const result = await client.getScheduledTransactions("b", {
+      dueBefore: "2024-02-01",
+    });
+    expect(result.every((s) => s.date_next <= "2024-02-01")).toBe(true);
+    expect(result.find((s) => s.id === "s1")).toBeUndefined();
+    expect(result).toHaveLength(2);
+  });
+
+  it("combines dueAfter and dueBefore as a date range", async () => {
+    const result = await client.getScheduledTransactions("b", {
+      dueAfter: "2024-01-15",
+      dueBefore: "2024-02-15",
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("s3");
   });
 });
 
@@ -1073,6 +1184,42 @@ describe("getCategories with month parameter", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].id).toBe("g1");
+  });
+
+  it("retains categories missing from month data (regression: no silent truncation)", async () => {
+    mockApi.months.getPlanMonth.mockResolvedValue({
+      data: {
+        month: {
+          month: "2024-03-01",
+          income: 0,
+          budgeted: 0,
+          activity: 0,
+          to_be_budgeted: 0,
+          age_of_money: null,
+          categories: [
+            {
+              id: "c1",
+              name: "Groceries",
+              hidden: false,
+              deleted: false,
+              budgeted: 50000,
+              activity: -30000,
+              balance: 20000,
+            },
+          ],
+        },
+      },
+    });
+
+    const groups = await client.getCategories("b", {
+      month: "2024-03-01",
+      includeHidden: true,
+    });
+
+    const cats = groups[0].categories;
+    expect(cats).toHaveLength(2);
+    expect(cats.find((c) => c.id === "c1")?.budgeted).toBe(50000);
+    expect(cats.find((c) => c.id === "c2")).toBeDefined();
   });
 });
 

@@ -51,7 +51,12 @@ const searchQuerySchema = z.object({
     .optional()
     .describe("Exclude internal account transfers from results."),
   type: z.enum(["uncategorized", "unapproved"]).optional(),
-  cleared: z.boolean().optional(),
+  cleared: z
+    .enum(["cleared", "uncleared", "reconciled"])
+    .optional()
+    .describe(
+      "Filter by cleared status. 'cleared' = confirmed by bank, 'uncleared' = pending, 'reconciled' = verified and locked.",
+    ),
   approved: z.boolean().optional(),
   limit: z.number().int().min(1).max(500).optional(),
   sort: z.enum(["date_asc", "date_desc"]).optional(),
