@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 
 import { PayeeProfileAnalyzer } from "./analysis/payee-profiles.js";
 import type { AppContext } from "./context.js";
@@ -32,6 +33,10 @@ export function createYnabMcpServer(options: CreateServerOptions): {
     name: "ynab-mcp-server",
     version: options.version ?? "0.0.0",
   });
+
+  server.server.registerCapabilities({
+    sampling: {},
+  } as ServerCapabilities);
 
   const samplingClient = new SamplingClient(server.server);
   const payeeProfileAnalyzer = new PayeeProfileAnalyzer(ynabClient);
