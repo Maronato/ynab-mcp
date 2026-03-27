@@ -35,7 +35,7 @@ export function registerUndoTools(
     },
     async (input) => {
       try {
-        const resolvedBudgetId = context.ynabClient.resolveBudgetId(
+        const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(
           input.budget_id,
         );
         const entries = await context.undoEngine.listHistory(

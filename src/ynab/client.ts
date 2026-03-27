@@ -170,21 +170,19 @@ export class YnabClient {
       return this.resolvedLastUsedId;
     }
 
-    try {
-      const budgets = await this.listBudgets();
-      if (budgets.length === 0) {
-        return resolved;
-      }
-
-      const sorted = [...budgets].sort((a, b) =>
-        (b.last_modified_on ?? "").localeCompare(a.last_modified_on ?? ""),
+    const budgets = await this.listBudgets();
+    if (budgets.length === 0) {
+      throw new Error(
+        "No YNAB budgets available to resolve 'last-used'. Pass a specific budget_id.",
       );
-
-      this.resolvedLastUsedId = sorted[0].id;
-      return this.resolvedLastUsedId;
-    } catch {
-      return resolved;
     }
+
+    const sorted = [...budgets].sort((a, b) =>
+      (b.last_modified_on ?? "").localeCompare(a.last_modified_on ?? ""),
+    );
+
+    this.resolvedLastUsedId = sorted[0].id;
+    return this.resolvedLastUsedId;
   }
 
   async listBudgets(): Promise<ynab.PlanSummary[]> {
@@ -193,7 +191,7 @@ export class YnabClient {
   }
 
   async getBudgetSettings(budgetId?: string): Promise<ynab.PlanSettings> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const budgetCache = this.getBudgetCache(resolvedBudgetId);
 
     if (budgetCache.settings) {
@@ -206,7 +204,7 @@ export class YnabClient {
   }
 
   async getBudgetSummary(budgetId?: string) {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const [accounts, month] = await Promise.all([
       this.getAccounts(resolvedBudgetId, { includeClosed: true }),
       this.getMonthSummary(resolvedBudgetId, "current"),
@@ -267,7 +265,7 @@ export class YnabClient {
     budgetId?: string,
     options: GetAccountsOptions = {},
   ): Promise<ynab.Account[]> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const mergedOptions = {
       ...DEFAULT_ACCOUNT_OPTIONS,
       ...options,
@@ -302,7 +300,7 @@ export class YnabClient {
     budgetId?: string,
     options: GetCategoriesOptions = {},
   ): Promise<Array<ynab.CategoryGroupWithCategories>> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const mergedOptions = {
       ...DEFAULT_CATEGORIES_OPTIONS,
       ...options,
@@ -363,7 +361,7 @@ export class YnabClient {
     budgetId?: string,
     month = "current",
   ): Promise<ynab.MonthDetail> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const response = await this.api.months.getPlanMonth(
       resolvedBudgetId,
       month,
@@ -375,7 +373,7 @@ export class YnabClient {
     budgetId?: string,
     options: GetScheduledTransactionsOptions = {},
   ): Promise<ynab.ScheduledTransactionDetail[]> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const transactions =
       await this.refreshScheduledTransactions(resolvedBudgetId);
 
@@ -399,7 +397,7 @@ export class YnabClient {
   }
 
   async getPayees(budgetId?: string): Promise<ynab.Payee[]> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const payees = await this.refreshPayees(resolvedBudgetId);
     return payees
       .filter((payee) => !payee.deleted)
@@ -407,7 +405,7 @@ export class YnabClient {
   }
 
   async getNameLookup(budgetId?: string): Promise<NameLookup> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const [accounts, categories, payees] = await Promise.all([
       this.getAccounts(resolvedBudgetId, { includeClosed: true }),
       this.getCategories(resolvedBudgetId, { includeHidden: true }),
@@ -438,7 +436,7 @@ export class YnabClient {
     budgetId: string | undefined,
     query: TransactionSearchQuery,
   ): Promise<ynab.TransactionDetail[]> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     await this.ensureTransactionsCovered(resolvedBudgetId, query.since_date);
 
     const cache = this.getBudgetCache(resolvedBudgetId);
@@ -532,7 +530,7 @@ export class YnabClient {
     budgetId: string | undefined,
     transactionId: string,
   ): Promise<ynab.TransactionDetail | null> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
 
     // Ensure the cache is fresh (delta refresh if stale/TTL-expired)
     await this.ensureTransactionsCovered(resolvedBudgetId);
@@ -559,7 +557,7 @@ export class YnabClient {
     transactions: CreateTransactionInput[],
   ): Promise<ynab.TransactionDetail[]> {
     this.assertWriteAllowed();
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const payload: ynab.PostTransactionsWrapper = {
       transactions: transactions.map((transaction) => ({
         account_id: transaction.account_id,
@@ -600,7 +598,7 @@ export class YnabClient {
     transactions: UpdateTransactionInput[],
   ): Promise<ynab.TransactionDetail[]> {
     this.assertWriteAllowed();
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     // The SDK's SaveTransactionWithIdOrImportId type doesn't allow null for
     // payee_id/category_id/memo, but the YNAB API accepts null to clear fields.
     // We cast the elements to work around this SDK codegen limitation.
@@ -657,7 +655,7 @@ export class YnabClient {
   ): Promise<ynab.TransactionDetail | null> {
     this.assertWriteAllowed();
     try {
-      const resolvedBudgetId = this.resolveBudgetId(budgetId);
+      const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
       const response = await this.api.transactions.deleteTransaction(
         resolvedBudgetId,
         transactionId,
@@ -676,7 +674,7 @@ export class YnabClient {
     scheduledTransactionId: string,
   ): Promise<ynab.ScheduledTransactionDetail | null> {
     try {
-      const resolvedBudgetId = this.resolveBudgetId(budgetId);
+      const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
       const response =
         await this.api.scheduledTransactions.getScheduledTransactionById(
           resolvedBudgetId,
@@ -694,7 +692,7 @@ export class YnabClient {
     transaction: CreateScheduledTransactionInput,
   ): Promise<ynab.ScheduledTransactionDetail> {
     this.assertWriteAllowed();
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const response =
       await this.api.scheduledTransactions.createScheduledTransaction(
         resolvedBudgetId,
@@ -732,7 +730,7 @@ export class YnabClient {
     prefetchedExisting?: ynab.ScheduledTransactionDetail,
   ): Promise<ynab.ScheduledTransactionDetail> {
     this.assertWriteAllowed();
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const existing =
       prefetchedExisting ??
       (await this.getScheduledTransactionById(
@@ -797,7 +795,7 @@ export class YnabClient {
   ): Promise<ynab.ScheduledTransactionDetail | null> {
     this.assertWriteAllowed();
     try {
-      const resolvedBudgetId = this.resolveBudgetId(budgetId);
+      const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
       const response =
         await this.api.scheduledTransactions.deleteScheduledTransaction(
           resolvedBudgetId,
@@ -821,7 +819,7 @@ export class YnabClient {
     assignment: CategoryBudgetAssignment,
   ): Promise<ynab.Category> {
     this.assertWriteAllowed();
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const response = await this.api.categories.updateMonthCategory(
       resolvedBudgetId,
       assignment.month,
@@ -843,7 +841,7 @@ export class YnabClient {
     categoryId: string,
   ): Promise<ynab.Category | null> {
     try {
-      const resolvedBudgetId = this.resolveBudgetId(budgetId);
+      const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
       const response = await this.api.categories.getMonthCategoryById(
         resolvedBudgetId,
         month,
@@ -873,7 +871,7 @@ export class YnabClient {
     sinceDate: string,
     untilDate?: string,
   ): Promise<ynab.TransactionDetail[]> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     await this.ensureTransactionsCovered(resolvedBudgetId, sinceDate);
 
     const cache = this.getBudgetCache(resolvedBudgetId);
@@ -946,7 +944,7 @@ export class YnabClient {
     scheduledTransactions: number;
     transactions: number;
   }> {
-    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const cache = this.getBudgetCache(resolvedBudgetId);
 
     // Mark all stale to force delta refresh
@@ -971,7 +969,10 @@ export class YnabClient {
       this.refreshScheduledTransactions(resolvedBudgetId),
       cache.transactions.serverKnowledge != null
         ? this.refreshTransactions(resolvedBudgetId)
-        : Promise.resolve(),
+        : this.fullFetchTransactions(
+            resolvedBudgetId,
+            cache.transactions.coveredSinceDate,
+          ),
     ]);
 
     return {

@@ -209,16 +209,51 @@ describe("resolveRealBudgetId", () => {
     expect(mockApi.plans.getPlans).toHaveBeenCalledTimes(1);
   });
 
-  it("returns 'last-used' when no budgets exist", async () => {
+  it("throws when no budgets exist", async () => {
     mockApi.plans.getPlans.mockResolvedValue({ data: { plans: [] } });
-    const result = await client.resolveRealBudgetId();
-    expect(result).toBe("last-used");
+    await expect(client.resolveRealBudgetId()).rejects.toThrow(
+      "No YNAB budgets available to resolve 'last-used'. Pass a specific budget_id.",
+    );
   });
 
-  it("returns 'last-used' when API throws", async () => {
+  it("rethrows when budget lookup fails", async () => {
     mockApi.plans.getPlans.mockRejectedValue(new Error("Network error"));
-    const result = await client.resolveRealBudgetId();
-    expect(result).toBe("last-used");
+    await expect(client.resolveRealBudgetId()).rejects.toThrow("Network error");
+  });
+});
+
+describe("default budget resolution", () => {
+  it("resolves 'last-used' before fetching budget settings", async () => {
+    mockApi.plans.getPlans.mockResolvedValue({
+      data: {
+        plans: [
+          { id: "budget-a", last_modified_on: "2024-01-01" },
+          { id: "budget-b", last_modified_on: "2024-02-01" },
+        ],
+      },
+    });
+
+    await client.getBudgetSettings();
+
+    expect(mockApi.plans.getPlanSettingsById).toHaveBeenCalledWith("budget-b");
+  });
+
+  it("resolves 'last-used' before the first transaction search", async () => {
+    mockApi.plans.getPlans.mockResolvedValue({
+      data: {
+        plans: [{ id: "budget-b", last_modified_on: "2024-02-01" }],
+      },
+    });
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: { transactions: [], server_knowledge: 1 },
+    });
+
+    await client.searchTransactions(undefined, {});
+
+    expect(mockApi.transactions.getTransactions).toHaveBeenCalledWith(
+      "budget-b",
+      undefined,
+    );
   });
 });
 
@@ -1223,6 +1258,22 @@ describe("transaction cache window expansion", () => {
     });
     expect(result.find((t) => t.id === "t1")).toBeDefined();
     expect(result.find((t) => t.id === "t2")).toBeDefined();
+  });
+
+  it("fully fetches transactions during sync when the transaction cache is cold", async () => {
+    mockApi.transactions.getTransactions.mockResolvedValueOnce({
+      data: {
+        transactions: [tx({ id: "t-sync", date: "2024-01-15" })],
+        server_knowledge: 10,
+      },
+    });
+
+    await client.syncBudgetData("b");
+
+    expect(mockApi.transactions.getTransactions).toHaveBeenCalledWith(
+      "b",
+      undefined,
+    );
   });
 });
 
