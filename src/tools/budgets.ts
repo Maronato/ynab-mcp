@@ -105,4 +105,37 @@ export function registerBudgetTools(
       }
     },
   );
+
+  server.registerTool(
+    "sync_budget_data",
+    {
+      title: "Sync Budget Data",
+      description:
+        "Force a fresh sync of all cached budget data (accounts, categories, payees, transactions, scheduled transactions) " +
+        "from the YNAB API. Use this when you suspect external changes (e.g., bank imports, mobile app edits) " +
+        "that may not be reflected yet. Costs up to 5 API requests against the 200/hour rate limit.",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+      inputSchema: budgetIdSchema,
+    },
+    async ({ budget_id: budgetId }) => {
+      try {
+        const deltas = await context.ynabClient.syncBudgetData(budgetId);
+        return jsonToolResult({
+          budget_id: context.ynabClient.resolveBudgetId(budgetId),
+          message: "Budget data synced successfully.",
+          changes: deltas,
+        });
+      } catch (error) {
+        return errorToolResult(
+          error instanceof Error
+            ? error.message
+            : "Failed to sync budget data.",
+        );
+      }
+    },
+  );
 }

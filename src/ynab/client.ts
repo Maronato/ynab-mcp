@@ -15,16 +15,37 @@ import type {
   UpdateTransactionInput,
 } from "./types.js";
 
+/** Default TTL: 1 hour. External changes are picked up after this period. */
+const CACHE_TTL_MS = 60 * 60 * 1000;
+
 interface CollectionCache<T> {
   byId: Map<string, T>;
   serverKnowledge?: number;
+  stale: boolean;
+  lastRefreshedAt: number;
 }
+
+interface TransactionCache {
+  byId: Map<string, ynab.TransactionDetail>;
+  coveredSinceDate: string;
+  serverKnowledge?: number;
+  stale: boolean;
+  lastRefreshedAt: number;
+}
+
+type StaleableCollectionKey =
+  | "accounts"
+  | "categories"
+  | "payees"
+  | "scheduledTransactions"
+  | "transactions";
 
 interface BudgetCache {
   accounts: CollectionCache<ynab.Account>;
   categories: CollectionCache<ynab.Category>;
   payees: CollectionCache<ynab.Payee>;
   scheduledTransactions: CollectionCache<ynab.ScheduledTransactionDetail>;
+  transactions: TransactionCache;
   categoryGroups: Map<string, ynab.CategoryGroupWithCategories>;
   settings?: ynab.PlanSettings;
 }
@@ -440,10 +461,10 @@ export class YnabClient {
     query: TransactionSearchQuery,
   ): Promise<ynab.TransactionDetail[]> {
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
-    const source = await this.getTransactionsFromBestEndpoint(
-      resolvedBudgetId,
-      query,
-    );
+    await this.ensureTransactionsCovered(resolvedBudgetId, query.since_date);
+
+    const cache = this.getBudgetCache(resolvedBudgetId);
+    const source = [...cache.transactions.byId.values()];
 
     const minimum =
       query.amount_min !== undefined
@@ -455,59 +476,66 @@ export class YnabClient {
         : undefined;
     const memoContains = query.memo_contains?.toLowerCase();
 
-    const filtered = source
-      .filter((transaction) => !transaction.deleted)
-      .filter((transaction) => {
-        if (query.until_date && transaction.date > query.until_date) {
+    const filtered = source.filter((transaction) => {
+      if (query.since_date && transaction.date < query.since_date) {
+        return false;
+      }
+
+      if (query.until_date && transaction.date > query.until_date) {
+        return false;
+      }
+
+      if (query.account_id && transaction.account_id !== query.account_id) {
+        return false;
+      }
+
+      if (query.category_id && transaction.category_id !== query.category_id) {
+        return false;
+      }
+
+      if (query.payee_id && transaction.payee_id !== query.payee_id) {
+        return false;
+      }
+
+      if (minimum !== undefined && transaction.amount < minimum) {
+        return false;
+      }
+
+      if (maximum !== undefined && transaction.amount > maximum) {
+        return false;
+      }
+
+      if (
+        memoContains &&
+        !(transaction.memo ?? "").toLowerCase().includes(memoContains)
+      ) {
+        return false;
+      }
+
+      if (query.cleared !== undefined) {
+        const isCleared = transaction.cleared !== "uncleared";
+        if (isCleared !== query.cleared) {
           return false;
         }
+      }
 
-        if (query.account_id && transaction.account_id !== query.account_id) {
-          return false;
-        }
+      if (
+        query.approved !== undefined &&
+        transaction.approved !== query.approved
+      ) {
+        return false;
+      }
 
-        if (
-          query.category_id &&
-          transaction.category_id !== query.category_id
-        ) {
-          return false;
-        }
+      // Local equivalent of the server-side `type` filter
+      if (query.type === "uncategorized" && transaction.category_id != null) {
+        return false;
+      }
+      if (query.type === "unapproved" && transaction.approved) {
+        return false;
+      }
 
-        if (query.payee_id && transaction.payee_id !== query.payee_id) {
-          return false;
-        }
-
-        if (minimum !== undefined && transaction.amount < minimum) {
-          return false;
-        }
-
-        if (maximum !== undefined && transaction.amount > maximum) {
-          return false;
-        }
-
-        if (
-          memoContains &&
-          !(transaction.memo ?? "").toLowerCase().includes(memoContains)
-        ) {
-          return false;
-        }
-
-        if (query.cleared !== undefined) {
-          const isCleared = transaction.cleared !== "uncleared";
-          if (isCleared !== query.cleared) {
-            return false;
-          }
-        }
-
-        if (
-          query.approved !== undefined &&
-          transaction.approved !== query.approved
-        ) {
-          return false;
-        }
-
-        return true;
-      });
+      return true;
+    });
 
     const sortDirection = query.sort ?? "date_desc";
     const sorted = [...filtered].sort((left, right) => {
@@ -526,8 +554,15 @@ export class YnabClient {
     budgetId: string | undefined,
     transactionId: string,
   ): Promise<ynab.TransactionDetail | null> {
+    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+
+    // Check cache first (avoids an API call when cache is populated)
+    const cache = this.getBudgetCache(resolvedBudgetId);
+    const cached = cache.transactions.byId.get(transactionId);
+    if (cached) return cached;
+
+    // Fallback to API for transactions outside the cached date range
     try {
-      const resolvedBudgetId = this.resolveBudgetId(budgetId);
       const response = await this.api.transactions.getTransactionById(
         resolvedBudgetId,
         transactionId,
@@ -570,12 +605,14 @@ export class YnabClient {
       payload,
     );
 
-    this.invalidateBudgetCache(resolvedBudgetId, [
+    const created = response.data.transactions ?? [];
+    this.markCollectionsStale(resolvedBudgetId, [
       "accounts",
       "payees",
       "categories",
     ]);
-    return response.data.transactions ?? [];
+    this.optimisticUpdateTransactions(resolvedBudgetId, created);
+    return created;
   }
 
   async updateTransactions(
@@ -624,12 +661,14 @@ export class YnabClient {
       payload,
     );
 
-    this.invalidateBudgetCache(resolvedBudgetId, [
+    const updated = response.data.transactions ?? [];
+    this.markCollectionsStale(resolvedBudgetId, [
       "accounts",
       "payees",
       "categories",
     ]);
-    return response.data.transactions ?? [];
+    this.optimisticUpdateTransactions(resolvedBudgetId, updated);
+    return updated;
   }
 
   async deleteTransaction(
@@ -643,7 +682,8 @@ export class YnabClient {
         resolvedBudgetId,
         transactionId,
       );
-      this.invalidateBudgetCache(resolvedBudgetId, ["accounts", "categories"]);
+      this.markCollectionsStale(resolvedBudgetId, ["accounts", "categories"]);
+      this.optimisticRemoveTransaction(resolvedBudgetId, transactionId);
       return response.data.transaction;
     } catch (error) {
       if (isNotFoundError(error)) return null;
@@ -697,11 +737,11 @@ export class YnabClient {
         },
       );
 
-    this.invalidateBudgetCache(resolvedBudgetId, [
-      "scheduledTransactions",
-      "payees",
-      "categories",
-    ]);
+    this.markCollectionsStale(resolvedBudgetId, ["payees", "categories"]);
+    this.optimisticUpdateScheduledTransaction(
+      resolvedBudgetId,
+      response.data.scheduled_transaction,
+    );
 
     return response.data.scheduled_transaction;
   }
@@ -762,11 +802,11 @@ export class YnabClient {
         },
       );
 
-    this.invalidateBudgetCache(resolvedBudgetId, [
-      "scheduledTransactions",
-      "payees",
-      "categories",
-    ]);
+    this.markCollectionsStale(resolvedBudgetId, ["payees", "categories"]);
+    this.optimisticUpdateScheduledTransaction(
+      resolvedBudgetId,
+      response.data.scheduled_transaction,
+    );
 
     return response.data.scheduled_transaction;
   }
@@ -784,10 +824,11 @@ export class YnabClient {
           scheduledTransactionId,
         );
 
-      this.invalidateBudgetCache(resolvedBudgetId, [
-        "scheduledTransactions",
-        "categories",
-      ]);
+      this.markCollectionsStale(resolvedBudgetId, ["categories"]);
+      this.optimisticRemoveScheduledTransaction(
+        resolvedBudgetId,
+        scheduledTransactionId,
+      );
       return response.data.scheduled_transaction;
     } catch (error) {
       if (isNotFoundError(error)) return null;
@@ -812,7 +853,7 @@ export class YnabClient {
       },
     );
 
-    this.invalidateBudgetCache(resolvedBudgetId, ["categories"]);
+    this.markCollectionsStale(resolvedBudgetId, ["categories"]);
     return response.data.category;
   }
 
@@ -853,17 +894,16 @@ export class YnabClient {
     untilDate?: string,
   ): Promise<ynab.TransactionDetail[]> {
     const resolvedBudgetId = this.resolveBudgetId(budgetId);
-    const response = await this.api.transactions.getTransactions(
-      resolvedBudgetId,
-      sinceDate,
-    );
+    await this.ensureTransactionsCovered(resolvedBudgetId, sinceDate);
 
-    const transactions = response.data.transactions;
-    if (!untilDate) {
-      return transactions.filter((t) => !t.deleted);
-    }
+    const cache = this.getBudgetCache(resolvedBudgetId);
+    const transactions = [...cache.transactions.byId.values()];
 
-    return transactions.filter((t) => !t.deleted && t.date <= untilDate);
+    return transactions.filter((t) => {
+      if (t.date < sinceDate) return false;
+      if (untilDate && t.date > untilDate) return false;
+      return true;
+    });
   }
 
   private getBudgetCache(budgetId: string): BudgetCache {
@@ -873,10 +913,20 @@ export class YnabClient {
     }
 
     const cache: BudgetCache = {
-      accounts: { byId: new Map() },
-      categories: { byId: new Map() },
-      payees: { byId: new Map() },
-      scheduledTransactions: { byId: new Map() },
+      accounts: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
+      categories: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
+      payees: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
+      scheduledTransactions: {
+        byId: new Map(),
+        stale: false,
+        lastRefreshedAt: 0,
+      },
+      transactions: {
+        byId: new Map(),
+        coveredSinceDate: "",
+        stale: false,
+        lastRefreshedAt: 0,
+      },
       categoryGroups: new Map(),
       settings: undefined,
     };
@@ -885,30 +935,92 @@ export class YnabClient {
     return cache;
   }
 
-  private invalidateBudgetCache(
+  private markCollectionsStale(
     budgetId: string,
-    keys: Array<"accounts" | "categories" | "payees" | "scheduledTransactions">,
+    keys: StaleableCollectionKey[],
   ): void {
     const cache = this.getBudgetCache(budgetId);
-
     for (const key of keys) {
-      cache[key].byId.clear();
-      cache[key].serverKnowledge = undefined;
-      if (key === "categories") {
-        cache.categoryGroups.clear();
-      }
+      cache[key].stale = true;
     }
   }
 
+  private needsRefresh(cache: {
+    stale: boolean;
+    lastRefreshedAt: number;
+    serverKnowledge?: number;
+  }): boolean {
+    if (cache.serverKnowledge == null) return true;
+    if (cache.stale) return true;
+    return Date.now() - cache.lastRefreshedAt > CACHE_TTL_MS;
+  }
+
+  /**
+   * Force a delta refresh on all collections for a budget.
+   * Called by the `sync_budget_data` tool.
+   */
+  async syncBudgetData(budgetId?: string): Promise<{
+    accounts: number;
+    categories: number;
+    payees: number;
+    scheduledTransactions: number;
+    transactions: number;
+  }> {
+    const resolvedBudgetId = this.resolveBudgetId(budgetId);
+    const cache = this.getBudgetCache(resolvedBudgetId);
+
+    // Mark all stale to force delta refresh
+    cache.accounts.stale = true;
+    cache.categories.stale = true;
+    cache.payees.stale = true;
+    cache.scheduledTransactions.stale = true;
+    cache.transactions.stale = true;
+
+    const beforeCounts = {
+      accounts: cache.accounts.byId.size,
+      categories: cache.categories.byId.size,
+      payees: cache.payees.byId.size,
+      scheduledTransactions: cache.scheduledTransactions.byId.size,
+      transactions: cache.transactions.byId.size,
+    };
+
+    await Promise.all([
+      this.refreshAccounts(resolvedBudgetId),
+      this.refreshCategories(resolvedBudgetId),
+      this.refreshPayees(resolvedBudgetId),
+      this.refreshScheduledTransactions(resolvedBudgetId),
+      cache.transactions.serverKnowledge != null
+        ? this.refreshTransactions(resolvedBudgetId)
+        : Promise.resolve(),
+    ]);
+
+    return {
+      accounts: cache.accounts.byId.size - beforeCounts.accounts,
+      categories: cache.categories.byId.size - beforeCounts.categories,
+      payees: cache.payees.byId.size - beforeCounts.payees,
+      scheduledTransactions:
+        cache.scheduledTransactions.byId.size -
+        beforeCounts.scheduledTransactions,
+      transactions: cache.transactions.byId.size - beforeCounts.transactions,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Collection refresh methods (with freshness short-circuit)
+  // ---------------------------------------------------------------------------
+
   private async refreshAccounts(budgetId: string): Promise<ynab.Account[]> {
     const cache = this.getBudgetCache(budgetId);
+    if (!this.needsRefresh(cache.accounts)) {
+      return [...cache.accounts.byId.values()];
+    }
+
     const response = await this.api.accounts.getAccounts(
       budgetId,
       cache.accounts.serverKnowledge,
     );
 
     cache.accounts.serverKnowledge = response.data.server_knowledge;
-
     for (const account of response.data.accounts) {
       if (account.deleted) {
         cache.accounts.byId.delete(account.id);
@@ -916,6 +1028,8 @@ export class YnabClient {
         cache.accounts.byId.set(account.id, account);
       }
     }
+    cache.accounts.stale = false;
+    cache.accounts.lastRefreshedAt = Date.now();
 
     return [...cache.accounts.byId.values()];
   }
@@ -924,13 +1038,16 @@ export class YnabClient {
     budgetId: string,
   ): Promise<Array<ynab.CategoryGroupWithCategories>> {
     const cache = this.getBudgetCache(budgetId);
+    if (!this.needsRefresh(cache.categories)) {
+      return [...cache.categoryGroups.values()];
+    }
+
     const response = await this.api.categories.getCategories(
       budgetId,
       cache.categories.serverKnowledge,
     );
 
     cache.categories.serverKnowledge = response.data.server_knowledge;
-
     for (const group of response.data.category_groups) {
       if (group.deleted) {
         cache.categoryGroups.delete(group.id);
@@ -946,19 +1063,24 @@ export class YnabClient {
         }
       }
     }
+    cache.categories.stale = false;
+    cache.categories.lastRefreshedAt = Date.now();
 
     return [...cache.categoryGroups.values()];
   }
 
   private async refreshPayees(budgetId: string): Promise<ynab.Payee[]> {
     const cache = this.getBudgetCache(budgetId);
+    if (!this.needsRefresh(cache.payees)) {
+      return [...cache.payees.byId.values()];
+    }
+
     const response = await this.api.payees.getPayees(
       budgetId,
       cache.payees.serverKnowledge,
     );
 
     cache.payees.serverKnowledge = response.data.server_knowledge;
-
     for (const payee of response.data.payees) {
       if (payee.deleted) {
         cache.payees.byId.delete(payee.id);
@@ -966,6 +1088,8 @@ export class YnabClient {
         cache.payees.byId.set(payee.id, payee);
       }
     }
+    cache.payees.stale = false;
+    cache.payees.lastRefreshedAt = Date.now();
 
     return [...cache.payees.byId.values()];
   }
@@ -974,6 +1098,10 @@ export class YnabClient {
     budgetId: string,
   ): Promise<ynab.ScheduledTransactionDetail[]> {
     const cache = this.getBudgetCache(budgetId);
+    if (!this.needsRefresh(cache.scheduledTransactions)) {
+      return [...cache.scheduledTransactions.byId.values()];
+    }
+
     const response =
       await this.api.scheduledTransactions.getScheduledTransactions(
         budgetId,
@@ -982,7 +1110,6 @@ export class YnabClient {
 
     cache.scheduledTransactions.serverKnowledge =
       response.data.server_knowledge;
-
     for (const transaction of response.data.scheduled_transactions) {
       if (transaction.deleted) {
         cache.scheduledTransactions.byId.delete(transaction.id);
@@ -990,69 +1117,133 @@ export class YnabClient {
         cache.scheduledTransactions.byId.set(transaction.id, transaction);
       }
     }
+    cache.scheduledTransactions.stale = false;
+    cache.scheduledTransactions.lastRefreshedAt = Date.now();
 
     return [...cache.scheduledTransactions.byId.values()];
   }
 
-  private async getTransactionsFromBestEndpoint(
+  // ---------------------------------------------------------------------------
+  // Transaction cache: population, delta refresh, since_date anchoring
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Ensure the transaction cache covers at least `sinceDate`.
+   * - If uncovered or requesting older data: full fetch (resets SK).
+   * - If covered but stale/TTL-expired: delta refresh.
+   * - If covered and fresh: no-op.
+   */
+  private async ensureTransactionsCovered(
     budgetId: string,
-    query: TransactionSearchQuery,
-  ): Promise<ynab.TransactionDetail[]> {
-    if (query.account_id) {
-      const response = await this.api.transactions.getTransactionsByAccount(
-        budgetId,
-        query.account_id,
-        query.since_date,
-        query.type,
-      );
-      return response.data.transactions;
+    sinceDate?: string,
+  ): Promise<void> {
+    const cache = this.getBudgetCache(budgetId);
+    const txCache = cache.transactions;
+    const effectiveSinceDate = sinceDate ?? "";
+
+    const isCovered =
+      txCache.serverKnowledge != null &&
+      txCache.coveredSinceDate <= effectiveSinceDate;
+
+    if (!isCovered) {
+      // Full fetch: either first time, or requesting older data than cached
+      await this.fullFetchTransactions(budgetId, effectiveSinceDate);
+      return;
     }
 
-    if (query.category_id) {
-      const response = await this.api.transactions.getTransactionsByCategory(
-        budgetId,
-        query.category_id,
-        query.since_date,
-        query.type,
-      );
-
-      return this.normalizeHybridTransactions(response.data.transactions);
+    if (this.needsRefresh(txCache)) {
+      await this.refreshTransactions(budgetId);
     }
+  }
 
-    if (query.payee_id) {
-      const response = await this.api.transactions.getTransactionsByPayee(
-        budgetId,
-        query.payee_id,
-        query.since_date,
-        query.type,
-      );
+  /** Full fetch (no SK). Replaces the transaction cache entirely. */
+  private async fullFetchTransactions(
+    budgetId: string,
+    sinceDate: string,
+  ): Promise<void> {
+    const cache = this.getBudgetCache(budgetId);
+    const response = await this.api.transactions.getTransactions(
+      budgetId,
+      sinceDate || undefined,
+    );
 
-      return this.normalizeHybridTransactions(response.data.transactions);
+    cache.transactions.byId.clear();
+    for (const tx of response.data.transactions) {
+      if (!tx.deleted) {
+        cache.transactions.byId.set(tx.id, tx);
+      }
     }
+    cache.transactions.coveredSinceDate = sinceDate;
+    cache.transactions.serverKnowledge = response.data.server_knowledge;
+    cache.transactions.stale = false;
+    cache.transactions.lastRefreshedAt = Date.now();
+  }
+
+  /** Delta refresh using stored SK + coveredSinceDate. */
+  private async refreshTransactions(budgetId: string): Promise<void> {
+    const cache = this.getBudgetCache(budgetId);
+    const txCache = cache.transactions;
 
     const response = await this.api.transactions.getTransactions(
       budgetId,
-      query.since_date,
-      query.type,
+      txCache.coveredSinceDate || undefined,
+      undefined,
+      txCache.serverKnowledge,
     );
 
-    return response.data.transactions;
+    for (const tx of response.data.transactions) {
+      if (tx.deleted) {
+        txCache.byId.delete(tx.id);
+      } else {
+        txCache.byId.set(tx.id, tx);
+      }
+    }
+    txCache.serverKnowledge = response.data.server_knowledge;
+    txCache.stale = false;
+    txCache.lastRefreshedAt = Date.now();
   }
 
-  private normalizeHybridTransactions(
-    transactions: ynab.HybridTransaction[],
-  ): ynab.TransactionDetail[] {
-    // Parent hybrid transactions (type !== "subtransaction") are structurally
-    // identical to TransactionDetail at runtime, but the SDK types don't
-    // reflect this — HybridTransaction lacks the `subtransactions` array field.
-    return transactions
-      .filter((item) => item.type !== "subtransaction")
-      .map(
-        (item) =>
-          ({
-            ...item,
-            subtransactions: [],
-          }) as unknown as ynab.TransactionDetail,
-      );
+  // ---------------------------------------------------------------------------
+  // Optimistic local cache updates after our own mutations
+  // ---------------------------------------------------------------------------
+
+  private optimisticUpdateTransactions(
+    budgetId: string,
+    transactions: ynab.TransactionDetail[],
+  ): void {
+    const cache = this.getBudgetCache(budgetId);
+    const txCache = cache.transactions;
+    if (txCache.serverKnowledge == null) return; // cache not yet populated
+
+    for (const tx of transactions) {
+      if (tx.date >= txCache.coveredSinceDate) {
+        txCache.byId.set(tx.id, tx);
+      }
+    }
+  }
+
+  private optimisticRemoveTransaction(
+    budgetId: string,
+    transactionId: string,
+  ): void {
+    const cache = this.getBudgetCache(budgetId);
+    cache.transactions.byId.delete(transactionId);
+  }
+
+  private optimisticUpdateScheduledTransaction(
+    budgetId: string,
+    transaction: ynab.ScheduledTransactionDetail,
+  ): void {
+    const cache = this.getBudgetCache(budgetId);
+    if (cache.scheduledTransactions.serverKnowledge == null) return;
+    cache.scheduledTransactions.byId.set(transaction.id, transaction);
+  }
+
+  private optimisticRemoveScheduledTransaction(
+    budgetId: string,
+    scheduledTransactionId: string,
+  ): void {
+    const cache = this.getBudgetCache(budgetId);
+    cache.scheduledTransactions.byId.delete(scheduledTransactionId);
   }
 }

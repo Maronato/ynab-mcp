@@ -474,59 +474,99 @@ describe("searchTransactions — limit", () => {
   });
 });
 
-describe("endpoint routing (via searchTransactions)", () => {
-  it("uses getTransactionsByAccount when account_id is set", async () => {
-    mockApi.transactions.getTransactionsByAccount.mockResolvedValue({
-      data: { transactions: [] },
+describe("transaction cache local filtering", () => {
+  it("always uses getTransactions (general endpoint) to populate cache", async () => {
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: {
+        transactions: [
+          tx({
+            id: "t1",
+            account_id: "acc-1",
+            category_id: "cat-1",
+            payee_id: "payee-1",
+          }),
+          tx({
+            id: "t2",
+            account_id: "acc-2",
+            category_id: "cat-2",
+            payee_id: "payee-2",
+          }),
+        ],
+        server_knowledge: 1,
+      },
     });
 
     await client.searchTransactions("b", { account_id: "acc-1" });
 
-    expect(mockApi.transactions.getTransactionsByAccount).toHaveBeenCalled();
-    expect(mockApi.transactions.getTransactions).not.toHaveBeenCalled();
-  });
-
-  it("uses getTransactionsByCategory when category_id is set", async () => {
-    mockApi.transactions.getTransactionsByCategory.mockResolvedValue({
-      data: { transactions: [] },
-    });
-
-    await client.searchTransactions("b", { category_id: "cat-1" });
-
-    expect(mockApi.transactions.getTransactionsByCategory).toHaveBeenCalled();
-  });
-
-  it("uses getTransactionsByPayee when payee_id is set", async () => {
-    mockApi.transactions.getTransactionsByPayee.mockResolvedValue({
-      data: { transactions: [] },
-    });
-
-    await client.searchTransactions("b", { payee_id: "payee-1" });
-
-    expect(mockApi.transactions.getTransactionsByPayee).toHaveBeenCalled();
-  });
-
-  it("uses getTransactions when no specific filter is set", async () => {
-    await client.searchTransactions("b", {});
     expect(mockApi.transactions.getTransactions).toHaveBeenCalled();
+    expect(
+      mockApi.transactions.getTransactionsByAccount,
+    ).not.toHaveBeenCalled();
   });
 
-  it("account_id takes priority over category_id and payee_id", async () => {
-    mockApi.transactions.getTransactionsByAccount.mockResolvedValue({
-      data: { transactions: [] },
+  it("filters locally by account_id, category_id, payee_id from cache", async () => {
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: {
+        transactions: [
+          tx({
+            id: "t1",
+            account_id: "acc-1",
+            category_id: "cat-1",
+            payee_id: "payee-1",
+          }),
+          tx({
+            id: "t2",
+            account_id: "acc-2",
+            category_id: "cat-2",
+            payee_id: "payee-2",
+          }),
+        ],
+        server_knowledge: 1,
+      },
     });
 
-    await client.searchTransactions("b", {
+    const byAccount = await client.searchTransactions("b", {
       account_id: "acc-1",
-      category_id: "cat-1",
-      payee_id: "payee-1",
+      limit: 500,
+    });
+    expect(byAccount).toHaveLength(1);
+    expect(byAccount[0].id).toBe("t1");
+
+    // Second query uses cache (no new API call)
+    const byPayee = await client.searchTransactions("b", {
+      payee_id: "payee-2",
+      limit: 500,
+    });
+    expect(byPayee).toHaveLength(1);
+    expect(byPayee[0].id).toBe("t2");
+
+    // Only one API call was made (for the initial cache population)
+    expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters locally by type: uncategorized and unapproved", async () => {
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: {
+        transactions: [
+          tx({ id: "t1", category_id: null, approved: true }),
+          tx({ id: "t2", category_id: "cat-1", approved: false }),
+          tx({ id: "t3", category_id: "cat-2", approved: true }),
+        ],
+        server_knowledge: 1,
+      },
     });
 
-    expect(mockApi.transactions.getTransactionsByAccount).toHaveBeenCalled();
-    expect(
-      mockApi.transactions.getTransactionsByCategory,
-    ).not.toHaveBeenCalled();
-    expect(mockApi.transactions.getTransactionsByPayee).not.toHaveBeenCalled();
+    const uncategorized = await client.searchTransactions("b", {
+      type: "uncategorized",
+      limit: 500,
+    });
+    expect(uncategorized.map((t) => t.id)).toEqual(["t1"]);
+
+    const unapproved = await client.searchTransactions("b", {
+      type: "unapproved",
+      limit: 500,
+    });
+    expect(unapproved.map((t) => t.id)).toEqual(["t2"]);
   });
 });
 
@@ -541,13 +581,28 @@ describe("delta-aware caching", () => {
     expect(mockApi.accounts.getAccounts).toHaveBeenCalledWith("b", undefined);
   });
 
-  it("second call passes prior server_knowledge", async () => {
+  it("second call within TTL returns cached data without API call", async () => {
+    mockApi.accounts.getAccounts.mockResolvedValue({
+      data: { accounts: [account({ id: "a1" })], server_knowledge: 10 },
+    });
+
+    await client.getAccounts("b");
+    const result = await client.getAccounts("b");
+
+    // Only one API call — second was served from cache
+    expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(1);
+    expect(result.map((a) => a.id)).toContain("a1");
+  });
+
+  it("stale cache triggers delta refresh with prior server_knowledge", async () => {
     mockApi.accounts.getAccounts.mockResolvedValue({
       data: { accounts: [], server_knowledge: 10 },
     });
 
     await client.getAccounts("b");
-    await client.getAccounts("b");
+
+    // Force stale via syncBudgetData
+    await client.syncBudgetData("b");
 
     expect(mockApi.accounts.getAccounts).toHaveBeenNthCalledWith(2, "b", 10);
   });
@@ -574,6 +629,10 @@ describe("delta-aware caching", () => {
       });
 
     await client.getAccounts("b", { includeClosed: true });
+
+    // Force stale to trigger delta refresh on second call
+    await client.syncBudgetData("b");
+
     const result = await client.getAccounts("b", { includeClosed: true });
 
     const ids = result.map((a) => a.id);
@@ -604,8 +663,8 @@ describe("delta-aware caching", () => {
   });
 });
 
-describe("cache invalidation", () => {
-  it("clears payees and categories caches after creating transactions", async () => {
+describe("cache staleness after mutations", () => {
+  it("marks payees and categories stale after creating transactions (preserves SK for delta)", async () => {
     // Warm up caches
     mockApi.payees.getPayees.mockResolvedValue({
       data: { payees: [], server_knowledge: 5 },
@@ -617,7 +676,7 @@ describe("cache invalidation", () => {
     await client.getPayees("b");
     await client.getCategories("b");
 
-    // Create transaction triggers invalidation
+    // Create transaction triggers stale marking (not full invalidation)
     mockApi.transactions.createTransactions.mockResolvedValue({
       data: { transactions: [] },
     });
@@ -625,7 +684,7 @@ describe("cache invalidation", () => {
       { account_id: "a", date: "2024-01-01", amount: 10 },
     ]);
 
-    // Next call should pass undefined (cache cleared)
+    // Next call should pass SK=5 (preserved for delta refresh), not undefined
     mockApi.payees.getPayees.mockResolvedValue({
       data: { payees: [], server_knowledge: 6 },
     });
@@ -636,12 +695,8 @@ describe("cache invalidation", () => {
     await client.getPayees("b");
     await client.getCategories("b");
 
-    expect(mockApi.payees.getPayees).toHaveBeenNthCalledWith(2, "b", undefined);
-    expect(mockApi.categories.getCategories).toHaveBeenNthCalledWith(
-      2,
-      "b",
-      undefined,
-    );
+    expect(mockApi.payees.getPayees).toHaveBeenNthCalledWith(2, "b", 5);
+    expect(mockApi.categories.getCategories).toHaveBeenNthCalledWith(2, "b", 5);
   });
 });
 
