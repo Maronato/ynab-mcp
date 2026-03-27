@@ -12,7 +12,7 @@
     "build"
   ],
   "scripts": {
-    "build": "rm -rf build && tsc -p tsconfig.build.json",
+    "build": "rm -rf build && tsc -p tsconfig.build.json && cp src/methodology/*.md build/methodology/",
     "dev": "tsx watch src/index.ts",
     "start": "node build/index.js",
     "typecheck": "tsc --noEmit",
