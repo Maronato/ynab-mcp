@@ -4,6 +4,7 @@ import {
 } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { AppContext } from "../context.js";
+import { getKnowledgeTopics } from "../methodology/index.js";
 import { textResource } from "../shared/mcp.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
@@ -158,6 +159,31 @@ export function registerResources(
       });
     },
   );
+
+  registerKnowledgeResources(server);
+}
+
+function registerKnowledgeResources(server: McpServer): void {
+  for (const topic of getKnowledgeTopics()) {
+    server.registerResource(
+      `knowledge-${topic.name}`,
+      `ynab://knowledge/${topic.name}`,
+      {
+        title: topic.title,
+        description: topic.description,
+        mimeType: "text/markdown",
+      },
+      (uri) => ({
+        contents: [
+          {
+            uri: uri.toString(),
+            mimeType: "text/markdown",
+            text: topic.content,
+          },
+        ],
+      }),
+    );
+  }
 }
 
 async function getBudgetIdSuggestions(
