@@ -604,6 +604,74 @@ describe("undoOperations — error handling", () => {
       "Failed to apply undo operation.",
     );
   });
+
+  it("returns error status when resolveMappedId throws", async () => {
+    const entry = createMockUndoEntry({
+      session_id: engine.getSessionId(),
+    });
+    mockStore.getEntriesByIds.mockResolvedValue([entry]);
+    mockStore.resolveMappedId.mockRejectedValue(new Error("Store read failed"));
+
+    const result = await engine.undoOperations([entry.id], false);
+
+    expect(result.results[0].status).toBe("error");
+    expect(result.results[0].message).toContain("Store read failed");
+  });
+
+  it("returns error status when getCurrentState throws", async () => {
+    const entry = createMockUndoEntry({
+      session_id: engine.getSessionId(),
+    });
+    mockStore.getEntriesByIds.mockResolvedValue([entry]);
+    mockClient.getTransactionById.mockRejectedValue(
+      new Error("API unreachable"),
+    );
+
+    const result = await engine.undoOperations([entry.id], false);
+
+    expect(result.results[0].status).toBe("error");
+    expect(result.results[0].message).toContain("API unreachable");
+  });
+});
+
+describe("undoOperations — ID normalization after re-creation", () => {
+  it("does not conflict when entity ID changed via mapping", async () => {
+    const entry = createMockUndoEntry({
+      session_id: engine.getSessionId(),
+      undo_action: {
+        type: "update",
+        entity_type: "transaction",
+        entity_id: "tx-original",
+        expected_state: { id: "tx-original", amount: 5000 },
+        restore_state: {
+          id: "tx-original",
+          amount: 3000,
+          account_id: "acc-1",
+          date: "2024-01-01",
+        },
+      },
+    });
+    mockStore.getEntriesByIds.mockResolvedValue([entry]);
+    mockStore.resolveMappedId.mockResolvedValue("tx-remapped");
+    mockClient.getTransactionById.mockResolvedValue({
+      id: "tx-remapped",
+      amount: 5000,
+    });
+    mockClient.snapshotTransaction.mockReturnValue({
+      id: "tx-remapped",
+      amount: 5000,
+    });
+
+    const result = await engine.undoOperations([entry.id], false);
+
+    expect(result.results[0].status).toBe("undone");
+    expect(mockClient.updateTransactions).toHaveBeenCalledWith(
+      "budget-1",
+      expect.arrayContaining([
+        expect.objectContaining({ transaction_id: "tx-remapped" }),
+      ]),
+    );
+  });
 });
 
 describe("undoOperations — summary and markEntriesUndone", () => {

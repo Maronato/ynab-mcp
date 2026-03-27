@@ -201,24 +201,36 @@ export class UndoEngine {
     const fromDifferentSession = entry.session_id !== this.sessionId;
     const sessionPrefix = fromDifferentSession ? "[cross-session] " : "";
 
-    const resolvedEntityId = await this.store.resolveMappedId(
-      entry.budget_id,
-      entry.undo_action.entity_id,
-    );
-
-    const currentState = await this.getCurrentState(entry, resolvedEntityId);
-    const conflict = this.detectConflict(entry, currentState);
-
-    if (conflict && !force) {
-      return {
-        entry_id: entry.id,
-        status: "conflict",
-        message: `${sessionPrefix}${conflict.reason}`,
-        conflict,
-      };
-    }
-
     try {
+      const resolvedEntityId = await this.store.resolveMappedId(
+        entry.budget_id,
+        entry.undo_action.entity_id,
+      );
+
+      const currentState = await this.getCurrentState(entry, resolvedEntityId);
+
+      // When an entity was re-created with a new ID (after undoing a delete),
+      // the snapshot's `id` won't match the original in expected_state.
+      // Normalize so conflict detection compares content, not generated IDs.
+      if (
+        currentState &&
+        resolvedEntityId !== entry.undo_action.entity_id &&
+        "id" in currentState
+      ) {
+        currentState.id = entry.undo_action.entity_id;
+      }
+
+      const conflict = this.detectConflict(entry, currentState);
+
+      if (conflict && !force) {
+        return {
+          entry_id: entry.id,
+          status: "conflict",
+          message: `${sessionPrefix}${conflict.reason}`,
+          conflict,
+        };
+      }
+
       const message = await this.applyUndo(entry, resolvedEntityId);
       return {
         entry_id: entry.id,
