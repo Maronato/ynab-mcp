@@ -66,6 +66,44 @@ describe("create_scheduled_transactions", () => {
     expect(entries[0].undo_action.type).toBe("delete");
     expect(entries[0].undo_action.entity_type).toBe("scheduled_transaction");
   });
+
+  it("preserves successful creates when a later item fails", async () => {
+    const created = createMockScheduledTransaction({
+      id: "stx-new",
+      amount: -50000,
+    });
+    ctx.ynabClient.createScheduledTransaction
+      .mockResolvedValueOnce(created)
+      .mockRejectedValueOnce(new Error("API down"));
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.create_scheduled_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [
+          {
+            account_id: "acc-1",
+            date: "2024-01-01",
+            amount: -50,
+            frequency: "monthly",
+          },
+          {
+            account_id: "acc-1",
+            date: "2024-02-01",
+            amount: -60,
+            frequency: "monthly",
+          },
+        ],
+      }),
+    );
+
+    expect(result.created_count).toBe(1);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.undo_history_ids).toEqual(["u1"]);
+    expect(result.results[0].status).toBe("created");
+    expect(result.results[1].status).toBe("error");
+    expect(result.results[1].message).toContain("API down");
+  });
 });
 
 describe("update_scheduled_transactions", () => {
@@ -138,6 +176,37 @@ describe("update_scheduled_transactions", () => {
     expect(entries[0].undo_action.expected_state.date_first).toBeUndefined();
     expect(entries[0].undo_action.restore_state.date).toBe("2024-01-01");
   });
+
+  it("continues after an item update throws", async () => {
+    const before1 = createMockScheduledTransaction({ id: "stx-1" });
+    const before2 = createMockScheduledTransaction({ id: "stx-2" });
+    const after1 = createMockScheduledTransaction({
+      id: "stx-1",
+      amount: -70000,
+    });
+    ctx.ynabClient.getScheduledTransactionById
+      .mockResolvedValueOnce(before1)
+      .mockResolvedValueOnce(before2);
+    ctx.ynabClient.updateScheduledTransaction
+      .mockResolvedValueOnce(after1)
+      .mockRejectedValueOnce(new Error("Update exploded"));
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.update_scheduled_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [
+          { scheduled_transaction_id: "stx-1", amount: -70 },
+          { scheduled_transaction_id: "stx-2", amount: -80 },
+        ],
+      }),
+    );
+
+    expect(result.results[0].status).toBe("updated");
+    expect(result.results[1].status).toBe("error");
+    expect(result.results[1].message).toContain("Update exploded");
+    expect(result.undo_history_ids).toEqual(["u1"]);
+  });
 });
 
 describe("delete_scheduled_transactions", () => {
@@ -180,5 +249,27 @@ describe("delete_scheduled_transactions", () => {
     expect(result.results[0].message).toContain("not found");
     expect(result.results[1].status).toBe("error");
     expect(result.results[1].message).toContain("failed");
+  });
+
+  it("continues after an item delete throws", async () => {
+    ctx.ynabClient.getScheduledTransactionById
+      .mockResolvedValueOnce(createMockScheduledTransaction({ id: "stx-1" }))
+      .mockResolvedValueOnce(createMockScheduledTransaction({ id: "stx-2" }));
+    ctx.ynabClient.deleteScheduledTransaction
+      .mockResolvedValueOnce({ id: "stx-1" })
+      .mockRejectedValueOnce(new Error("Delete exploded"));
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.delete_scheduled_transactions;
+    const result = parseResult(
+      await handler({
+        scheduled_transaction_ids: ["stx-1", "stx-2"],
+      }),
+    );
+
+    expect(result.results[0].status).toBe("deleted");
+    expect(result.results[1].status).toBe("error");
+    expect(result.results[1].message).toContain("Delete exploded");
+    expect(result.undo_history_ids).toEqual(["u1"]);
   });
 });

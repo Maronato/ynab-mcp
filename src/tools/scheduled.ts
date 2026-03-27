@@ -155,31 +155,64 @@ export function registerScheduledTransactionTools(
       try {
         const resolvedBudgetId =
           await context.ynabClient.resolveRealBudgetId(budgetId);
-        const created = await Promise.all(
-          transactions.map((transaction) =>
-            context.ynabClient.createScheduledTransaction(
-              resolvedBudgetId,
-              transaction as CreateScheduledTransactionInput,
-            ),
-          ),
-        );
-
         const [lookups, settings] = await Promise.all([
           context.ynabClient.getNameLookup(resolvedBudgetId),
           context.ynabClient.getBudgetSettings(resolvedBudgetId),
         ]);
-
-        const undoEntries = created.map((transaction) => ({
-          operation: "create_scheduled_transaction" as const,
-          description: `Created scheduled transaction ${transaction.id} (${formatCurrency(transaction.amount, settings.currency_format)}).`,
+        const createdTransactions: Array<Record<string, unknown>> = [];
+        const results: Array<Record<string, unknown>> = [];
+        const undoEntries: Array<{
+          operation: "create_scheduled_transaction";
+          description: string;
           undo_action: {
-            type: "delete" as const,
-            entity_type: "scheduled_transaction" as const,
-            entity_id: transaction.id,
-            expected_state: snapshotScheduledTransaction(transaction),
-            restore_state: {},
-          },
-        }));
+            type: "delete";
+            entity_type: "scheduled_transaction";
+            entity_id: string;
+            expected_state: Record<string, unknown>;
+            restore_state: Record<string, unknown>;
+          };
+        }> = [];
+
+        for (const [inputIndex, transaction] of transactions.entries()) {
+          try {
+            const created = await context.ynabClient.createScheduledTransaction(
+              resolvedBudgetId,
+              transaction as CreateScheduledTransactionInput,
+            );
+            const formatted = formatScheduledTransactionForOutput(
+              created,
+              lookups,
+              settings.currency_format,
+            );
+
+            createdTransactions.push(formatted);
+            results.push({
+              input_index: inputIndex,
+              status: "created",
+              transaction: formatted,
+            });
+            undoEntries.push({
+              operation: "create_scheduled_transaction",
+              description: `Created scheduled transaction ${created.id} (${formatCurrency(created.amount, settings.currency_format)}).`,
+              undo_action: {
+                type: "delete",
+                entity_type: "scheduled_transaction",
+                entity_id: created.id,
+                expected_state: snapshotScheduledTransaction(created),
+                restore_state: {},
+              },
+            });
+          } catch (error) {
+            results.push({
+              input_index: inputIndex,
+              status: "error",
+              message: getErrorMessage(
+                error,
+                "Failed to create scheduled transaction.",
+              ),
+            });
+          }
+        }
 
         const undoHistoryIds =
           undoEntries.length > 0
@@ -193,14 +226,9 @@ export function registerScheduledTransactionTools(
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
-          created_count: created.length,
-          transactions: created.map((transaction) =>
-            formatScheduledTransactionForOutput(
-              transaction,
-              lookups,
-              settings.currency_format,
-            ),
-          ),
+          created_count: createdTransactions.length,
+          results,
+          transactions: createdTransactions,
           undo_history_ids: undoHistoryIds,
         });
       } catch (error) {
@@ -268,33 +296,44 @@ export function registerScheduledTransactionTools(
             continue;
           }
 
-          const updated = await context.ynabClient.updateScheduledTransaction(
-            resolvedBudgetId,
-            transaction as UpdateScheduledTransactionInput,
-            before,
-          );
+          try {
+            const updated = await context.ynabClient.updateScheduledTransaction(
+              resolvedBudgetId,
+              transaction as UpdateScheduledTransactionInput,
+              before,
+            );
 
-          results.push({
-            scheduled_transaction_id: transaction.scheduled_transaction_id,
-            status: "updated",
-            transaction: formatScheduledTransactionForOutput(
-              updated,
-              lookups,
-              settings.currency_format,
-            ),
-          });
+            results.push({
+              scheduled_transaction_id: transaction.scheduled_transaction_id,
+              status: "updated",
+              transaction: formatScheduledTransactionForOutput(
+                updated,
+                lookups,
+                settings.currency_format,
+              ),
+            });
 
-          undoEntries.push({
-            operation: "update_scheduled_transaction",
-            description: `Updated scheduled transaction ${transaction.scheduled_transaction_id}.`,
-            undo_action: {
-              type: "update",
-              entity_type: "scheduled_transaction",
-              entity_id: transaction.scheduled_transaction_id,
-              expected_state: snapshotScheduledTransaction(updated),
-              restore_state: snapshotScheduledTransaction(before),
-            },
-          });
+            undoEntries.push({
+              operation: "update_scheduled_transaction",
+              description: `Updated scheduled transaction ${transaction.scheduled_transaction_id}.`,
+              undo_action: {
+                type: "update",
+                entity_type: "scheduled_transaction",
+                entity_id: transaction.scheduled_transaction_id,
+                expected_state: snapshotScheduledTransaction(updated),
+                restore_state: snapshotScheduledTransaction(before),
+              },
+            });
+          } catch (error) {
+            results.push({
+              scheduled_transaction_id: transaction.scheduled_transaction_id,
+              status: "error",
+              message: getErrorMessage(
+                error,
+                "Failed to update scheduled transaction.",
+              ),
+            });
+          }
         }
 
         const undoHistoryIds =
@@ -376,36 +415,47 @@ export function registerScheduledTransactionTools(
             continue;
           }
 
-          const deleted = await context.ynabClient.deleteScheduledTransaction(
-            resolvedBudgetId,
-            scheduledTransactionId,
-          );
+          try {
+            const deleted = await context.ynabClient.deleteScheduledTransaction(
+              resolvedBudgetId,
+              scheduledTransactionId,
+            );
 
-          if (!deleted) {
+            if (!deleted) {
+              results.push({
+                scheduled_transaction_id: scheduledTransactionId,
+                status: "error",
+                message: "Delete request failed.",
+              });
+              continue;
+            }
+
+            results.push({
+              scheduled_transaction_id: scheduledTransactionId,
+              status: "deleted",
+            });
+
+            undoEntries.push({
+              operation: "delete_scheduled_transaction",
+              description: `Deleted scheduled transaction ${scheduledTransactionId}.`,
+              undo_action: {
+                type: "create",
+                entity_type: "scheduled_transaction",
+                entity_id: scheduledTransactionId,
+                expected_state: {},
+                restore_state: snapshotScheduledTransaction(before),
+              },
+            });
+          } catch (error) {
             results.push({
               scheduled_transaction_id: scheduledTransactionId,
               status: "error",
-              message: "Delete request failed.",
+              message: getErrorMessage(
+                error,
+                "Failed to delete scheduled transaction.",
+              ),
             });
-            continue;
           }
-
-          results.push({
-            scheduled_transaction_id: scheduledTransactionId,
-            status: "deleted",
-          });
-
-          undoEntries.push({
-            operation: "delete_scheduled_transaction",
-            description: `Deleted scheduled transaction ${scheduledTransactionId}.`,
-            undo_action: {
-              type: "create",
-              entity_type: "scheduled_transaction",
-              entity_id: scheduledTransactionId,
-              expected_state: {},
-              restore_state: snapshotScheduledTransaction(before),
-            },
-          });
         }
 
         const undoHistoryIds =
@@ -432,4 +482,8 @@ export function registerScheduledTransactionTools(
       }
     },
   );
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }

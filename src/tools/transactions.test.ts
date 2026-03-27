@@ -210,4 +210,26 @@ describe("delete_transactions", () => {
 
     expect(ctx.undoEngine.recordEntries).not.toHaveBeenCalled();
   });
+
+  it("continues after an item delete throws", async () => {
+    const before1 = createMockTransaction({ id: "tx-1" });
+    const before2 = createMockTransaction({ id: "tx-2" });
+    ctx.ynabClient.getTransactionById
+      .mockResolvedValueOnce(before1)
+      .mockResolvedValueOnce(before2);
+    ctx.ynabClient.deleteTransaction
+      .mockResolvedValueOnce({ id: "tx-1" })
+      .mockRejectedValueOnce(new Error("Delete exploded"));
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.delete_transactions;
+    const result = parseResult(
+      await handler({ transaction_ids: ["tx-1", "tx-2"] }),
+    );
+
+    expect(result.results[0].status).toBe("deleted");
+    expect(result.results[1].status).toBe("error");
+    expect(result.results[1].message).toContain("Delete exploded");
+    expect(result.undo_history_ids).toEqual(["u1"]);
+  });
 });
