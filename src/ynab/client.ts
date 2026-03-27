@@ -101,7 +101,7 @@ export class YnabClient {
     ).length;
 
     if (recentCount >= RATE_LIMIT_THRESHOLD) {
-      const oldest = this.apiCallTimestamps.find((t) => t > windowStart)!;
+      const oldest = this.apiCallTimestamps.find((t) => t > windowStart) ?? now;
       const resetMinutes = Math.ceil(
         (oldest + RATE_LIMIT_WINDOW_MS - now) / 60000,
       );
@@ -133,7 +133,10 @@ export class YnabClient {
 
             return (...args: unknown[]) => {
               client.trackApiCall();
-              return (method as Function).apply(subTarget, args);
+              return (method as (...a: unknown[]) => unknown).apply(
+                subTarget,
+                args,
+              );
             };
           },
         });
