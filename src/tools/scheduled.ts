@@ -179,6 +179,13 @@ export function registerScheduledTransactionTools(
               resolvedBudgetId,
               transaction as CreateScheduledTransactionInput,
             );
+            if (
+              created.payee_id &&
+              !lookups.payeeById.has(created.payee_id) &&
+              transaction.payee_name
+            ) {
+              lookups.payeeById.set(created.payee_id, transaction.payee_name);
+            }
             const formatted = formatScheduledTransactionForOutput(
               created,
               lookups,

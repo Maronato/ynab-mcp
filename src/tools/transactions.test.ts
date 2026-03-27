@@ -71,6 +71,35 @@ describe("create_transactions", () => {
     expect(entries[0].undo_action.entity_id).toBe("new-1");
   });
 
+  it("populates payee_name for newly created payees not in lookup", async () => {
+    const created = [
+      createMockTransaction({
+        id: "new-1",
+        amount: -50000,
+        payee_id: "payee-new",
+      }),
+    ];
+    ctx.ynabClient.createTransactions.mockResolvedValue(created);
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "undo-1" }]);
+
+    const handler = tools.create_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [
+          {
+            account_id: "acc-1",
+            date: "2024-01-15",
+            amount: -50,
+            payee_name: "New Store",
+          },
+        ],
+      }),
+    );
+
+    expect(result.transactions[0].payee_id).toBe("payee-new");
+    expect(result.transactions[0].payee_name).toBe("New Store");
+  });
+
   it("returns error result on API failure", async () => {
     ctx.ynabClient.createTransactions.mockRejectedValue(new Error("API error"));
 

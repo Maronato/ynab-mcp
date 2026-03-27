@@ -176,6 +176,16 @@ export function registerTransactionTools(
           context.ynabClient.getBudgetSettings(resolvedBudgetId),
         ]);
 
+        for (let i = 0; i < created.length; i++) {
+          const payeeId = created[i].payee_id;
+          if (payeeId && !lookups.payeeById.has(payeeId)) {
+            const inputPayeeName = transactions[i]?.payee_name;
+            if (inputPayeeName) {
+              lookups.payeeById.set(payeeId, inputPayeeName);
+            }
+          }
+        }
+
         const formatted = created.map((transaction) =>
           formatTransactionForOutput(
             transaction,

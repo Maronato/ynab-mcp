@@ -67,6 +67,79 @@ describe("create_scheduled_transactions", () => {
     expect(entries[0].undo_action.entity_type).toBe("scheduled_transaction");
   });
 
+  it("populates payee_name for newly created payees not in lookup", async () => {
+    const created = createMockScheduledTransaction({
+      id: "stx-new",
+      amount: -50000,
+      payee_id: "payee-new",
+    });
+    ctx.ynabClient.createScheduledTransaction.mockResolvedValue(created);
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.create_scheduled_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [
+          {
+            account_id: "acc-1",
+            date: "2024-01-01",
+            amount: -50,
+            frequency: "monthly",
+            payee_name: "New Store",
+          },
+        ],
+      }),
+    );
+
+    expect(result.transactions[0].payee_id).toBe("payee-new");
+    expect(result.transactions[0].payee_name).toBe("New Store");
+  });
+
+  it("makes new payee visible to subsequent iterations in the same batch", async () => {
+    const created1 = createMockScheduledTransaction({
+      id: "stx-1",
+      amount: -50000,
+      payee_id: "payee-new",
+    });
+    const created2 = createMockScheduledTransaction({
+      id: "stx-2",
+      amount: -60000,
+      payee_id: "payee-new",
+    });
+    ctx.ynabClient.createScheduledTransaction
+      .mockResolvedValueOnce(created1)
+      .mockResolvedValueOnce(created2);
+    ctx.undoEngine.recordEntries.mockResolvedValue([
+      { id: "u1" },
+      { id: "u2" },
+    ]);
+
+    const handler = tools.create_scheduled_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [
+          {
+            account_id: "acc-1",
+            date: "2024-01-01",
+            amount: -50,
+            frequency: "monthly",
+            payee_name: "New Store",
+          },
+          {
+            account_id: "acc-1",
+            date: "2024-02-01",
+            amount: -60,
+            frequency: "monthly",
+            payee_name: "New Store",
+          },
+        ],
+      }),
+    );
+
+    expect(result.transactions[0].payee_name).toBe("New Store");
+    expect(result.transactions[1].payee_name).toBe("New Store");
+  });
+
   it("preserves successful creates when a later item fails", async () => {
     const created = createMockScheduledTransaction({
       id: "stx-new",
