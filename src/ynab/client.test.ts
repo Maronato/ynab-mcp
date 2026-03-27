@@ -733,6 +733,23 @@ describe("syncBudgetData — structured deltas", () => {
     expect(deltas.accounts.deleted).toBe(1);
   });
 
+  it("reports transaction additions on a cold cache full fetch", async () => {
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: {
+        transactions: [tx({ id: "t-sync-1" }), tx({ id: "t-sync-2" })],
+        server_knowledge: 1,
+      },
+    });
+
+    const deltas = await client.syncBudgetData("b");
+
+    expect(deltas.transactions).toEqual({
+      added: 2,
+      updated: 0,
+      deleted: 0,
+    });
+  });
+
   it("returns zeroes when nothing changed", async () => {
     mockApi.accounts.getAccounts.mockResolvedValue({
       data: { accounts: [], server_knowledge: 1 },

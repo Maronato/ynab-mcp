@@ -1233,21 +1233,44 @@ export class YnabClient {
     sinceDate: string,
   ): Promise<void> {
     const cache = this.getBudgetCache(budgetId);
+    const previousTransactions = new Map(cache.transactions.byId);
     const response = await this.api.transactions.getTransactions(
       budgetId,
       sinceDate || undefined,
     );
 
-    cache.transactions.byId.clear();
+    const nextTransactions = new Map<string, ynab.TransactionDetail>();
     for (const tx of response.data.transactions) {
       if (!tx.deleted) {
-        cache.transactions.byId.set(tx.id, tx);
+        nextTransactions.set(tx.id, tx);
       }
+    }
+
+    let added = 0;
+    let updated = 0;
+    let deleted = 0;
+    for (const id of nextTransactions.keys()) {
+      if (previousTransactions.has(id)) {
+        updated++;
+      } else {
+        added++;
+      }
+    }
+    for (const id of previousTransactions.keys()) {
+      if (!nextTransactions.has(id)) {
+        deleted++;
+      }
+    }
+
+    cache.transactions.byId.clear();
+    for (const [id, tx] of nextTransactions) {
+      cache.transactions.byId.set(id, tx);
     }
     cache.transactions.coveredSinceDate = sinceDate;
     cache.transactions.serverKnowledge = response.data.server_knowledge;
     cache.transactions.stale = false;
     cache.transactions.lastRefreshedAt = Date.now();
+    cache.transactions.lastDeltas = { added, updated, deleted };
   }
 
   /** Delta refresh using stored SK + coveredSinceDate. */
