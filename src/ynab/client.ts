@@ -1094,6 +1094,8 @@ export class YnabClient {
       return [...cache.categoryGroups.values()];
     }
 
+    const isDelta = cache.categories.serverKnowledge != null;
+
     const response = await this.api.categories.getCategories(
       budgetId,
       cache.categories.serverKnowledge,
@@ -1104,8 +1106,14 @@ export class YnabClient {
     for (const group of response.data.category_groups) {
       if (group.deleted) {
         cache.categoryGroups.delete(group.id);
-      } else {
+      } else if (!isDelta) {
         cache.categoryGroups.set(group.id, group);
+      } else {
+        const existing = cache.categoryGroups.get(group.id);
+        cache.categoryGroups.set(group.id, {
+          ...group,
+          categories: existing?.categories ?? group.categories,
+        });
       }
 
       for (const category of group.categories) {
@@ -1120,6 +1128,29 @@ export class YnabClient {
         }
       }
     }
+
+    if (isDelta) {
+      // Rebuild each group's categories array from the authoritative byId map.
+      // Delta responses only include changed categories, so the group objects
+      // from the API have partial category lists. categories.byId is always
+      // complete and correctly maintained, so we use it as the source of truth.
+      const categoriesByGroup = new Map<string, ynab.Category[]>();
+      for (const category of cache.categories.byId.values()) {
+        const arr = categoriesByGroup.get(category.category_group_id);
+        if (arr) {
+          arr.push(category);
+        } else {
+          categoriesByGroup.set(category.category_group_id, [category]);
+        }
+      }
+      for (const [groupId, group] of cache.categoryGroups) {
+        cache.categoryGroups.set(groupId, {
+          ...group,
+          categories: categoriesByGroup.get(groupId) ?? [],
+        });
+      }
+    }
+
     cache.categories.stale = false;
     cache.categories.lastRefreshedAt = Date.now();
     cache.categories.lastDeltas = deltas;
