@@ -485,7 +485,11 @@ export class YnabClient {
       payload,
     );
 
-    this.invalidateBudgetCache(resolvedBudgetId, ["payees", "categories"]);
+    this.invalidateBudgetCache(resolvedBudgetId, [
+      "accounts",
+      "payees",
+      "categories",
+    ]);
     return response.data.transactions ?? [];
   }
 
@@ -534,7 +538,11 @@ export class YnabClient {
       payload,
     );
 
-    this.invalidateBudgetCache(resolvedBudgetId, ["payees", "categories"]);
+    this.invalidateBudgetCache(resolvedBudgetId, [
+      "accounts",
+      "payees",
+      "categories",
+    ]);
     return response.data.transactions ?? [];
   }
 
@@ -548,7 +556,7 @@ export class YnabClient {
         resolvedBudgetId,
         transactionId,
       );
-      this.invalidateBudgetCache(resolvedBudgetId, ["categories"]);
+      this.invalidateBudgetCache(resolvedBudgetId, ["accounts", "categories"]);
       return response.data.transaction;
     } catch (error) {
       if (isNotFoundError(error)) return null;
@@ -686,7 +694,10 @@ export class YnabClient {
           scheduledTransactionId,
         );
 
-      this.invalidateBudgetCache(resolvedBudgetId, ["scheduledTransactions"]);
+      this.invalidateBudgetCache(resolvedBudgetId, [
+        "scheduledTransactions",
+        "categories",
+      ]);
       return response.data.scheduled_transaction;
     } catch (error) {
       if (isNotFoundError(error)) return null;
