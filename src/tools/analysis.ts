@@ -153,16 +153,23 @@ export function registerAnalysisTools(
             .sort((a, b) => b.total_milliunits - a.total_milliunits)
             .slice(0, topN);
 
-          for (const entry of entries) {
-            entry.name =
-              entry.id === "uncategorized"
-                ? "Uncategorized"
-                : (lookups.categoryById.get(entry.id) ?? "Unknown Category");
-          }
-
-          result.by_category = entries.map((entry) =>
-            formatAggregateEntry(entry, settings.currency_format),
-          );
+          result.by_category = entries.map((entry) => {
+            const catInfo = lookups.categoryById.get(entry.id);
+            return {
+              ...formatAggregateEntry(
+                {
+                  ...entry,
+                  name:
+                    entry.id === "uncategorized"
+                      ? "Uncategorized"
+                      : (catInfo?.name ?? "Unknown Category"),
+                },
+                settings.currency_format,
+              ),
+              category_group_id: catInfo?.group_id ?? null,
+              category_group_name: catInfo?.group_name ?? null,
+            };
+          });
         }
 
         if (byPayeeMap) {

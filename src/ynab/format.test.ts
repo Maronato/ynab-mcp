@@ -179,6 +179,36 @@ describe("formatTransactionForOutput", () => {
     expect(result.category_name).toBe("Groceries");
   });
 
+  it("includes category_group_id and category_group_name", () => {
+    const tx = createMockTransaction();
+    const lookups = createMockNameLookup();
+    const result = formatTransactionForOutput(tx, lookups);
+
+    expect(result.category_group_id).toBe("group-1");
+    expect(result.category_group_name).toBe("Everyday");
+  });
+
+  it("returns null category group fields when category_id is null", () => {
+    const tx = createMockTransaction({ category_id: null });
+    const lookups = createMockNameLookup();
+    const result = formatTransactionForOutput(tx, lookups);
+
+    expect(result.category_id).toBeNull();
+    expect(result.category_name).toBeNull();
+    expect(result.category_group_id).toBeNull();
+    expect(result.category_group_name).toBeNull();
+  });
+
+  it("returns null category group fields for unknown category_id", () => {
+    const tx = createMockTransaction({ category_id: "unknown-cat" });
+    const lookups = createMockNameLookup();
+    const result = formatTransactionForOutput(tx, lookups);
+
+    expect(result.category_name).toBeNull();
+    expect(result.category_group_id).toBeNull();
+    expect(result.category_group_name).toBeNull();
+  });
+
   it("falls back to null when payee_id is null", () => {
     const tx = createMockTransaction({ payee_id: null });
     const lookups = createMockNameLookup();
@@ -236,6 +266,24 @@ describe("formatScheduledTransactionForOutput", () => {
     expect(result.account_name).toBe("Checking");
     expect(result.payee_name).toBe("Supermarket");
     expect(result.category_name).toBe("Groceries");
+  });
+
+  it("includes category_group_id and category_group_name", () => {
+    const stx = createMockScheduledTransaction();
+    const lookups = createMockNameLookup();
+    const result = formatScheduledTransactionForOutput(stx, lookups);
+
+    expect(result.category_group_id).toBe("group-1");
+    expect(result.category_group_name).toBe("Everyday");
+  });
+
+  it("returns null category group fields when category_id is null", () => {
+    const stx = createMockScheduledTransaction({ category_id: null });
+    const lookups = createMockNameLookup();
+    const result = formatScheduledTransactionForOutput(stx, lookups);
+
+    expect(result.category_group_id).toBeNull();
+    expect(result.category_group_name).toBeNull();
   });
 
   it("converts amount and produces amount_display", () => {

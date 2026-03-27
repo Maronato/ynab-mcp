@@ -33,7 +33,7 @@ export interface TransactionSearchQuery {
   flag_color?: string;
   exclude_transfers?: boolean;
   type?: TransactionFilterType;
-  cleared?: boolean;
+  cleared?: TransactionClearedStatus;
   approved?: boolean;
   limit?: number;
   sort?: TransactionSort;
@@ -112,9 +112,15 @@ export interface FormattedMoney {
   display: string;
 }
 
+export interface CategoryLookupEntry {
+  name: string;
+  group_id: string;
+  group_name: string;
+}
+
 export interface NameLookup {
   accountById: Map<string, string>;
-  categoryById: Map<string, string>;
+  categoryById: Map<string, CategoryLookupEntry>;
   payeeById: Map<string, string>;
 }
 

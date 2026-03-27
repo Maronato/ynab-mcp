@@ -16,6 +16,7 @@ export interface TargetTransaction {
 export interface FlatCategory {
   id: string;
   name: string;
+  group_id: string;
   group_name: string;
 }
 

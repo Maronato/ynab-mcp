@@ -68,7 +68,14 @@ export function createMockNameLookup(
 ): NameLookup {
   return {
     accountById: overrides.accountById ?? new Map([["acc-1", "Checking"]]),
-    categoryById: overrides.categoryById ?? new Map([["cat-1", "Groceries"]]),
+    categoryById:
+      overrides.categoryById ??
+      new Map([
+        [
+          "cat-1",
+          { name: "Groceries", group_id: "group-1", group_name: "Everyday" },
+        ],
+      ]),
     payeeById: overrides.payeeById ?? new Map([["payee-1", "Supermarket"]]),
   };
 }

@@ -60,8 +60,11 @@ function setupTransactions() {
   ctx.ynabClient.getNameLookup.mockResolvedValue({
     accountById: new Map(),
     categoryById: new Map([
-      ["cat-1", "Groceries"],
-      ["cat-2", "Rent"],
+      [
+        "cat-1",
+        { name: "Groceries", group_id: "group-1", group_name: "Everyday" },
+      ],
+      ["cat-2", { name: "Rent", group_id: "group-2", group_name: "Bills" }],
     ]),
     payeeById: new Map([
       ["payee-1", "Store A"],
@@ -105,6 +108,8 @@ describe("get_spending_analysis", () => {
       // cat-1: 10000 + 30000 = 40000, cat-2: 20000
       expect(result.by_category[0].name).toBe("Groceries");
       expect(result.by_category[0].total_milliunits).toBe(40000);
+      expect(result.by_category[0].category_group_id).toBe("group-1");
+      expect(result.by_category[0].category_group_name).toBe("Everyday");
     });
 
     it("groups by payee", async () => {

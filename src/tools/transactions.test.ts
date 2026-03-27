@@ -28,7 +28,12 @@ beforeEach(() => {
 
   ctx.ynabClient.getNameLookup.mockResolvedValue({
     accountById: new Map([["acc-1", "Checking"]]),
-    categoryById: new Map([["cat-1", "Groceries"]]),
+    categoryById: new Map([
+      [
+        "cat-1",
+        { name: "Groceries", group_id: "group-1", group_name: "Everyday" },
+      ],
+    ]),
     payeeById: new Map([["payee-1", "Store"]]),
   });
   ctx.ynabClient.getBudgetSettings.mockResolvedValue({

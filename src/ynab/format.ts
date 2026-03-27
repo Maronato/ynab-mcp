@@ -128,7 +128,13 @@ export function formatTransactionForOutput(
       : null,
     category_id: transaction.category_id ?? null,
     category_name: transaction.category_id
-      ? (lookups.categoryById.get(transaction.category_id) ?? null)
+      ? (lookups.categoryById.get(transaction.category_id)?.name ?? null)
+      : null,
+    category_group_id: transaction.category_id
+      ? (lookups.categoryById.get(transaction.category_id)?.group_id ?? null)
+      : null,
+    category_group_name: transaction.category_id
+      ? (lookups.categoryById.get(transaction.category_id)?.group_name ?? null)
       : null,
   };
 }
@@ -166,7 +172,13 @@ export function formatScheduledTransactionForOutput(
       : null,
     category_id: transaction.category_id ?? null,
     category_name: transaction.category_id
-      ? (lookups.categoryById.get(transaction.category_id) ?? null)
+      ? (lookups.categoryById.get(transaction.category_id)?.name ?? null)
+      : null,
+    category_group_id: transaction.category_id
+      ? (lookups.categoryById.get(transaction.category_id)?.group_id ?? null)
+      : null,
+    category_group_name: transaction.category_id
+      ? (lookups.categoryById.get(transaction.category_id)?.group_name ?? null)
       : null,
   };
 }

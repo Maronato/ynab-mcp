@@ -11,11 +11,36 @@ import {
 import type { PayeeProfile } from "./payee-profiles.js";
 
 const CATEGORIES: FlatCategory[] = [
-  { id: "cat-groceries", name: "Groceries", group_name: "Everyday" },
-  { id: "cat-dining", name: "Dining Out", group_name: "Everyday" },
-  { id: "cat-subs", name: "Subscriptions", group_name: "Bills" },
-  { id: "cat-electric", name: "Electric", group_name: "Bills" },
-  { id: "cat-household", name: "Household", group_name: "Home" },
+  {
+    id: "cat-groceries",
+    name: "Groceries",
+    group_id: "g-everyday",
+    group_name: "Everyday",
+  },
+  {
+    id: "cat-dining",
+    name: "Dining Out",
+    group_id: "g-everyday",
+    group_name: "Everyday",
+  },
+  {
+    id: "cat-subs",
+    name: "Subscriptions",
+    group_id: "g-bills",
+    group_name: "Bills",
+  },
+  {
+    id: "cat-electric",
+    name: "Electric",
+    group_id: "g-bills",
+    group_name: "Bills",
+  },
+  {
+    id: "cat-household",
+    name: "Household",
+    group_id: "g-home",
+    group_name: "Home",
+  },
 ];
 
 function makeProfile(overrides: Partial<PayeeProfile> = {}): PayeeProfile {
