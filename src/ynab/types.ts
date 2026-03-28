@@ -120,6 +120,13 @@ export interface NameLookup {
   payeeById: Map<string, string>;
 }
 
+export interface SubtransactionSnapshot {
+  amount: number;
+  payee_id?: string | null;
+  category_id?: string | null;
+  memo?: string | null;
+}
+
 export interface TransactionSnapshot {
   id: string;
   account_id: string;
@@ -131,6 +138,7 @@ export interface TransactionSnapshot {
   cleared: string;
   approved: boolean;
   flag_color?: string | null;
+  subtransactions?: SubtransactionSnapshot[];
 }
 
 export interface ScheduledTransactionSnapshot {

@@ -56,7 +56,15 @@ export function snapshotTransaction(transaction: {
   cleared: string;
   approved: boolean;
   flag_color?: string | null;
+  subtransactions?: Array<{
+    amount: number;
+    payee_id?: string | null;
+    category_id?: string | null;
+    memo?: string | null;
+    deleted?: boolean;
+  }>;
 }): Record<string, unknown> {
+  const activeSubs = transaction.subtransactions?.filter((s) => !s.deleted);
   return {
     id: transaction.id,
     account_id: transaction.account_id,
@@ -68,6 +76,27 @@ export function snapshotTransaction(transaction: {
     cleared: transaction.cleared,
     approved: transaction.approved,
     flag_color: transaction.flag_color ?? null,
+    ...(activeSubs &&
+      activeSubs.length > 0 && {
+        subtransactions: activeSubs
+          .map((sub) => ({
+            amount: sub.amount,
+            payee_id: sub.payee_id ?? null,
+            category_id: sub.category_id ?? null,
+            memo: sub.memo ?? null,
+          }))
+          .sort((a, b) => {
+            const catCmp = (a.category_id ?? "").localeCompare(
+              b.category_id ?? "",
+            );
+            if (catCmp !== 0) return catCmp;
+            const amountCmp = a.amount - b.amount;
+            if (amountCmp !== 0) return amountCmp;
+            const payeeCmp = (a.payee_id ?? "").localeCompare(b.payee_id ?? "");
+            if (payeeCmp !== 0) return payeeCmp;
+            return (a.memo ?? "").localeCompare(b.memo ?? "");
+          }),
+      }),
   };
 }
 
@@ -95,6 +124,17 @@ export function snapshotScheduledTransaction(transaction: {
   };
 }
 
+export interface SubtransactionLike {
+  id: string;
+  amount: number;
+  memo?: string | null;
+  payee_id?: string | null;
+  payee_name?: string | null;
+  category_id?: string | null;
+  category_name?: string | null;
+  deleted: boolean;
+}
+
 export function formatTransactionForOutput(
   transaction: {
     id: string;
@@ -107,10 +147,14 @@ export function formatTransactionForOutput(
     payee_id?: string | null;
     category_id?: string | null;
     flag_color?: string | null;
+    subtransactions?: SubtransactionLike[];
   },
   lookups: NameLookup,
   currencyFormat?: CurrencyFormatLike,
 ) {
+  const subs = transaction.subtransactions?.filter((s) => !s.deleted) ?? [];
+  const isSplit = subs.length > 0;
+
   return {
     id: transaction.id,
     date: transaction.date,
@@ -120,6 +164,7 @@ export function formatTransactionForOutput(
     cleared: transaction.cleared,
     approved: transaction.approved,
     flag_color: transaction.flag_color ?? null,
+    is_split: isSplit,
     account_id: transaction.account_id,
     account_name: lookups.accountById.get(transaction.account_id) ?? null,
     payee_id: transaction.payee_id ?? null,
@@ -136,6 +181,29 @@ export function formatTransactionForOutput(
     category_group_name: transaction.category_id
       ? (lookups.categoryById.get(transaction.category_id)?.group_name ?? null)
       : null,
+    ...(isSplit && {
+      subtransactions: subs.map((sub) => {
+        const catInfo = sub.category_id
+          ? lookups.categoryById.get(sub.category_id)
+          : undefined;
+        return {
+          id: sub.id,
+          amount: milliunitsToCurrency(sub.amount),
+          amount_display: formatCurrency(sub.amount, currencyFormat),
+          memo: sub.memo ?? null,
+          payee_id: sub.payee_id ?? null,
+          payee_name: sub.payee_id
+            ? (lookups.payeeById.get(sub.payee_id) ?? sub.payee_name ?? null)
+            : (sub.payee_name ?? null),
+          category_id: sub.category_id ?? null,
+          category_name: sub.category_id
+            ? (catInfo?.name ?? sub.category_name ?? null)
+            : null,
+          category_group_id: catInfo?.group_id ?? null,
+          category_group_name: catInfo?.group_name ?? null,
+        };
+      }),
+    }),
   };
 }
 

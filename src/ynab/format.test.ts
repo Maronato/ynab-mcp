@@ -4,6 +4,7 @@ import {
   createMockCurrencyFormat,
   createMockNameLookup,
   createMockScheduledTransaction,
+  createMockSplitTransaction,
   createMockTransaction,
 } from "../test-utils.js";
 
@@ -132,6 +133,177 @@ describe("snapshotTransaction", () => {
     expect(snapshot.memo).toBeNull();
     expect(snapshot.flag_color).toBeNull();
   });
+
+  it("includes subtransactions for split transactions", () => {
+    const tx = createMockSplitTransaction();
+    const snapshot = snapshotTransaction(tx);
+
+    expect(snapshot.subtransactions).toHaveLength(2);
+    const subs = snapshot.subtransactions as Array<Record<string, unknown>>;
+    expect(subs[0]).toEqual({
+      amount: -30000,
+      payee_id: null,
+      category_id: "cat-1",
+      memo: null,
+    });
+    expect(subs[1]).toEqual({
+      amount: -20000,
+      payee_id: null,
+      category_id: "cat-2",
+      memo: null,
+    });
+  });
+
+  it("omits subtransactions for non-split transactions", () => {
+    const tx = createMockTransaction();
+    const snapshot = snapshotTransaction(tx);
+
+    expect(snapshot.subtransactions).toBeUndefined();
+  });
+
+  it("sorts subtransactions deterministically regardless of input order", () => {
+    const tx = createMockSplitTransaction({
+      subtransactions: [
+        {
+          id: "sub-z",
+          transaction_id: "tx-split",
+          amount: -20000,
+          category_id: "cat-z",
+          category_name: "Z Category",
+          deleted: false,
+          payee_id: null,
+          payee_name: null,
+          memo: null,
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+        {
+          id: "sub-a",
+          transaction_id: "tx-split",
+          amount: -30000,
+          category_id: "cat-a",
+          category_name: "A Category",
+          deleted: false,
+          payee_id: null,
+          payee_name: null,
+          memo: null,
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+      ],
+    });
+
+    const snapshotA = snapshotTransaction(tx);
+    const subsA = snapshotA.subtransactions as Array<Record<string, unknown>>;
+
+    const txReversed = createMockSplitTransaction({
+      subtransactions: [
+        {
+          id: "sub-a",
+          transaction_id: "tx-split",
+          amount: -30000,
+          category_id: "cat-a",
+          category_name: "A Category",
+          deleted: false,
+          payee_id: null,
+          payee_name: null,
+          memo: null,
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+        {
+          id: "sub-z",
+          transaction_id: "tx-split",
+          amount: -20000,
+          category_id: "cat-z",
+          category_name: "Z Category",
+          deleted: false,
+          payee_id: null,
+          payee_name: null,
+          memo: null,
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+      ],
+    });
+
+    const snapshotB = snapshotTransaction(txReversed);
+    const subsB = snapshotB.subtransactions as Array<Record<string, unknown>>;
+
+    expect(subsA).toEqual(subsB);
+  });
+
+  it("sorts deterministically when category_id and amount are identical", () => {
+    const tx = createMockSplitTransaction({
+      subtransactions: [
+        {
+          id: "sub-b",
+          transaction_id: "tx-split",
+          amount: -10000,
+          category_id: "cat-1",
+          category_name: "Groceries",
+          deleted: false,
+          payee_id: "payee-b",
+          payee_name: "Payee B",
+          memo: "b memo",
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+        {
+          id: "sub-a",
+          transaction_id: "tx-split",
+          amount: -10000,
+          category_id: "cat-1",
+          category_name: "Groceries",
+          deleted: false,
+          payee_id: "payee-a",
+          payee_name: "Payee A",
+          memo: "a memo",
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+      ],
+    });
+    const reversed = createMockSplitTransaction({
+      subtransactions: [
+        {
+          id: "sub-a",
+          transaction_id: "tx-split",
+          amount: -10000,
+          category_id: "cat-1",
+          category_name: "Groceries",
+          deleted: false,
+          payee_id: "payee-a",
+          payee_name: "Payee A",
+          memo: "a memo",
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+        {
+          id: "sub-b",
+          transaction_id: "tx-split",
+          amount: -10000,
+          category_id: "cat-1",
+          category_name: "Groceries",
+          deleted: false,
+          payee_id: "payee-b",
+          payee_name: "Payee B",
+          memo: "b memo",
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+      ],
+    });
+
+    const subsA = snapshotTransaction(tx).subtransactions as Array<
+      Record<string, unknown>
+    >;
+    const subsB = snapshotTransaction(reversed).subtransactions as Array<
+      Record<string, unknown>
+    >;
+
+    expect(subsA).toEqual(subsB);
+  });
 });
 
 describe("snapshotScheduledTransaction", () => {
@@ -251,6 +423,93 @@ describe("formatTransactionForOutput", () => {
 
     expect(result.memo).toBeNull();
     expect(result.flag_color).toBeNull();
+  });
+
+  it("sets is_split to false for non-split transactions", () => {
+    const tx = createMockTransaction();
+    const lookups = createMockNameLookup();
+    const result = formatTransactionForOutput(tx, lookups);
+
+    expect(result.is_split).toBe(false);
+    expect(result).not.toHaveProperty("subtransactions");
+  });
+
+  it("sets is_split to true and includes formatted subtransactions for splits", () => {
+    const tx = createMockSplitTransaction();
+    const lookups = createMockNameLookup({
+      categoryById: new Map([
+        [
+          "cat-1",
+          { name: "Groceries", group_id: "group-1", group_name: "Everyday" },
+        ],
+        [
+          "cat-2",
+          { name: "Entertainment", group_id: "group-2", group_name: "Fun" },
+        ],
+      ]),
+    });
+    const format = createMockCurrencyFormat();
+    const result = formatTransactionForOutput(tx, lookups, format);
+
+    expect(result.is_split).toBe(true);
+    expect(result.subtransactions).toHaveLength(2);
+
+    const subs = result.subtransactions as Array<Record<string, unknown>>;
+    const sub1 = subs[0];
+    expect(sub1.id).toBe("sub-1");
+    expect(sub1.amount).toBe(-30);
+    expect(sub1.amount_display).toBe("-$30.00");
+    expect(sub1.category_id).toBe("cat-1");
+    expect(sub1.category_name).toBe("Groceries");
+    expect(sub1.category_group_id).toBe("group-1");
+    expect(sub1.category_group_name).toBe("Everyday");
+
+    const sub2 = subs[1];
+    expect(sub2.category_id).toBe("cat-2");
+    expect(sub2.category_name).toBe("Entertainment");
+    expect(sub2.category_group_name).toBe("Fun");
+  });
+
+  it("excludes deleted subtransactions from output", () => {
+    const tx = createMockSplitTransaction({
+      subtransactions: [
+        {
+          id: "sub-1",
+          transaction_id: "tx-split",
+          amount: -30000,
+          category_id: "cat-1",
+          category_name: "Groceries",
+          deleted: false,
+          payee_id: null,
+          payee_name: null,
+          memo: null,
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+        {
+          id: "sub-2",
+          transaction_id: "tx-split",
+          amount: -20000,
+          category_id: "cat-2",
+          category_name: "Entertainment",
+          deleted: true,
+          payee_id: null,
+          payee_name: null,
+          memo: null,
+          transfer_account_id: null,
+          transfer_transaction_id: null,
+        },
+      ],
+    });
+    const lookups = createMockNameLookup();
+    const result = formatTransactionForOutput(tx, lookups);
+
+    expect(result.is_split).toBe(true);
+    expect(result.subtransactions).toHaveLength(1);
+    const deletedSubs = result.subtransactions as Array<
+      Record<string, unknown>
+    >;
+    expect(deletedSubs[0].id).toBe("sub-1");
   });
 });
 

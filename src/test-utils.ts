@@ -45,6 +45,59 @@ export function createMockTransaction(overrides: Record<string, unknown> = {}) {
   };
 }
 
+export function createMockSubtransaction(
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id: "sub-1",
+    transaction_id: "tx-1",
+    amount: -25000,
+    memo: null as string | null,
+    payee_id: null as string | null,
+    payee_name: null as string | null,
+    category_id: "cat-1",
+    category_name: "Groceries",
+    transfer_account_id: null as string | null,
+    transfer_transaction_id: null as string | null,
+    deleted: false,
+    ...overrides,
+  };
+}
+
+export function createMockSplitTransaction(
+  overrides: Record<string, unknown> = {},
+) {
+  const sub1 = createMockSubtransaction({
+    id: "sub-1",
+    transaction_id: "tx-split",
+    amount: -30000,
+    category_id: "cat-1",
+    category_name: "Groceries",
+  });
+  const sub2 = createMockSubtransaction({
+    id: "sub-2",
+    transaction_id: "tx-split",
+    amount: -20000,
+    category_id: "cat-2",
+    category_name: "Entertainment",
+  });
+  return {
+    id: "tx-split",
+    account_id: "acc-1",
+    date: "2024-01-15",
+    amount: -50000,
+    payee_id: "payee-1",
+    category_id: "split-cat-id",
+    category_name: "Split",
+    memo: "Split purchase",
+    cleared: "cleared" as const,
+    approved: true,
+    flag_color: null as string | null,
+    subtransactions: [sub1, sub2],
+    ...overrides,
+  };
+}
+
 export function createMockScheduledTransaction(
   overrides: Record<string, unknown> = {},
 ) {
@@ -144,6 +197,9 @@ export function createMockContext(): MockAppContext {
       getTransactionById: vi.fn().mockResolvedValue(null),
       createTransactions: vi.fn().mockResolvedValue([]),
       updateTransactions: vi.fn().mockResolvedValue([]),
+      replaceTransaction: vi
+        .fn()
+        .mockResolvedValue({ transaction: {}, previousId: "" }),
       deleteTransaction: vi.fn().mockResolvedValue(null),
       getScheduledTransactionById: vi.fn().mockResolvedValue(null),
       getScheduledTransactions: vi.fn().mockResolvedValue([]),
@@ -160,6 +216,7 @@ export function createMockContext(): MockAppContext {
       recordEntries: vi.fn().mockResolvedValue([]),
       listHistory: vi.fn().mockResolvedValue([]),
       undoOperations: vi.fn().mockResolvedValue({ results: [], summary: {} }),
+      updateIdMappings: vi.fn().mockResolvedValue(undefined),
     },
     samplingClient: {
       isAvailable: vi.fn(() => false),
