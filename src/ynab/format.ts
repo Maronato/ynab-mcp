@@ -1,4 +1,8 @@
-import type { NameLookup } from "./types.js";
+import type {
+  NameLookup,
+  ScheduledTransactionSnapshot,
+  TransactionSnapshot,
+} from "./types.js";
 
 export interface CurrencyFormatLike {
   currency_symbol?: string;
@@ -14,7 +18,7 @@ export function currencyToMilliunits(amount: number): number {
 }
 
 export function milliunitsToCurrency(amount: number): number {
-  return amount / 1000;
+  return Math.round(amount) / 1000;
 }
 
 export function formatCurrency(
@@ -51,6 +55,7 @@ export function snapshotTransaction(transaction: {
   date: string;
   amount: number;
   payee_id?: string | null;
+  payee_name?: string | null;
   category_id?: string | null;
   memo?: string | null;
   cleared: string;
@@ -63,7 +68,7 @@ export function snapshotTransaction(transaction: {
     memo?: string | null;
     deleted?: boolean;
   }>;
-}): Record<string, unknown> {
+}): TransactionSnapshot {
   const activeSubs = transaction.subtransactions?.filter((s) => !s.deleted);
   return {
     id: transaction.id,
@@ -71,6 +76,7 @@ export function snapshotTransaction(transaction: {
     date: transaction.date,
     amount: transaction.amount,
     payee_id: transaction.payee_id ?? null,
+    payee_name: transaction.payee_name ?? null,
     category_id: transaction.category_id ?? null,
     memo: transaction.memo ?? null,
     cleared: transaction.cleared,
@@ -106,17 +112,19 @@ export function snapshotScheduledTransaction(transaction: {
   date_first: string;
   amount: number;
   payee_id?: string | null;
+  payee_name?: string | null;
   category_id?: string | null;
   memo?: string | null;
   frequency?: string;
   flag_color?: string | null;
-}): Record<string, unknown> {
+}): ScheduledTransactionSnapshot {
   return {
     id: transaction.id,
     account_id: transaction.account_id,
     date: transaction.date_first,
     amount: transaction.amount,
     payee_id: transaction.payee_id ?? null,
+    payee_name: transaction.payee_name ?? null,
     category_id: transaction.category_id ?? null,
     memo: transaction.memo ?? null,
     frequency: transaction.frequency,
