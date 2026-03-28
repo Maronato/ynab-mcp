@@ -30,7 +30,10 @@ beforeEach(() => {
 
 describe("list_undo_history", () => {
   it("resolves the default budget before listing history", async () => {
-    ctx.undoEngine.listHistory.mockResolvedValue([createMockUndoEntry()]);
+    ctx.undoEngine.listHistory.mockResolvedValue({
+      entries: [createMockUndoEntry()],
+      pendingOperations: [],
+    });
 
     const result = parseResult(
       await tools.list_undo_history({

@@ -54,13 +54,14 @@ export function registerUndoTools(
         const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(
           input.budget_id,
         );
-        const entries = await context.undoEngine.listHistory(
-          resolvedBudgetId,
-          limit,
-          includeUndone,
-        );
+        const { entries, pendingOperations } =
+          await context.undoEngine.listHistory(
+            resolvedBudgetId,
+            limit,
+            includeUndone,
+          );
 
-        return jsonToolResult({
+        const result: Record<string, unknown> = {
           budget_id: resolvedBudgetId,
           count: entries.length,
           entries: entries.map((entry) => ({
@@ -70,7 +71,19 @@ export function registerUndoTools(
             description: entry.description,
             status: entry.status,
           })),
-        });
+        };
+
+        if (pendingOperations.length > 0) {
+          result.warning =
+            "One or more operations were interrupted before completion. Some undo entries may be missing.";
+          result.pending_operations = pendingOperations.map((op) => ({
+            id: op.id,
+            timestamp: op.timestamp,
+            description: op.description,
+          }));
+        }
+
+        return jsonToolResult(result);
       } catch (error) {
         return errorToolResult(
           extractErrorMessage(error, "Failed to list undo history."),

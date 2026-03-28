@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { matchesExpectedState } from "../shared/object.js";
 import type { YnabClient } from "../ynab/client.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { milliunitsToCurrency } from "../ynab/format.js";
+import { asMilliunits, milliunitsToCurrency } from "../ynab/format.js";
 import type { UndoStore } from "./store.js";
 import type {
+  PendingOperation,
   UndoConflict,
   UndoEntry,
   UndoExecutionResult,
@@ -70,15 +71,27 @@ export class UndoEngine {
     return createdEntries;
   }
 
+  async markPending(budgetId: string, description: string): Promise<string> {
+    return this.store.markPending(budgetId, description);
+  }
+
+  async clearPending(budgetId: string, pendingId: string): Promise<void> {
+    return this.store.clearPending(budgetId, pendingId);
+  }
+
   async listHistory(
     budgetId: string,
     limit: number,
     includeUndone = false,
-  ): Promise<UndoEntry[]> {
-    return this.store.listEntries(budgetId, {
-      limit,
-      includeUndone,
-    });
+  ): Promise<{ entries: UndoEntry[]; pendingOperations: PendingOperation[] }> {
+    const [entries, pendingOperations] = await Promise.all([
+      this.store.listEntries(budgetId, {
+        limit,
+        includeUndone,
+      }),
+      this.store.getPendingOperations(budgetId),
+    ]);
+    return { entries, pendingOperations };
   }
 
   async undoOperations(
@@ -362,7 +375,7 @@ export class UndoEngine {
         const replacement = {
           account_id: asRequiredString(restore.account_id),
           date: asRequiredString(restore.date),
-          amount: milliunitsToCurrency(asNumber(restore.amount)),
+          amount: milliunitsToCurrency(asMilliunits(asNumber(restore.amount))),
           payee_id: asOptionalNullableString(restore.payee_id),
           category_id: subtransactions
             ? undefined
@@ -398,7 +411,7 @@ export class UndoEngine {
           date: asOptionalString(restore.date),
           amount:
             restore.amount !== undefined
-              ? milliunitsToCurrency(asNumber(restore.amount))
+              ? milliunitsToCurrency(asMilliunits(asNumber(restore.amount)))
               : undefined,
           payee_id: asOptionalNullableString(restore.payee_id),
           category_id: restoreSubs
@@ -424,7 +437,7 @@ export class UndoEngine {
       {
         account_id: asRequiredString(restore.account_id),
         date: asRequiredString(restore.date),
-        amount: milliunitsToCurrency(asNumber(restore.amount)),
+        amount: milliunitsToCurrency(asMilliunits(asNumber(restore.amount))),
         payee_id: asOptionalNullableString(restore.payee_id),
         category_id: subtransactions
           ? undefined
@@ -476,7 +489,7 @@ export class UndoEngine {
         date: asOptionalString(restore.date),
         amount:
           restore.amount !== undefined
-            ? milliunitsToCurrency(asNumber(restore.amount))
+            ? milliunitsToCurrency(asMilliunits(asNumber(restore.amount)))
             : undefined,
         payee_id: asOptionalNullableString(restore.payee_id),
         category_id: asOptionalNullableString(restore.category_id),
@@ -501,7 +514,7 @@ export class UndoEngine {
       {
         account_id: asRequiredString(restore.account_id),
         date: asRequiredString(restore.date),
-        amount: milliunitsToCurrency(asNumber(restore.amount)),
+        amount: milliunitsToCurrency(asMilliunits(asNumber(restore.amount))),
         payee_id: asOptionalNullableString(restore.payee_id),
         category_id: asOptionalNullableString(restore.category_id),
         memo: asOptionalNullableString(restore.memo),
@@ -529,7 +542,7 @@ export class UndoEngine {
     await this.client.setCategoryBudget(entry.budget_id, {
       category_id: asRequiredString(restore.category_id),
       month: asRequiredString(restore.month),
-      budgeted: milliunitsToCurrency(asNumber(restore.budgeted)),
+      budgeted: milliunitsToCurrency(asMilliunits(asNumber(restore.budgeted))),
     });
     return "Restored category budget amount.";
   }
@@ -648,7 +661,7 @@ function asOptionalSubtransactions(value: unknown):
   if (!Array.isArray(value) || value.length === 0) return undefined;
 
   return value.map((sub: Record<string, unknown>) => ({
-    amount: milliunitsToCurrency(asNumber(sub.amount)),
+    amount: milliunitsToCurrency(asMilliunits(asNumber(sub.amount))),
     payee_id: asOptionalNullableString(sub.payee_id),
     category_id: asOptionalNullableString(sub.category_id),
     memo: asOptionalNullableString(sub.memo),

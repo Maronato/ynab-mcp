@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { UndoEntry, UndoHistoryFile } from "./types.js";
+import type { PendingOperation, UndoEntry, UndoHistoryFile } from "./types.js";
 
 const DEFAULT_HISTORY: UndoHistoryFile = {
   entries: [],
@@ -123,6 +123,41 @@ export class UndoStore {
     });
   }
 
+  async markPending(budgetId: string, description: string): Promise<string> {
+    const id = `${budgetId}::pending::${Date.now()}`;
+    const op: PendingOperation = {
+      id,
+      budget_id: budgetId,
+      timestamp: new Date().toISOString(),
+      description,
+    };
+
+    await this.withBudgetLock(budgetId, async () => {
+      const history = await this.readBudgetHistoryUnsafe(budgetId);
+      const pending = history.pending_operations ?? [];
+      pending.push(op);
+      history.pending_operations = pending;
+      await this.writeBudgetHistoryUnsafe(budgetId, history);
+    });
+
+    return id;
+  }
+
+  async clearPending(budgetId: string, pendingId: string): Promise<void> {
+    await this.withBudgetLock(budgetId, async () => {
+      const history = await this.readBudgetHistoryUnsafe(budgetId);
+      history.pending_operations = (history.pending_operations ?? []).filter(
+        (op) => op.id !== pendingId,
+      );
+      await this.writeBudgetHistoryUnsafe(budgetId, history);
+    });
+  }
+
+  async getPendingOperations(budgetId: string): Promise<PendingOperation[]> {
+    const history = await this.readBudgetHistory(budgetId);
+    return history.pending_operations ?? [];
+  }
+
   private applyIdMapping(
     history: UndoHistoryFile,
     sourceEntityId: string,
@@ -178,6 +213,9 @@ export class UndoStore {
           parsed.id_mappings && typeof parsed.id_mappings === "object"
             ? parsed.id_mappings
             : {},
+        pending_operations: Array.isArray(parsed.pending_operations)
+          ? parsed.pending_operations
+          : [],
       };
     } catch (error) {
       const nodeError = error as NodeJS.ErrnoException;

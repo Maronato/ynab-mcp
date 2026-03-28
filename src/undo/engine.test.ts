@@ -19,6 +19,9 @@ function createMockStore() {
       .fn<(budgetId: string, entityId: string) => Promise<string>>()
       .mockImplementation((_b, entityId) => Promise.resolve(entityId)),
     updateIdMappings: vi.fn().mockResolvedValue(undefined),
+    markPending: vi.fn().mockResolvedValue("pending-id"),
+    clearPending: vi.fn().mockResolvedValue(undefined),
+    getPendingOperations: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -85,12 +88,14 @@ describe("recordEntries", () => {
 
 describe("listHistory", () => {
   it("delegates to store.listEntries with correct params", async () => {
-    await engine.listHistory("budget-1", 10, true);
+    const result = await engine.listHistory("budget-1", 10, true);
 
     expect(mockStore.listEntries).toHaveBeenCalledWith("budget-1", {
       limit: 10,
       includeUndone: true,
     });
+    expect(mockStore.getPendingOperations).toHaveBeenCalledWith("budget-1");
+    expect(result).toEqual({ entries: [], pendingOperations: [] });
   });
 });
 

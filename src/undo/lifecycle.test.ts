@@ -118,7 +118,7 @@ describe("lifecycle: create -> update -> delete -> undo delete -> undo update ->
     ]);
 
     // Verify all three entries are stored and active
-    const historyBefore = await engine.listHistory(budgetId, 10);
+    const { entries: historyBefore } = await engine.listHistory(budgetId, 10);
     expect(historyBefore).toHaveLength(3);
     expect(historyBefore.every((e) => e.status === "active")).toBe(true);
 
@@ -201,7 +201,11 @@ describe("lifecycle: create -> update -> delete -> undo delete -> undo update ->
 
     // ----- Verify final state -----
 
-    const historyAfter = await engine.listHistory(budgetId, 10, true);
+    const { entries: historyAfter } = await engine.listHistory(
+      budgetId,
+      10,
+      true,
+    );
     expect(historyAfter).toHaveLength(3);
     expect(historyAfter.every((e) => e.status === "undone")).toBe(true);
   });

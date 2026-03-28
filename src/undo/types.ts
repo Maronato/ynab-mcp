@@ -34,9 +34,17 @@ export interface UndoEntry {
   status: "active" | "undone";
 }
 
+export interface PendingOperation {
+  id: string;
+  budget_id: string;
+  timestamp: string;
+  description: string;
+}
+
 export interface UndoHistoryFile {
   entries: UndoEntry[];
   id_mappings: Record<string, string>;
+  pending_operations?: PendingOperation[];
 }
 
 export interface UndoConflict {
