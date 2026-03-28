@@ -18,6 +18,7 @@ export interface CreateServerOptions {
   version?: string;
   readOnly?: boolean;
   requireSession?: boolean;
+  sessionTtlMs?: number;
 }
 
 export function createYnabMcpServer(options: CreateServerOptions): {
@@ -27,7 +28,9 @@ export function createYnabMcpServer(options: CreateServerOptions): {
   const ynabClient = new YnabClient(options.accessToken, options.endpointUrl, {
     readOnly: options.readOnly,
   });
-  const undoStore = new UndoStore(options.dataDirectory);
+  const undoStore = new UndoStore(options.dataDirectory, 200, {
+    sessionTtlMs: options.sessionTtlMs,
+  });
   const undoEngine = new UndoEngine(ynabClient, undoStore);
 
   const server = new McpServer({

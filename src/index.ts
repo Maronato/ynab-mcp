@@ -33,6 +33,23 @@ function parseBooleanEnv(
   );
 }
 
+function parsePositiveNumberEnv(
+  name: string,
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name} value "${value}". Use a positive number.`);
+  }
+
+  return parsed;
+}
+
 async function main(): Promise<void> {
   const accessToken = process.env.YNAB_API_TOKEN;
   if (!accessToken) {
@@ -49,6 +66,12 @@ async function main(): Promise<void> {
   const requireSession =
     parseBooleanEnv("YNAB_REQUIRE_SESSION", process.env.YNAB_REQUIRE_SESSION) ??
     false;
+  const sessionTtlHours = parsePositiveNumberEnv(
+    "YNAB_SESSION_TTL_HOURS",
+    process.env.YNAB_SESSION_TTL_HOURS,
+    24,
+  );
+  const sessionTtlMs = sessionTtlHours * 60 * 60 * 1000;
 
   const { server } = createYnabMcpServer({
     accessToken,
@@ -57,6 +80,7 @@ async function main(): Promise<void> {
     version,
     readOnly,
     requireSession,
+    sessionTtlMs,
   });
 
   const transport = new StdioServerTransport();

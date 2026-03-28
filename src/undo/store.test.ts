@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_SESSION_ID } from "../shared/session.js";
 import { createMockUndoEntry } from "../test-utils.js";
 import { UndoStore } from "./store.js";
 
@@ -27,6 +28,10 @@ function entry(id: string, overrides: Record<string, unknown> = {}) {
     timestamp: new Date().toISOString(),
     ...overrides,
   });
+}
+
+function isoTimestamp(ms: number): string {
+  return new Date(ms).toISOString();
 }
 
 describe("appendEntries and persistence", () => {
@@ -301,6 +306,191 @@ describe("updateIdMappings", () => {
     // x should now resolve directly to b
     const result = await store.resolveMappedId(BUDGET_ID, "x");
     expect(result).toBe("b");
+  });
+});
+
+describe("session cleanup", () => {
+  it("purges sessions older than TTL but keeps shared and recent sessions", async () => {
+    const nowMs = Date.parse("2024-01-03T00:00:00.000Z");
+    const cleanupStore = new UndoStore(dataDir, 200, {
+      sessionTtlMs: 24 * 60 * 60 * 1000,
+      cleanupIntervalMs: 60 * 60 * 1000,
+      now: () => nowMs,
+    });
+
+    await cleanupStore.appendEntries(BUDGET_ID, [
+      entry("budget-1::1::old", {
+        session_id: "session-old",
+        timestamp: isoTimestamp(nowMs - 2 * 24 * 60 * 60 * 1000),
+      }),
+      entry("budget-1::2::shared-old", {
+        session_id: DEFAULT_SESSION_ID,
+        timestamp: isoTimestamp(nowMs - 3 * 24 * 60 * 60 * 1000),
+      }),
+      entry("budget-1::3::fresh", {
+        session_id: "session-fresh",
+        timestamp: isoTimestamp(nowMs - 60 * 60 * 1000),
+      }),
+    ]);
+
+    const entries = await cleanupStore.listEntries(BUDGET_ID, {
+      includeAllSessions: true,
+      sessionId: "any",
+      limit: 100,
+      includeUndone: true,
+    });
+
+    expect(entries.find((e) => e.session_id === "session-old")).toBeUndefined();
+    expect(
+      entries.find((e) => e.session_id === DEFAULT_SESSION_ID),
+    ).toBeDefined();
+    expect(entries.find((e) => e.session_id === "session-fresh")).toBeDefined();
+  });
+
+  it("does not purge within cleanup interval, then purges after interval", async () => {
+    let nowMs = 10_000;
+    const cleanupStore = new UndoStore(dataDir, 200, {
+      sessionTtlMs: 1_000,
+      cleanupIntervalMs: 10_000,
+      now: () => nowMs,
+    });
+
+    await cleanupStore.appendEntries(BUDGET_ID, [
+      entry("budget-1::1::s1", {
+        session_id: "session-one",
+        timestamp: isoTimestamp(nowMs),
+      }),
+    ]);
+
+    nowMs = 15_000;
+    await cleanupStore.appendEntries(BUDGET_ID, [
+      entry("budget-1::2::s2", {
+        session_id: "session-two",
+        timestamp: isoTimestamp(nowMs),
+      }),
+    ]);
+
+    const beforeCleanup = await cleanupStore.listEntries(BUDGET_ID, {
+      includeAllSessions: true,
+      sessionId: "any",
+      limit: 100,
+      includeUndone: true,
+    });
+    expect(
+      beforeCleanup.find((e) => e.session_id === "session-one"),
+    ).toBeDefined();
+
+    nowMs = 21_000;
+    await cleanupStore.appendEntries(BUDGET_ID, [
+      entry("budget-1::3::s3", {
+        session_id: "session-three",
+        timestamp: isoTimestamp(nowMs),
+      }),
+    ]);
+
+    const afterCleanup = await cleanupStore.listEntries(BUDGET_ID, {
+      includeAllSessions: true,
+      sessionId: "any",
+      limit: 100,
+      includeUndone: true,
+    });
+    expect(
+      afterCleanup.find((e) => e.session_id === "session-one"),
+    ).toBeUndefined();
+    expect(
+      afterCleanup.find((e) => e.session_id === "session-three"),
+    ).toBeDefined();
+  });
+
+  it("does not purge a session with only undone entries when it is still within TTL", async () => {
+    let nowMs = Date.parse("2024-01-03T00:00:00.000Z");
+    const cleanupStore = new UndoStore(dataDir, 200, {
+      sessionTtlMs: 24 * 60 * 60 * 1000,
+      cleanupIntervalMs: 60 * 60 * 1000,
+      now: () => nowMs,
+    });
+
+    await cleanupStore.appendEntries(BUDGET_ID, [
+      entry("budget-1::1::undone", {
+        session_id: "session-undone",
+        status: "undone",
+        timestamp: isoTimestamp(nowMs - 30 * 60 * 1000),
+      }),
+    ]);
+
+    nowMs += 2 * 60 * 60 * 1000;
+    await cleanupStore.appendEntries(BUDGET_ID, [
+      entry("budget-1::2::trigger", {
+        session_id: "session-trigger",
+        timestamp: isoTimestamp(nowMs),
+      }),
+    ]);
+
+    const entries = await cleanupStore.listEntries(BUDGET_ID, {
+      includeAllSessions: true,
+      sessionId: "any",
+      limit: 100,
+      includeUndone: true,
+    });
+    expect(
+      entries.find((e) => e.session_id === "session-undone"),
+    ).toBeDefined();
+  });
+
+  it("returns early for empty append without writing history files", async () => {
+    const cleanupStore = new UndoStore(dataDir);
+    await cleanupStore.appendEntries(BUDGET_ID, []);
+
+    const historyDir = join(dataDir, "history");
+    await expect(readdir(historyDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes orphaned id mappings when expired sessions are purged", async () => {
+    let nowMs = Date.parse("2024-01-03T00:00:00.000Z");
+    const cleanupStore = new UndoStore(dataDir, 200, {
+      sessionTtlMs: 24 * 60 * 60 * 1000,
+      cleanupIntervalMs: 60 * 60 * 1000,
+      now: () => nowMs,
+    });
+
+    await cleanupStore.appendEntries(BUDGET_ID, [
+      entry("budget-1::1::old", {
+        session_id: "session-old",
+        timestamp: isoTimestamp(nowMs - 2 * 24 * 60 * 60 * 1000),
+        undo_action: {
+          entity_id: "old-entity",
+        },
+      }),
+      entry("budget-1::2::fresh", {
+        session_id: "session-fresh",
+        timestamp: isoTimestamp(nowMs - 60 * 60 * 1000),
+        undo_action: {
+          entity_id: "fresh-entity",
+        },
+      }),
+    ]);
+
+    await cleanupStore.updateIdMappings(BUDGET_ID, "old-entity", "old-target");
+    await cleanupStore.updateIdMappings(
+      BUDGET_ID,
+      "fresh-entity",
+      "fresh-target",
+    );
+
+    nowMs += 2 * 60 * 60 * 1000;
+    await cleanupStore.appendEntries(BUDGET_ID, [
+      entry("budget-1::3::trigger", {
+        session_id: "session-trigger",
+        timestamp: isoTimestamp(nowMs),
+      }),
+    ]);
+
+    expect(await cleanupStore.resolveMappedId(BUDGET_ID, "old-entity")).toBe(
+      "old-entity",
+    );
+    expect(await cleanupStore.resolveMappedId(BUDGET_ID, "fresh-entity")).toBe(
+      "fresh-target",
+    );
   });
 });
 

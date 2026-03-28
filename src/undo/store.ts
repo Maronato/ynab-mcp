@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { DEFAULT_SESSION_ID } from "../shared/session.js";
 import type { UndoEntry, UndoHistoryFile } from "./types.js";
 
 const DEFAULT_HISTORY: UndoHistoryFile = {
@@ -11,6 +12,8 @@ const DEFAULT_HISTORY: UndoHistoryFile = {
 const LOCK_RETRY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
 const LOCK_STALE_MS = 30_000;
+const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 interface ListHistoryOptions {
   sessionId: string;
@@ -19,16 +22,38 @@ interface ListHistoryOptions {
   includeAllSessions?: boolean;
 }
 
+interface UndoStoreOptions {
+  sessionTtlMs?: number;
+  cleanupIntervalMs?: number;
+  now?: () => number;
+}
+
 export class UndoStore {
   private readonly historyDirectory: string;
 
   private readonly maxEntriesPerBudget: number;
 
+  private readonly sessionTtlMs: number;
+
+  private readonly cleanupIntervalMs: number;
+
+  private readonly now: () => number;
+
+  private lastCleanupMs = 0;
+
   private readonly budgetLocks = new Map<string, Promise<void>>();
 
-  constructor(dataDirectory: string, maxEntriesPerBudget = 200) {
+  constructor(
+    dataDirectory: string,
+    maxEntriesPerBudget = 200,
+    options: UndoStoreOptions = {},
+  ) {
     this.historyDirectory = join(dataDirectory, "history");
     this.maxEntriesPerBudget = maxEntriesPerBudget;
+    this.sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
+    this.cleanupIntervalMs =
+      options.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
+    this.now = options.now ?? (() => Date.now());
   }
 
   async appendEntries(budgetId: string, entries: UndoEntry[]): Promise<void> {
@@ -43,6 +68,13 @@ export class UndoStore {
         this.maxEntriesPerBudget,
       );
       this.pruneIdMappings(current);
+
+      const currentTime = this.now();
+      if (this.shouldRunCleanup(currentTime)) {
+        this.purgeExpiredSessions(current, currentTime);
+        this.lastCleanupMs = currentTime;
+      }
+
       await this.writeBudgetHistoryUnsafe(budgetId, current);
     });
   }
@@ -210,6 +242,50 @@ export class UndoStore {
         delete history.id_mappings[key];
       }
     }
+  }
+
+  private shouldRunCleanup(currentTime: number): boolean {
+    return currentTime - this.lastCleanupMs >= this.cleanupIntervalMs;
+  }
+
+  private purgeExpiredSessions(
+    history: UndoHistoryFile,
+    currentTime: number,
+  ): void {
+    const expiryCutoff = currentTime - this.sessionTtlMs;
+    const newestBySession = new Map<string, number>();
+
+    for (const entry of history.entries) {
+      if (entry.session_id === DEFAULT_SESSION_ID) {
+        continue;
+      }
+
+      const timestamp = Date.parse(entry.timestamp);
+      if (Number.isNaN(timestamp)) {
+        continue;
+      }
+
+      const currentNewest = newestBySession.get(entry.session_id);
+      if (currentNewest === undefined || timestamp > currentNewest) {
+        newestBySession.set(entry.session_id, timestamp);
+      }
+    }
+
+    const expiredSessions = new Set<string>();
+    for (const [sessionId, newestTimestamp] of newestBySession.entries()) {
+      if (newestTimestamp < expiryCutoff) {
+        expiredSessions.add(sessionId);
+      }
+    }
+
+    if (expiredSessions.size === 0) {
+      return;
+    }
+
+    history.entries = history.entries.filter(
+      (entry) => !expiredSessions.has(entry.session_id),
+    );
+    this.pruneIdMappings(history);
   }
 
   private async ensureHistoryDirectory(): Promise<void> {
