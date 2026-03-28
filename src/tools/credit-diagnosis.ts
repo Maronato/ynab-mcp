@@ -4,11 +4,7 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import {
-  type CurrencyFormatLike,
-  formatCurrency,
-  milliunitsToCurrency,
-} from "../ynab/format.js";
+import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
 const diagnoseCreditCardDebtSchema = z.object({
   budget_id: z
@@ -170,36 +166,39 @@ export function registerCreditDiagnosisTools(
           const debtSources: DebtSource[] = [];
 
           if (hasDebt) {
-            // Get month details for each lookback month
-            for (const month of months) {
-              try {
-                const monthDetail = await context.ynabClient.getMonthSummary(
-                  resolvedBudgetId,
-                  month,
-                );
+            // Fetch all lookback months in parallel
+            const monthResults = await Promise.all(
+              months.map((month) =>
+                context.ynabClient
+                  .getMonthSummary(resolvedBudgetId, month)
+                  .then((detail) => ({ month, detail }))
+                  .catch(() => null),
+              ),
+            );
 
-                // Check each category in this month for negative balance (overspending)
-                for (const cat of monthDetail.categories) {
-                  if (cat.deleted || cat.hidden) continue;
-                  // Skip the credit card payment categories themselves
-                  if (paymentCategoryById.has(cat.id)) continue;
+            for (const result of monthResults) {
+              if (!result) continue;
+              const { month, detail } = result;
 
-                  if (cat.balance < 0) {
-                    // This category was overspent in this month
-                    const overspent = Math.abs(cat.balance);
-                    debtSources.push({
-                      month,
-                      category_name: cat.name,
-                      overspent_amount: milliunitsToCurrency(overspent),
-                      overspent_display: formatCurrency(
-                        overspent,
-                        currencyFormat,
-                      ),
-                    });
-                  }
+              // Check each category in this month for negative balance (overspending)
+              for (const cat of detail.categories) {
+                if (cat.deleted || cat.hidden) continue;
+                // Skip the credit card payment categories themselves
+                if (paymentCategoryById.has(cat.id)) continue;
+
+                if (cat.balance < 0) {
+                  // This category was overspent in this month
+                  const overspent = Math.abs(cat.balance);
+                  debtSources.push({
+                    month,
+                    category_name: cat.name,
+                    overspent_amount: milliunitsToCurrency(overspent),
+                    overspent_display: formatCurrency(
+                      overspent,
+                      currencyFormat,
+                    ),
+                  });
                 }
-              } catch {
-                // Month may not exist (budget not that old), skip
               }
             }
 
@@ -212,7 +211,7 @@ export function registerCreditDiagnosisTools(
               setBudgetActions.push({
                 category_id: paymentCat.id,
                 month: currentMonth,
-                budgeted: gap,
+                budgeted: milliunitsToCurrency(gap),
               });
             }
           }

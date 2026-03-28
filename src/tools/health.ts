@@ -4,11 +4,7 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import {
-  type CurrencyFormatLike,
-  formatCurrency,
-  milliunitsToCurrency,
-} from "../ynab/format.js";
+import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
 const INTERNAL_GROUP_NAMES = new Set([
   "Internal Master Category",
@@ -111,6 +107,7 @@ export function registerHealthTools(
           balance: number;
           balance_display: string;
           type: "cash" | "credit";
+          _balance_milliunits: number;
         }> = [];
         const underfundedCategories: Array<{
           id: string;
@@ -136,11 +133,6 @@ export function registerHealthTools(
             }
           }
         }
-
-        // Build a set of credit card account IDs for determining cash vs credit overspend
-        const creditCardAccountIds = new Set(
-          creditCardAccounts.map((a) => a.id),
-        );
 
         for (const group of categoryGroups) {
           if (INTERNAL_GROUP_NAMES.has(group.name)) continue;
@@ -171,6 +163,7 @@ export function registerHealthTools(
                 balance: milliunitsToCurrency(cat.balance),
                 balance_display: formatCurrency(cat.balance, cf),
                 type: isCreditOverspend ? "credit" : "cash",
+                _balance_milliunits: cat.balance,
               });
               totalCashOverspend += Math.abs(cat.balance);
             }
@@ -215,6 +208,7 @@ export function registerHealthTools(
           payment_available_display: string;
           gap: number;
           gap_display: string;
+          _gap_milliunits: number;
         }> = [];
 
         for (const account of creditCardAccounts) {
@@ -235,6 +229,7 @@ export function registerHealthTools(
               payment_available_display: formatCurrency(available, cf),
               gap: milliunitsToCurrency(gap),
               gap_display: formatCurrency(gap, cf),
+              _gap_milliunits: gap,
             });
           }
         }
@@ -242,12 +237,12 @@ export function registerHealthTools(
         // If there are credit card gaps, re-classify some overspending as credit
         if (creditCardGaps.length > 0) {
           let creditOverspendPool = creditCardGaps.reduce(
-            (sum, g) => sum + Math.round(g.gap * 1000),
+            (sum, g) => sum + g._gap_milliunits,
             0,
           );
           for (const cat of overspentCategories) {
             if (creditOverspendPool <= 0) break;
-            const absBalance = Math.round(Math.abs(cat.balance) * 1000);
+            const absBalance = Math.abs(cat._balance_milliunits);
             const creditPortion = Math.min(absBalance, creditOverspendPool);
             if (creditPortion === absBalance) {
               cat.type = "credit";
@@ -362,7 +357,9 @@ export function registerHealthTools(
             total_cash_display: formatCurrency(totalCashOverspend, cf),
             total_credit: milliunitsToCurrency(totalCreditOverspend),
             total_credit_display: formatCurrency(totalCreditOverspend, cf),
-            categories: overspentCategories,
+            categories: overspentCategories.map(
+              ({ _balance_milliunits: _, ...rest }) => rest,
+            ),
           },
           underfunded_targets: {
             total: milliunitsToCurrency(totalUnderfunded),
@@ -370,7 +367,9 @@ export function registerHealthTools(
             count: underfundedCategories.length,
             top_underfunded: underfundedCategories.slice(0, 10),
           },
-          credit_card_gaps: creditCardGaps,
+          credit_card_gaps: creditCardGaps.map(
+            ({ _gap_milliunits: _, ...rest }) => rest,
+          ),
           uncategorized_count: uncategorizedCount,
           unapproved_count: unapprovedCount,
           age_of_money: monthSummary.age_of_money ?? null,

@@ -4,11 +4,7 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import {
-  type CurrencyFormatLike,
-  formatCurrency,
-  milliunitsToCurrency,
-} from "../ynab/format.js";
+import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 import type { ScheduledFrequency } from "../ynab/types.js";
 
 const detectRecurringChargesSchema = z.object({
@@ -347,7 +343,7 @@ export function registerRecurringTools(
             return {
               account_id: group.account_id,
               date: sub.next_expected_date,
-              amount: -Math.round(sub.current_amount * 1000),
+              amount: -sub.current_amount,
               payee_id: sub.payee_id,
               category_id: sub.category_id,
               frequency,
