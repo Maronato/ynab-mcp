@@ -1,12 +1,16 @@
 import * as ynab from "ynab";
+import { CacheManager } from "./cache.js";
 import { extractErrorMessage, isNotFoundError } from "./errors.js";
 import {
+  asCurrency,
+  asMilliunits,
   currencyToMilliunits,
   milliunitsToCurrency,
   snapshotScheduledTransaction,
   snapshotTransaction,
 } from "./format.js";
 import { RateLimiter } from "./rate-limiter.js";
+import { filterAndSortTransactions } from "./search.js";
 import type {
   CategoryBudgetAssignment,
   CreateScheduledTransactionInput,
@@ -18,9 +22,6 @@ import type {
   UpdateScheduledTransactionInput,
   UpdateTransactionInput,
 } from "./types.js";
-
-/** Default TTL: 1 hour. External changes are picked up after this period. */
-const CACHE_TTL_MS = 60 * 60 * 1000;
 
 /** Default timeout for individual YNAB API requests. */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -92,53 +93,6 @@ const KNOWN_SUB_APIS = new Set([
   "months",
 ]);
 
-interface SyncDeltas {
-  added: number;
-  updated: number;
-  deleted: number;
-}
-
-interface CollectionCache<T> {
-  byId: Map<string, T>;
-  serverKnowledge?: number;
-  stale: boolean;
-  lastRefreshedAt: number;
-  lastDeltas?: SyncDeltas;
-}
-
-interface TransactionCache {
-  byId: Map<string, ynab.TransactionDetail>;
-  coveredSinceDate: string;
-  serverKnowledge?: number;
-  stale: boolean;
-  lastRefreshedAt: number;
-  lastDeltas?: SyncDeltas;
-}
-
-interface SimpleCache<T> {
-  data: T;
-  lastRefreshedAt: number;
-}
-
-type StaleableCollectionKey =
-  | "accounts"
-  | "categories"
-  | "payees"
-  | "scheduledTransactions"
-  | "transactions";
-
-interface BudgetCache {
-  accounts: CollectionCache<ynab.Account>;
-  categories: CollectionCache<ynab.Category>;
-  payees: CollectionCache<ynab.Payee>;
-  scheduledTransactions: CollectionCache<ynab.ScheduledTransactionDetail>;
-  transactions: TransactionCache;
-  categoryGroups: Map<string, ynab.CategoryGroupWithCategories>;
-  settings?: SimpleCache<ynab.PlanSettings>;
-  monthSummaries: Map<string, SimpleCache<ynab.MonthDetail>>;
-  monthCategories: Map<string, SimpleCache<ynab.Category>>;
-}
-
 interface GetAccountsOptions {
   type?: string;
   onBudget?: boolean;
@@ -173,9 +127,7 @@ const DEFAULT_CATEGORIES_OPTIONS: Required<
 export class YnabClient {
   private readonly api: ynab.API;
 
-  private readonly budgetCaches = new Map<string, BudgetCache>();
-
-  private plansCache: SimpleCache<ynab.PlanSummary[]> | undefined;
+  private readonly cache = new CacheManager();
 
   private resolvedLastUsedId: string | null = null;
 
@@ -302,21 +254,21 @@ export class YnabClient {
   }
 
   async listBudgets(): Promise<ynab.PlanSummary[]> {
-    if (this.isSimpleCacheValid(this.plansCache)) {
-      return this.plansCache.data;
+    if (this.cache.isSimpleCacheValid(this.cache.plansCache)) {
+      return this.cache.plansCache.data;
     }
 
     const response = await this.api.plans.getPlans();
     const plans = response.data.plans;
-    this.plansCache = { data: plans, lastRefreshedAt: Date.now() };
+    this.cache.plansCache = { data: plans, lastRefreshedAt: Date.now() };
     return plans;
   }
 
   async getBudgetSettings(budgetId?: string): Promise<ynab.PlanSettings> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
-    const budgetCache = this.getBudgetCache(resolvedBudgetId);
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
 
-    if (this.isSimpleCacheValid(budgetCache.settings)) {
+    if (this.cache.isSimpleCacheValid(budgetCache.settings)) {
       return budgetCache.settings.data;
     }
 
@@ -366,22 +318,22 @@ export class YnabClient {
       budget_id: resolvedBudgetId,
       month: month.month,
       net_worth_milliunits: netWorthMilliunits,
-      net_worth: milliunitsToCurrency(netWorthMilliunits),
+      net_worth: milliunitsToCurrency(asMilliunits(netWorthMilliunits)),
       income_milliunits: month.income,
-      income: milliunitsToCurrency(month.income),
+      income: milliunitsToCurrency(asMilliunits(month.income)),
       budgeted_milliunits: month.budgeted,
-      budgeted: milliunitsToCurrency(month.budgeted),
+      budgeted: milliunitsToCurrency(asMilliunits(month.budgeted)),
       activity_milliunits: month.activity,
-      activity: milliunitsToCurrency(month.activity),
+      activity: milliunitsToCurrency(asMilliunits(month.activity)),
       to_be_budgeted_milliunits: month.to_be_budgeted,
-      to_be_budgeted: milliunitsToCurrency(month.to_be_budgeted),
+      to_be_budgeted: milliunitsToCurrency(asMilliunits(month.to_be_budgeted)),
       age_of_money: month.age_of_money ?? null,
       overspent_category_count: overspentCategoryCount,
       account_summary_by_type: [...accountsByType.values()].map((entry) => ({
         type: entry.type,
         count: entry.count,
         total_balance_milliunits: entry.total_balance,
-        total_balance: milliunitsToCurrency(entry.total_balance),
+        total_balance: milliunitsToCurrency(asMilliunits(entry.total_balance)),
       })),
     };
   }
@@ -434,7 +386,7 @@ export class YnabClient {
     if (!mergedOptions.month || mergedOptions.month === "current") {
       await this.refreshCategories(resolvedBudgetId);
       const categoryGroups =
-        this.getBudgetCache(resolvedBudgetId).categoryGroups;
+        this.cache.getBudgetCache(resolvedBudgetId).categoryGroups;
       const entries = [...categoryGroups.values()]
         .filter((group) => !group.deleted)
         .filter((group) =>
@@ -486,9 +438,9 @@ export class YnabClient {
     month = "current",
   ): Promise<ynab.MonthDetail> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
-    const budgetCache = this.getBudgetCache(resolvedBudgetId);
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
     const cached = budgetCache.monthSummaries.get(month);
-    if (this.isSimpleCacheValid(cached)) {
+    if (this.cache.isSimpleCacheValid(cached)) {
       return cached.data;
     }
 
@@ -589,134 +541,10 @@ export class YnabClient {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     await this.ensureTransactionsCovered(resolvedBudgetId, query.since_date);
 
-    const cache = this.getBudgetCache(resolvedBudgetId);
-    const source = [...cache.transactions.byId.values()];
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
+    const source = [...budgetCache.transactions.byId.values()];
 
-    const minimum =
-      query.amount_min !== undefined
-        ? currencyToMilliunits(query.amount_min)
-        : undefined;
-    const maximum =
-      query.amount_max !== undefined
-        ? currencyToMilliunits(query.amount_max)
-        : undefined;
-    const memoContains = query.memo_contains?.toLowerCase();
-    const payeeNameContains = query.payee_name_contains?.toLowerCase();
-    const categoryNameContains = query.category_name_contains?.toLowerCase();
-
-    const filtered = source.filter((transaction) => {
-      if (query.since_date && transaction.date < query.since_date) {
-        return false;
-      }
-
-      if (query.until_date && transaction.date > query.until_date) {
-        return false;
-      }
-
-      if (query.account_id && transaction.account_id !== query.account_id) {
-        return false;
-      }
-
-      if (query.category_id && transaction.category_id !== query.category_id) {
-        const subMatch = transaction.subtransactions?.some(
-          (sub) => !sub.deleted && sub.category_id === query.category_id,
-        );
-        if (!subMatch) return false;
-      }
-
-      if (query.payee_id && transaction.payee_id !== query.payee_id) {
-        return false;
-      }
-
-      if (minimum !== undefined && transaction.amount < minimum) {
-        return false;
-      }
-
-      if (maximum !== undefined && transaction.amount > maximum) {
-        return false;
-      }
-
-      if (
-        memoContains &&
-        !(transaction.memo ?? "").toLowerCase().includes(memoContains)
-      ) {
-        return false;
-      }
-
-      if (
-        payeeNameContains &&
-        !(transaction.payee_name ?? "")
-          .toLowerCase()
-          .includes(payeeNameContains)
-      ) {
-        return false;
-      }
-
-      if (
-        categoryNameContains &&
-        !(transaction.category_name ?? "")
-          .toLowerCase()
-          .includes(categoryNameContains)
-      ) {
-        const subNameMatch = transaction.subtransactions?.some(
-          (sub) =>
-            !sub.deleted &&
-            (sub.category_name ?? "")
-              .toLowerCase()
-              .includes(categoryNameContains),
-        );
-        if (!subNameMatch) return false;
-      }
-
-      if (
-        query.flag_color !== undefined &&
-        transaction.flag_color !== query.flag_color
-      ) {
-        return false;
-      }
-
-      if (query.exclude_transfers && transaction.transfer_account_id != null) {
-        return false;
-      }
-
-      if (
-        query.cleared !== undefined &&
-        transaction.cleared !== query.cleared
-      ) {
-        return false;
-      }
-
-      if (
-        query.approved !== undefined &&
-        transaction.approved !== query.approved
-      ) {
-        return false;
-      }
-
-      if (query.type === "uncategorized" && transaction.category_id != null) {
-        const hasUncategorizedSub = transaction.subtransactions?.some(
-          (sub) => !sub.deleted && sub.category_id == null,
-        );
-        if (!hasUncategorizedSub) return false;
-      }
-      if (query.type === "unapproved" && transaction.approved) {
-        return false;
-      }
-
-      return true;
-    });
-
-    const sortDirection = query.sort ?? "date_desc";
-    const sorted = [...filtered].sort((left, right) => {
-      if (sortDirection === "date_asc") {
-        return left.date.localeCompare(right.date);
-      }
-
-      return right.date.localeCompare(left.date);
-    });
-
-    const limit = query.limit ?? 50;
-    return limit > 0 ? sorted.slice(0, limit) : sorted;
+    return filterAndSortTransactions(source, query);
   }
 
   async getTransactionById(
@@ -724,14 +552,14 @@ export class YnabClient {
     transactionId: string,
   ): Promise<ynab.TransactionDetail | null> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
-    const cache = this.getBudgetCache(resolvedBudgetId);
-    const txCache = cache.transactions;
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
+    const txCache = budgetCache.transactions;
 
     // Delta refresh only — never trigger a full re-fetch for a single-ID
     // lookup. ensureTransactionsCovered(budgetId) with no sinceDate would
     // compare coveredSinceDate <= "", which is false for any populated
     // cache, causing an unnecessary full re-fetch of ALL transactions.
-    if (txCache.serverKnowledge != null && this.needsRefresh(txCache)) {
+    if (txCache.serverKnowledge != null && this.cache.needsRefresh(txCache)) {
       await this.refreshTransactions(resolvedBudgetId);
     }
 
@@ -760,7 +588,7 @@ export class YnabClient {
       transactions: transactions.map((transaction) => ({
         account_id: transaction.account_id,
         date: transaction.date,
-        amount: currencyToMilliunits(transaction.amount),
+        amount: currencyToMilliunits(asCurrency(transaction.amount)),
         payee_id: transaction.payee_id ?? undefined,
         payee_name: transaction.payee_name ?? undefined,
         category_id: transaction.category_id ?? undefined,
@@ -774,7 +602,7 @@ export class YnabClient {
           | null
           | undefined,
         subtransactions: transaction.subtransactions?.map((sub) => ({
-          amount: currencyToMilliunits(sub.amount),
+          amount: currencyToMilliunits(asCurrency(sub.amount)),
           payee_id: sub.payee_id ?? undefined,
           payee_name: sub.payee_name ?? undefined,
           category_id: sub.category_id ?? undefined,
@@ -789,13 +617,13 @@ export class YnabClient {
     );
 
     const created = response.data.transactions ?? [];
-    this.markCollectionsStale(resolvedBudgetId, [
+    this.cache.markCollectionsStale(resolvedBudgetId, [
       "accounts",
       "payees",
       "categories",
     ]);
-    this.invalidateMonthCaches(resolvedBudgetId);
-    this.optimisticUpdateTransactions(resolvedBudgetId, created);
+    this.cache.invalidateMonthCaches(resolvedBudgetId);
+    this.cache.optimisticUpdateTransactions(resolvedBudgetId, created);
     return created;
   }
 
@@ -816,7 +644,7 @@ export class YnabClient {
         }),
         ...(transaction.date !== undefined && { date: transaction.date }),
         ...(transaction.amount !== undefined && {
-          amount: currencyToMilliunits(transaction.amount),
+          amount: currencyToMilliunits(asCurrency(transaction.amount)),
         }),
         ...(transaction.payee_id !== undefined && {
           payee_id: transaction.payee_id,
@@ -839,7 +667,7 @@ export class YnabClient {
         }),
         ...(transaction.subtransactions !== undefined && {
           subtransactions: transaction.subtransactions.map((sub) => ({
-            amount: currencyToMilliunits(sub.amount),
+            amount: currencyToMilliunits(asCurrency(sub.amount)),
             payee_id: sub.payee_id ?? undefined,
             payee_name: sub.payee_name ?? undefined,
             category_id: sub.category_id ?? undefined,
@@ -855,13 +683,13 @@ export class YnabClient {
     );
 
     const updated = response.data.transactions ?? [];
-    this.markCollectionsStale(resolvedBudgetId, [
+    this.cache.markCollectionsStale(resolvedBudgetId, [
       "accounts",
       "payees",
       "categories",
     ]);
-    this.invalidateMonthCaches(resolvedBudgetId);
-    this.optimisticUpdateTransactions(resolvedBudgetId, updated);
+    this.cache.invalidateMonthCaches(resolvedBudgetId);
+    this.cache.optimisticUpdateTransactions(resolvedBudgetId, updated);
     return updated;
   }
 
@@ -894,7 +722,7 @@ export class YnabClient {
           {
             account_id: deleted.account_id,
             date: deleted.date,
-            amount: milliunitsToCurrency(deleted.amount),
+            amount: milliunitsToCurrency(asMilliunits(deleted.amount)),
             payee_id: deleted.payee_id ?? null,
             payee_name: deleted.payee_name ?? null,
             category_id:
@@ -908,7 +736,7 @@ export class YnabClient {
             subtransactions:
               activeSubs && activeSubs.length > 0
                 ? activeSubs.map((sub) => ({
-                    amount: milliunitsToCurrency(sub.amount),
+                    amount: milliunitsToCurrency(asMilliunits(sub.amount)),
                     payee_id: sub.payee_id ?? null,
                     category_id: sub.category_id ?? null,
                     memo: sub.memo ?? null,
@@ -956,9 +784,12 @@ export class YnabClient {
         resolvedBudgetId,
         transactionId,
       );
-      this.markCollectionsStale(resolvedBudgetId, ["accounts", "categories"]);
-      this.invalidateMonthCaches(resolvedBudgetId);
-      this.optimisticRemoveTransaction(resolvedBudgetId, transactionId);
+      this.cache.markCollectionsStale(resolvedBudgetId, [
+        "accounts",
+        "categories",
+      ]);
+      this.cache.invalidateMonthCaches(resolvedBudgetId);
+      this.cache.optimisticRemoveTransaction(resolvedBudgetId, transactionId);
       const deleted = response.data.transaction;
       if (deleted && !options?.skipPhantomFlush) {
         await this.flushSplitPhantoms(resolvedBudgetId, deleted);
@@ -1035,12 +866,12 @@ export class YnabClient {
     scheduledTransactionId: string,
   ): Promise<ynab.ScheduledTransactionDetail | null> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
-    const cache = this.getBudgetCache(resolvedBudgetId);
-    const scheduledCache = cache.scheduledTransactions;
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
+    const scheduledCache = budgetCache.scheduledTransactions;
 
     if (
       scheduledCache.serverKnowledge != null &&
-      this.needsRefresh(scheduledCache)
+      this.cache.needsRefresh(scheduledCache)
     ) {
       await this.refreshScheduledTransactions(resolvedBudgetId);
     }
@@ -1076,7 +907,7 @@ export class YnabClient {
             date: transaction.date,
             amount:
               transaction.amount !== undefined
-                ? currencyToMilliunits(transaction.amount)
+                ? currencyToMilliunits(asCurrency(transaction.amount))
                 : undefined,
             payee_id: transaction.payee_id,
             payee_name: transaction.payee_name,
@@ -1089,8 +920,8 @@ export class YnabClient {
         },
       );
 
-    this.markCollectionsStale(resolvedBudgetId, ["payees", "categories"]);
-    this.optimisticUpdateScheduledTransaction(
+    this.cache.markCollectionsStale(resolvedBudgetId, ["payees", "categories"]);
+    this.cache.optimisticUpdateScheduledTransaction(
       resolvedBudgetId,
       response.data.scheduled_transaction,
     );
@@ -1128,7 +959,7 @@ export class YnabClient {
             date: transaction.date ?? existing.date_first,
             amount:
               transaction.amount !== undefined
-                ? currencyToMilliunits(transaction.amount)
+                ? currencyToMilliunits(asCurrency(transaction.amount))
                 : existing.amount,
             payee_id:
               transaction.payee_id !== undefined
@@ -1157,8 +988,8 @@ export class YnabClient {
         },
       );
 
-    this.markCollectionsStale(resolvedBudgetId, ["payees", "categories"]);
-    this.optimisticUpdateScheduledTransaction(
+    this.cache.markCollectionsStale(resolvedBudgetId, ["payees", "categories"]);
+    this.cache.optimisticUpdateScheduledTransaction(
       resolvedBudgetId,
       response.data.scheduled_transaction,
     );
@@ -1179,8 +1010,8 @@ export class YnabClient {
           scheduledTransactionId,
         );
 
-      this.markCollectionsStale(resolvedBudgetId, ["categories"]);
-      this.optimisticRemoveScheduledTransaction(
+      this.cache.markCollectionsStale(resolvedBudgetId, ["categories"]);
+      this.cache.optimisticRemoveScheduledTransaction(
         resolvedBudgetId,
         scheduledTransactionId,
       );
@@ -1203,13 +1034,13 @@ export class YnabClient {
       assignment.category_id,
       {
         category: {
-          budgeted: currencyToMilliunits(assignment.budgeted),
+          budgeted: currencyToMilliunits(asCurrency(assignment.budgeted)),
         },
       },
     );
 
-    this.markCollectionsStale(resolvedBudgetId, ["categories"]);
-    this.invalidateMonthCaches(resolvedBudgetId);
+    this.cache.markCollectionsStale(resolvedBudgetId, ["categories"]);
+    this.cache.invalidateMonthCaches(resolvedBudgetId);
     return response.data.category;
   }
 
@@ -1229,8 +1060,8 @@ export class YnabClient {
       { category: updates } as ynab.PatchCategoryWrapper,
     );
 
-    this.markCollectionsStale(resolvedBudgetId, ["categories"]);
-    this.invalidateMonthCaches(resolvedBudgetId);
+    this.cache.markCollectionsStale(resolvedBudgetId, ["categories"]);
+    this.cache.invalidateMonthCaches(resolvedBudgetId);
     return response.data.category;
   }
 
@@ -1257,10 +1088,10 @@ export class YnabClient {
     categoryId: string,
   ): Promise<ynab.Category | null> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
-    const budgetCache = this.getBudgetCache(resolvedBudgetId);
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
     const cacheKey = `${month}:${categoryId}`;
     const cached = budgetCache.monthCategories.get(cacheKey);
-    if (this.isSimpleCacheValid(cached)) {
+    if (this.cache.isSimpleCacheValid(cached)) {
       return cached.data;
     }
 
@@ -1302,77 +1133,14 @@ export class YnabClient {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     await this.ensureTransactionsCovered(resolvedBudgetId, sinceDate);
 
-    const cache = this.getBudgetCache(resolvedBudgetId);
-    const transactions = [...cache.transactions.byId.values()];
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
+    const transactions = [...budgetCache.transactions.byId.values()];
 
     return transactions.filter((t) => {
       if (t.date < sinceDate) return false;
       if (untilDate && t.date > untilDate) return false;
       return true;
     });
-  }
-
-  private getBudgetCache(budgetId: string): BudgetCache {
-    const existing = this.budgetCaches.get(budgetId);
-    if (existing) {
-      return existing;
-    }
-
-    const cache: BudgetCache = {
-      accounts: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
-      categories: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
-      payees: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
-      scheduledTransactions: {
-        byId: new Map(),
-        stale: false,
-        lastRefreshedAt: 0,
-      },
-      transactions: {
-        byId: new Map(),
-        coveredSinceDate: "",
-        stale: false,
-        lastRefreshedAt: 0,
-      },
-      categoryGroups: new Map(),
-      monthSummaries: new Map(),
-      monthCategories: new Map(),
-      settings: undefined,
-    };
-
-    this.budgetCaches.set(budgetId, cache);
-    return cache;
-  }
-
-  private markCollectionsStale(
-    budgetId: string,
-    keys: StaleableCollectionKey[],
-  ): void {
-    const cache = this.getBudgetCache(budgetId);
-    for (const key of keys) {
-      cache[key].stale = true;
-    }
-  }
-
-  private invalidateMonthCaches(budgetId: string): void {
-    const cache = this.getBudgetCache(budgetId);
-    cache.monthSummaries.clear();
-    cache.monthCategories.clear();
-  }
-
-  private isSimpleCacheValid<T>(
-    cache: SimpleCache<T> | undefined,
-  ): cache is SimpleCache<T> {
-    return cache != null && Date.now() - cache.lastRefreshedAt <= CACHE_TTL_MS;
-  }
-
-  private needsRefresh(cache: {
-    stale: boolean;
-    lastRefreshedAt: number;
-    serverKnowledge?: number;
-  }): boolean {
-    if (cache.serverKnowledge == null) return true;
-    if (cache.stale) return true;
-    return Date.now() - cache.lastRefreshedAt > CACHE_TTL_MS;
   }
 
   /**
@@ -1387,39 +1155,40 @@ export class YnabClient {
     transactions: { added: number; updated: number; deleted: number };
   }> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
-    const cache = this.getBudgetCache(resolvedBudgetId);
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
 
-    this.plansCache = undefined;
-    cache.settings = undefined;
-    cache.monthSummaries.clear();
-    cache.monthCategories.clear();
+    this.cache.plansCache = undefined;
+    budgetCache.settings = undefined;
+    budgetCache.monthSummaries.clear();
+    budgetCache.monthCategories.clear();
 
-    cache.accounts.stale = true;
-    cache.categories.stale = true;
-    cache.payees.stale = true;
-    cache.scheduledTransactions.stale = true;
-    cache.transactions.stale = true;
+    budgetCache.accounts.stale = true;
+    budgetCache.categories.stale = true;
+    budgetCache.payees.stale = true;
+    budgetCache.scheduledTransactions.stale = true;
+    budgetCache.transactions.stale = true;
 
     await Promise.all([
       this.refreshAccounts(resolvedBudgetId),
       this.refreshCategories(resolvedBudgetId),
       this.refreshPayees(resolvedBudgetId),
       this.refreshScheduledTransactions(resolvedBudgetId),
-      cache.transactions.serverKnowledge != null
+      budgetCache.transactions.serverKnowledge != null
         ? this.refreshTransactions(resolvedBudgetId)
         : this.fullFetchTransactions(
             resolvedBudgetId,
-            cache.transactions.coveredSinceDate,
+            budgetCache.transactions.coveredSinceDate,
           ),
     ]);
 
     const zero = { added: 0, updated: 0, deleted: 0 };
     return {
-      accounts: cache.accounts.lastDeltas ?? zero,
-      categories: cache.categories.lastDeltas ?? zero,
-      payees: cache.payees.lastDeltas ?? zero,
-      scheduled_transactions: cache.scheduledTransactions.lastDeltas ?? zero,
-      transactions: cache.transactions.lastDeltas ?? zero,
+      accounts: budgetCache.accounts.lastDeltas ?? zero,
+      categories: budgetCache.categories.lastDeltas ?? zero,
+      payees: budgetCache.payees.lastDeltas ?? zero,
+      scheduled_transactions:
+        budgetCache.scheduledTransactions.lastDeltas ?? zero,
+      transactions: budgetCache.transactions.lastDeltas ?? zero,
     };
   }
 
@@ -1428,173 +1197,80 @@ export class YnabClient {
   // ---------------------------------------------------------------------------
 
   private async refreshAccounts(budgetId: string): Promise<ynab.Account[]> {
-    const cache = this.getBudgetCache(budgetId);
-    if (!this.needsRefresh(cache.accounts)) {
-      return [...cache.accounts.byId.values()];
+    const budgetCache = this.cache.getBudgetCache(budgetId);
+    if (!this.cache.needsRefresh(budgetCache.accounts)) {
+      return [...budgetCache.accounts.byId.values()];
     }
 
     const response = await this.api.accounts.getAccounts(
       budgetId,
-      cache.accounts.serverKnowledge,
+      budgetCache.accounts.serverKnowledge,
     );
 
-    const deltas = { added: 0, updated: 0, deleted: 0 };
-    cache.accounts.serverKnowledge = response.data.server_knowledge;
-    for (const account of response.data.accounts) {
-      if (account.deleted) {
-        if (cache.accounts.byId.delete(account.id)) deltas.deleted++;
-      } else if (cache.accounts.byId.has(account.id)) {
-        cache.accounts.byId.set(account.id, account);
-        deltas.updated++;
-      } else {
-        cache.accounts.byId.set(account.id, account);
-        deltas.added++;
-      }
-    }
-    cache.accounts.stale = false;
-    cache.accounts.lastRefreshedAt = Date.now();
-    cache.accounts.lastDeltas = deltas;
-
-    return [...cache.accounts.byId.values()];
+    return this.cache.applyAccountDeltas(
+      budgetId,
+      response.data.accounts,
+      response.data.server_knowledge,
+    );
   }
 
   private async refreshCategories(
     budgetId: string,
   ): Promise<Array<ynab.CategoryGroupWithCategories>> {
-    const cache = this.getBudgetCache(budgetId);
-    if (!this.needsRefresh(cache.categories)) {
-      return [...cache.categoryGroups.values()];
+    const budgetCache = this.cache.getBudgetCache(budgetId);
+    if (!this.cache.needsRefresh(budgetCache.categories)) {
+      return [...budgetCache.categoryGroups.values()];
     }
-
-    const isDelta = cache.categories.serverKnowledge != null;
 
     const response = await this.api.categories.getCategories(
       budgetId,
-      cache.categories.serverKnowledge,
+      budgetCache.categories.serverKnowledge,
     );
 
-    const deltas = { added: 0, updated: 0, deleted: 0 };
-    cache.categories.serverKnowledge = response.data.server_knowledge;
-    for (const group of response.data.category_groups) {
-      if (group.deleted) {
-        cache.categoryGroups.delete(group.id);
-      } else if (!isDelta) {
-        cache.categoryGroups.set(group.id, group);
-      } else {
-        const existing = cache.categoryGroups.get(group.id);
-        cache.categoryGroups.set(group.id, {
-          ...group,
-          categories: existing?.categories ?? group.categories,
-        });
-      }
-
-      for (const category of group.categories) {
-        if (category.deleted) {
-          if (cache.categories.byId.delete(category.id)) deltas.deleted++;
-        } else if (cache.categories.byId.has(category.id)) {
-          cache.categories.byId.set(category.id, category);
-          deltas.updated++;
-        } else {
-          cache.categories.byId.set(category.id, category);
-          deltas.added++;
-        }
-      }
-    }
-
-    if (isDelta) {
-      // Rebuild each group's categories array from the authoritative byId map.
-      // Delta responses only include changed categories, so the group objects
-      // from the API have partial category lists. categories.byId is always
-      // complete and correctly maintained, so we use it as the source of truth.
-      const categoriesByGroup = new Map<string, ynab.Category[]>();
-      for (const category of cache.categories.byId.values()) {
-        const arr = categoriesByGroup.get(category.category_group_id);
-        if (arr) {
-          arr.push(category);
-        } else {
-          categoriesByGroup.set(category.category_group_id, [category]);
-        }
-      }
-      for (const [groupId, group] of cache.categoryGroups) {
-        cache.categoryGroups.set(groupId, {
-          ...group,
-          categories: categoriesByGroup.get(groupId) ?? [],
-        });
-      }
-    }
-
-    cache.categories.stale = false;
-    cache.categories.lastRefreshedAt = Date.now();
-    cache.categories.lastDeltas = deltas;
-
-    return [...cache.categoryGroups.values()];
+    return this.cache.applyCategoryDeltas(
+      budgetId,
+      response.data.category_groups,
+      response.data.server_knowledge,
+    );
   }
 
   private async refreshPayees(budgetId: string): Promise<ynab.Payee[]> {
-    const cache = this.getBudgetCache(budgetId);
-    if (!this.needsRefresh(cache.payees)) {
-      return [...cache.payees.byId.values()];
+    const budgetCache = this.cache.getBudgetCache(budgetId);
+    if (!this.cache.needsRefresh(budgetCache.payees)) {
+      return [...budgetCache.payees.byId.values()];
     }
 
     const response = await this.api.payees.getPayees(
       budgetId,
-      cache.payees.serverKnowledge,
+      budgetCache.payees.serverKnowledge,
     );
 
-    const deltas = { added: 0, updated: 0, deleted: 0 };
-    cache.payees.serverKnowledge = response.data.server_knowledge;
-    for (const payee of response.data.payees) {
-      if (payee.deleted) {
-        if (cache.payees.byId.delete(payee.id)) deltas.deleted++;
-      } else if (cache.payees.byId.has(payee.id)) {
-        cache.payees.byId.set(payee.id, payee);
-        deltas.updated++;
-      } else {
-        cache.payees.byId.set(payee.id, payee);
-        deltas.added++;
-      }
-    }
-    cache.payees.stale = false;
-    cache.payees.lastRefreshedAt = Date.now();
-    cache.payees.lastDeltas = deltas;
-
-    return [...cache.payees.byId.values()];
+    return this.cache.applyPayeeDeltas(
+      budgetId,
+      response.data.payees,
+      response.data.server_knowledge,
+    );
   }
 
   private async refreshScheduledTransactions(
     budgetId: string,
   ): Promise<ynab.ScheduledTransactionDetail[]> {
-    const cache = this.getBudgetCache(budgetId);
-    if (!this.needsRefresh(cache.scheduledTransactions)) {
-      return [...cache.scheduledTransactions.byId.values()];
+    const budgetCache = this.cache.getBudgetCache(budgetId);
+    if (!this.cache.needsRefresh(budgetCache.scheduledTransactions)) {
+      return [...budgetCache.scheduledTransactions.byId.values()];
     }
 
     const response =
       await this.api.scheduledTransactions.getScheduledTransactions(
         budgetId,
-        cache.scheduledTransactions.serverKnowledge,
+        budgetCache.scheduledTransactions.serverKnowledge,
       );
 
-    const deltas = { added: 0, updated: 0, deleted: 0 };
-    cache.scheduledTransactions.serverKnowledge =
-      response.data.server_knowledge;
-    for (const transaction of response.data.scheduled_transactions) {
-      if (transaction.deleted) {
-        if (cache.scheduledTransactions.byId.delete(transaction.id))
-          deltas.deleted++;
-      } else if (cache.scheduledTransactions.byId.has(transaction.id)) {
-        cache.scheduledTransactions.byId.set(transaction.id, transaction);
-        deltas.updated++;
-      } else {
-        cache.scheduledTransactions.byId.set(transaction.id, transaction);
-        deltas.added++;
-      }
-    }
-    cache.scheduledTransactions.stale = false;
-    cache.scheduledTransactions.lastRefreshedAt = Date.now();
-    cache.scheduledTransactions.lastDeltas = deltas;
-
-    return [...cache.scheduledTransactions.byId.values()];
+    return this.cache.applyScheduledTransactionDeltas(
+      budgetId,
+      response.data.scheduled_transactions,
+      response.data.server_knowledge,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1611,8 +1287,8 @@ export class YnabClient {
     budgetId: string,
     sinceDate?: string,
   ): Promise<void> {
-    const cache = this.getBudgetCache(budgetId);
-    const txCache = cache.transactions;
+    const budgetCache = this.cache.getBudgetCache(budgetId);
+    const txCache = budgetCache.transactions;
     const effectiveSinceDate = sinceDate ?? "";
 
     const isCovered =
@@ -1625,7 +1301,7 @@ export class YnabClient {
       return;
     }
 
-    if (this.needsRefresh(txCache)) {
+    if (this.cache.needsRefresh(txCache)) {
       await this.refreshTransactions(budgetId);
     }
   }
@@ -1635,51 +1311,23 @@ export class YnabClient {
     budgetId: string,
     sinceDate: string,
   ): Promise<void> {
-    const cache = this.getBudgetCache(budgetId);
-    const previousTransactions = new Map(cache.transactions.byId);
     const response = await this.api.transactions.getTransactions(
       budgetId,
       sinceDate || undefined,
     );
 
-    const nextTransactions = new Map<string, ynab.TransactionDetail>();
-    for (const tx of response.data.transactions) {
-      if (!tx.deleted) {
-        nextTransactions.set(tx.id, tx);
-      }
-    }
-
-    let added = 0;
-    let updated = 0;
-    let deleted = 0;
-    for (const id of nextTransactions.keys()) {
-      if (previousTransactions.has(id)) {
-        updated++;
-      } else {
-        added++;
-      }
-    }
-    for (const id of previousTransactions.keys()) {
-      if (!nextTransactions.has(id)) {
-        deleted++;
-      }
-    }
-
-    cache.transactions.byId.clear();
-    for (const [id, tx] of nextTransactions) {
-      cache.transactions.byId.set(id, tx);
-    }
-    cache.transactions.coveredSinceDate = sinceDate;
-    cache.transactions.serverKnowledge = response.data.server_knowledge;
-    cache.transactions.stale = false;
-    cache.transactions.lastRefreshedAt = Date.now();
-    cache.transactions.lastDeltas = { added, updated, deleted };
+    this.cache.applyFullTransactionFetch(
+      budgetId,
+      response.data.transactions,
+      sinceDate,
+      response.data.server_knowledge,
+    );
   }
 
   /** Delta refresh using stored SK + coveredSinceDate. */
   private async refreshTransactions(budgetId: string): Promise<void> {
-    const cache = this.getBudgetCache(budgetId);
-    const txCache = cache.transactions;
+    const budgetCache = this.cache.getBudgetCache(budgetId);
+    const txCache = budgetCache.transactions;
 
     const response = await this.api.transactions.getTransactions(
       budgetId,
@@ -1688,65 +1336,10 @@ export class YnabClient {
       txCache.serverKnowledge,
     );
 
-    const deltas = { added: 0, updated: 0, deleted: 0 };
-    for (const tx of response.data.transactions) {
-      if (tx.deleted) {
-        if (txCache.byId.delete(tx.id)) deltas.deleted++;
-      } else if (txCache.byId.has(tx.id)) {
-        txCache.byId.set(tx.id, tx);
-        deltas.updated++;
-      } else {
-        txCache.byId.set(tx.id, tx);
-        deltas.added++;
-      }
-    }
-    txCache.serverKnowledge = response.data.server_knowledge;
-    txCache.stale = false;
-    txCache.lastRefreshedAt = Date.now();
-    txCache.lastDeltas = deltas;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Optimistic local cache updates after our own mutations
-  // ---------------------------------------------------------------------------
-
-  private optimisticUpdateTransactions(
-    budgetId: string,
-    transactions: ynab.TransactionDetail[],
-  ): void {
-    const cache = this.getBudgetCache(budgetId);
-    const txCache = cache.transactions;
-    if (txCache.serverKnowledge == null) return; // cache not yet populated
-
-    for (const tx of transactions) {
-      if (tx.date >= txCache.coveredSinceDate) {
-        txCache.byId.set(tx.id, tx);
-      }
-    }
-  }
-
-  private optimisticRemoveTransaction(
-    budgetId: string,
-    transactionId: string,
-  ): void {
-    const cache = this.getBudgetCache(budgetId);
-    cache.transactions.byId.delete(transactionId);
-  }
-
-  private optimisticUpdateScheduledTransaction(
-    budgetId: string,
-    transaction: ynab.ScheduledTransactionDetail,
-  ): void {
-    const cache = this.getBudgetCache(budgetId);
-    if (cache.scheduledTransactions.serverKnowledge == null) return;
-    cache.scheduledTransactions.byId.set(transaction.id, transaction);
-  }
-
-  private optimisticRemoveScheduledTransaction(
-    budgetId: string,
-    scheduledTransactionId: string,
-  ): void {
-    const cache = this.getBudgetCache(budgetId);
-    cache.scheduledTransactions.byId.delete(scheduledTransactionId);
+    this.cache.applyTransactionDeltas(
+      budgetId,
+      response.data.transactions,
+      response.data.server_knowledge,
+    );
   }
 }
