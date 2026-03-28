@@ -799,6 +799,101 @@ describe("syncBudgetData — structured deltas", () => {
   });
 });
 
+describe("syncBudgetData clears simple caches", () => {
+  it("clears plans, settings, month summaries, and month categories", async () => {
+    mockApi.plans.getPlans
+      .mockResolvedValueOnce({
+        data: {
+          plans: [{ id: "p1", name: "First", last_modified_on: "2024-01-01" }],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          plans: [{ id: "p2", name: "Second", last_modified_on: "2024-01-02" }],
+        },
+      });
+    mockApi.plans.getPlanSettingsById
+      .mockResolvedValueOnce({
+        data: { settings: { currency_format: { iso_code: "USD" } } },
+      })
+      .mockResolvedValueOnce({
+        data: { settings: { currency_format: { iso_code: "EUR" } } },
+      });
+    mockApi.months.getPlanMonth
+      .mockResolvedValueOnce({
+        data: {
+          month: {
+            month: "2024-01-01",
+            income: 1000,
+            budgeted: 0,
+            activity: 0,
+            to_be_budgeted: 1000,
+            age_of_money: null,
+            categories: [],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          month: {
+            month: "2024-01-01",
+            income: 2000,
+            budgeted: 0,
+            activity: 0,
+            to_be_budgeted: 2000,
+            age_of_money: null,
+            categories: [],
+          },
+        },
+      });
+    mockApi.categories.getMonthCategoryById
+      .mockResolvedValueOnce({
+        data: {
+          category: {
+            id: "c1",
+            category_group_id: "g1",
+            budgeted: 1000,
+            hidden: false,
+            deleted: false,
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          category: {
+            id: "c1",
+            category_group_id: "g1",
+            budgeted: 2000,
+            hidden: false,
+            deleted: false,
+          },
+        },
+      });
+
+    await client.listBudgets();
+    await client.getBudgetSettings("b");
+    await client.getMonthSummary("b", "2024-01-01");
+    await client.getMonthCategoryById("b", "2024-01-01", "c1");
+
+    await client.syncBudgetData("b");
+
+    const plans = await client.listBudgets();
+    const settings = await client.getBudgetSettings("b");
+    const month = await client.getMonthSummary("b", "2024-01-01");
+    const category = await client.getMonthCategoryById("b", "2024-01-01", "c1");
+
+    expect(mockApi.plans.getPlans).toHaveBeenCalledTimes(2);
+    expect(mockApi.plans.getPlanSettingsById).toHaveBeenCalledTimes(2);
+    expect(mockApi.months.getPlanMonth).toHaveBeenCalledTimes(2);
+    expect(mockApi.categories.getMonthCategoryById).toHaveBeenCalledTimes(2);
+
+    expect(plans[0].id).toBe("p2");
+    expect(settings.currency_format.iso_code).toBe("EUR");
+    expect(month.income).toBe(2000);
+    expect(category?.budgeted).toBe(2000);
+  });
+});
+
 describe("cache staleness after mutations", () => {
   it("marks payees and categories stale after creating transactions (preserves SK for delta)", async () => {
     // Warm up caches
@@ -833,6 +928,150 @@ describe("cache staleness after mutations", () => {
 
     expect(mockApi.payees.getPayees).toHaveBeenNthCalledWith(2, "b", 5);
     expect(mockApi.categories.getCategories).toHaveBeenNthCalledWith(2, "b", 5);
+  });
+
+  it("invalidates month summary cache after createTransactions", async () => {
+    mockApi.months.getPlanMonth.mockResolvedValue({
+      data: {
+        month: {
+          month: "2024-01-01",
+          income: 1000,
+          budgeted: 0,
+          activity: 0,
+          to_be_budgeted: 1000,
+          age_of_money: null,
+          categories: [],
+        },
+      },
+    });
+    mockApi.transactions.createTransactions.mockResolvedValue({
+      data: { transactions: [] },
+    });
+
+    await client.getMonthSummary("b", "2024-01-01");
+    await client.createTransactions("b", [
+      { account_id: "a", date: "2024-01-01", amount: 10 },
+    ]);
+    await client.getMonthSummary("b", "2024-01-01");
+
+    expect(mockApi.months.getPlanMonth).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates month summary cache after updateTransactions", async () => {
+    mockApi.months.getPlanMonth.mockResolvedValue({
+      data: {
+        month: {
+          month: "2024-01-01",
+          income: 1000,
+          budgeted: 0,
+          activity: 0,
+          to_be_budgeted: 1000,
+          age_of_money: null,
+          categories: [],
+        },
+      },
+    });
+    mockApi.transactions.updateTransactions.mockResolvedValue({
+      data: { transactions: [] },
+    });
+
+    await client.getMonthSummary("b", "2024-01-01");
+    await client.updateTransactions("b", [
+      { transaction_id: "t1", amount: 10 },
+    ]);
+    await client.getMonthSummary("b", "2024-01-01");
+
+    expect(mockApi.months.getPlanMonth).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates month summary cache after deleteTransaction", async () => {
+    mockApi.months.getPlanMonth.mockResolvedValue({
+      data: {
+        month: {
+          month: "2024-01-01",
+          income: 1000,
+          budgeted: 0,
+          activity: 0,
+          to_be_budgeted: 1000,
+          age_of_money: null,
+          categories: [],
+        },
+      },
+    });
+    mockApi.transactions.deleteTransaction.mockResolvedValue({
+      data: { transaction: tx({ id: "t1", deleted: true }) },
+    });
+
+    await client.getMonthSummary("b", "2024-01-01");
+    await client.deleteTransaction("b", "t1");
+    await client.getMonthSummary("b", "2024-01-01");
+
+    expect(mockApi.months.getPlanMonth).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates month summary and month-category caches after setCategoryBudget", async () => {
+    mockApi.months.getPlanMonth.mockResolvedValue({
+      data: {
+        month: {
+          month: "2024-01-01",
+          income: 1000,
+          budgeted: 0,
+          activity: 0,
+          to_be_budgeted: 1000,
+          age_of_money: null,
+          categories: [],
+        },
+      },
+    });
+    mockApi.categories.getMonthCategoryById
+      .mockResolvedValueOnce({
+        data: {
+          category: {
+            id: "c1",
+            category_group_id: "g1",
+            budgeted: 1000,
+            hidden: false,
+            deleted: false,
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          category: {
+            id: "c1",
+            category_group_id: "g1",
+            budgeted: 1500,
+            hidden: false,
+            deleted: false,
+          },
+        },
+      });
+    mockApi.categories.updateMonthCategory.mockResolvedValue({
+      data: {
+        category: {
+          id: "c1",
+          category_group_id: "g1",
+          budgeted: 1500,
+          hidden: false,
+          deleted: false,
+        },
+      },
+    });
+
+    await client.getMonthSummary("b", "2024-01-01");
+    await client.getMonthCategoryById("b", "2024-01-01", "c1");
+
+    await client.setCategoryBudget("b", {
+      category_id: "c1",
+      month: "2024-01-01",
+      budgeted: 1.5,
+    });
+
+    await client.getMonthSummary("b", "2024-01-01");
+    await client.getMonthCategoryById("b", "2024-01-01", "c1");
+
+    expect(mockApi.months.getPlanMonth).toHaveBeenCalledTimes(2);
+    expect(mockApi.categories.getMonthCategoryById).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -992,6 +1231,42 @@ describe("getScheduledTransactions — filtering", () => {
     });
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("s3");
+  });
+});
+
+describe("getScheduledTransactionById cache behavior", () => {
+  it("returns from the scheduled transaction collection cache when available", async () => {
+    mockApi.scheduledTransactions.getScheduledTransactions.mockResolvedValue({
+      data: {
+        scheduled_transactions: [scheduledTx({ id: "cached-stx" })],
+        server_knowledge: 1,
+      },
+    });
+
+    await client.getScheduledTransactions("b");
+    mockApi.scheduledTransactions.getScheduledTransactionById.mockClear();
+
+    const result = await client.getScheduledTransactionById("b", "cached-stx");
+
+    expect(result?.id).toBe("cached-stx");
+    expect(
+      mockApi.scheduledTransactions.getScheduledTransactionById,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the single-item endpoint when cache misses", async () => {
+    mockApi.scheduledTransactions.getScheduledTransactionById.mockResolvedValue(
+      {
+        data: { scheduled_transaction: scheduledTx({ id: "remote-stx" }) },
+      },
+    );
+
+    const result = await client.getScheduledTransactionById("b", "remote-stx");
+
+    expect(result?.id).toBe("remote-stx");
+    expect(
+      mockApi.scheduledTransactions.getScheduledTransactionById,
+    ).toHaveBeenCalledWith("b", "remote-stx");
   });
 });
 
@@ -1676,6 +1951,138 @@ describe("TTL expiration", () => {
     // Both original and delta transactions present
     expect(result.find((t) => t.id === "t1")).toBeDefined();
     expect(result.find((t) => t.id === "t2")).toBeDefined();
+  });
+
+  it("plans list cache expires after TTL", async () => {
+    mockApi.plans.getPlans
+      .mockResolvedValueOnce({
+        data: {
+          plans: [{ id: "p1", name: "First", last_modified_on: "2024-01-01" }],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          plans: [{ id: "p2", name: "Second", last_modified_on: "2024-01-02" }],
+        },
+      });
+
+    const first = await client.listBudgets();
+    vi.advanceTimersByTime(59 * 60 * 1000);
+    const second = await client.listBudgets();
+
+    expect(mockApi.plans.getPlans).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+
+    vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+    const third = await client.listBudgets();
+
+    expect(mockApi.plans.getPlans).toHaveBeenCalledTimes(2);
+    expect(third[0].id).toBe("p2");
+  });
+
+  it("budget settings cache expires after TTL", async () => {
+    mockApi.plans.getPlanSettingsById
+      .mockResolvedValueOnce({
+        data: { settings: { currency_format: { iso_code: "USD" } } },
+      })
+      .mockResolvedValueOnce({
+        data: { settings: { currency_format: { iso_code: "EUR" } } },
+      });
+
+    const first = await client.getBudgetSettings("b");
+    vi.advanceTimersByTime(59 * 60 * 1000);
+    const second = await client.getBudgetSettings("b");
+
+    expect(mockApi.plans.getPlanSettingsById).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+
+    vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+    const third = await client.getBudgetSettings("b");
+
+    expect(mockApi.plans.getPlanSettingsById).toHaveBeenCalledTimes(2);
+    expect(third.currency_format.iso_code).toBe("EUR");
+  });
+
+  it("month summary cache expires after TTL", async () => {
+    mockApi.months.getPlanMonth
+      .mockResolvedValueOnce({
+        data: {
+          month: {
+            month: "2024-01-01",
+            income: 1000,
+            budgeted: 0,
+            activity: 0,
+            to_be_budgeted: 1000,
+            age_of_money: null,
+            categories: [],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          month: {
+            month: "2024-01-01",
+            income: 2000,
+            budgeted: 0,
+            activity: 0,
+            to_be_budgeted: 2000,
+            age_of_money: null,
+            categories: [],
+          },
+        },
+      });
+
+    const first = await client.getMonthSummary("b", "2024-01-01");
+    vi.advanceTimersByTime(59 * 60 * 1000);
+    const second = await client.getMonthSummary("b", "2024-01-01");
+
+    expect(mockApi.months.getPlanMonth).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+
+    vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+    const third = await client.getMonthSummary("b", "2024-01-01");
+
+    expect(mockApi.months.getPlanMonth).toHaveBeenCalledTimes(2);
+    expect(third.income).toBe(2000);
+  });
+
+  it("month category cache expires after TTL", async () => {
+    mockApi.categories.getMonthCategoryById
+      .mockResolvedValueOnce({
+        data: {
+          category: {
+            id: "c1",
+            category_group_id: "g1",
+            budgeted: 1000,
+            hidden: false,
+            deleted: false,
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          category: {
+            id: "c1",
+            category_group_id: "g1",
+            budgeted: 2000,
+            hidden: false,
+            deleted: false,
+          },
+        },
+      });
+
+    const first = await client.getMonthCategoryById("b", "2024-01-01", "c1");
+    vi.advanceTimersByTime(59 * 60 * 1000);
+    const second = await client.getMonthCategoryById("b", "2024-01-01", "c1");
+
+    expect(mockApi.categories.getMonthCategoryById).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+
+    vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+    const third = await client.getMonthCategoryById("b", "2024-01-01", "c1");
+
+    expect(mockApi.categories.getMonthCategoryById).toHaveBeenCalledTimes(2);
+    expect(third?.budgeted).toBe(2000);
   });
 });
 
