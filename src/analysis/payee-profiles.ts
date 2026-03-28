@@ -70,53 +70,138 @@ export class PayeeProfileAnalyzer {
     const profiles = new Map<string, PayeeProfile>();
     const now = Date.now();
 
+    const perPayeeBucketItems = new Map<
+      string,
+      Array<{ amount: number; category_id: string }>
+    >();
+
     for (const tx of transactions) {
-      if (!tx.payee_id || !tx.category_id) continue;
+      if (!tx.payee_id) continue;
 
-      let profile = profiles.get(tx.payee_id);
-      if (!profile) {
-        profile = {
-          payee_id: tx.payee_id,
-          payee_name: payeeNameById.get(tx.payee_id) ?? tx.payee_id,
-          category_counts: new Map(),
-          recency_weighted: new Map(),
-          total_count: 0,
-          most_recent_category_id: null,
-          most_recent_date: null,
-          amount_buckets: [],
-        };
-        profiles.set(tx.payee_id, profile);
-      }
+      const activeSubs =
+        (
+          tx as {
+            subtransactions?: Array<{
+              amount: number;
+              payee_id?: string | null;
+              category_id?: string | null;
+              memo?: string | null;
+              deleted?: boolean;
+            }>;
+          }
+        ).subtransactions?.filter((s) => !s.deleted) ?? [];
+      const isSplit = activeSubs.length > 0;
 
-      // Raw frequency
-      profile.category_counts.set(
-        tx.category_id,
-        (profile.category_counts.get(tx.category_id) ?? 0) + 1,
-      );
-      profile.total_count += 1;
+      if (isSplit) {
+        for (const sub of activeSubs) {
+          if (!sub.category_id) continue;
+          const categoryId = sub.category_id;
 
-      // Recency weighting
-      const txDate = new Date(tx.date).getTime();
-      const daysSince = Math.max(0, (now - txDate) / (1000 * 60 * 60 * 24));
-      const weight = Math.exp((-Math.LN2 * daysSince) / RECENCY_HALF_LIFE_DAYS);
-      profile.recency_weighted.set(
-        tx.category_id,
-        (profile.recency_weighted.get(tx.category_id) ?? 0) + weight,
-      );
+          let profile = profiles.get(tx.payee_id);
+          if (!profile) {
+            profile = {
+              payee_id: tx.payee_id,
+              payee_name: payeeNameById.get(tx.payee_id) ?? tx.payee_id,
+              category_counts: new Map(),
+              recency_weighted: new Map(),
+              total_count: 0,
+              most_recent_category_id: null,
+              most_recent_date: null,
+              amount_buckets: [],
+            };
+            profiles.set(tx.payee_id, profile);
+          }
 
-      // Track most recent
-      if (!profile.most_recent_date || tx.date > profile.most_recent_date) {
-        profile.most_recent_date = tx.date;
-        profile.most_recent_category_id = tx.category_id;
+          profile.category_counts.set(
+            categoryId,
+            (profile.category_counts.get(categoryId) ?? 0) + 1,
+          );
+          profile.total_count += 1;
+
+          const txDate = new Date(tx.date).getTime();
+          const daysSince = Math.max(0, (now - txDate) / (1000 * 60 * 60 * 24));
+          const weight = Math.exp(
+            (-Math.LN2 * daysSince) / RECENCY_HALF_LIFE_DAYS,
+          );
+          profile.recency_weighted.set(
+            categoryId,
+            (profile.recency_weighted.get(categoryId) ?? 0) + weight,
+          );
+
+          if (!profile.most_recent_date || tx.date > profile.most_recent_date) {
+            profile.most_recent_date = tx.date;
+            profile.most_recent_category_id = categoryId;
+          }
+
+          let items = perPayeeBucketItems.get(tx.payee_id);
+          if (!items) {
+            items = [];
+            perPayeeBucketItems.set(tx.payee_id, items);
+          }
+          items.push({
+            amount: sub.amount,
+            category_id: categoryId,
+          });
+        }
+      } else {
+        if (!tx.category_id) continue;
+
+        let profile = profiles.get(tx.payee_id);
+        if (!profile) {
+          profile = {
+            payee_id: tx.payee_id,
+            payee_name: payeeNameById.get(tx.payee_id) ?? tx.payee_id,
+            category_counts: new Map(),
+            recency_weighted: new Map(),
+            total_count: 0,
+            most_recent_category_id: null,
+            most_recent_date: null,
+            amount_buckets: [],
+          };
+          profiles.set(tx.payee_id, profile);
+        }
+
+        profile.category_counts.set(
+          tx.category_id,
+          (profile.category_counts.get(tx.category_id) ?? 0) + 1,
+        );
+        profile.total_count += 1;
+
+        const txDate = new Date(tx.date).getTime();
+        const daysSince = Math.max(0, (now - txDate) / (1000 * 60 * 60 * 24));
+        const weight = Math.exp(
+          (-Math.LN2 * daysSince) / RECENCY_HALF_LIFE_DAYS,
+        );
+        profile.recency_weighted.set(
+          tx.category_id,
+          (profile.recency_weighted.get(tx.category_id) ?? 0) + weight,
+        );
+
+        if (!profile.most_recent_date || tx.date > profile.most_recent_date) {
+          profile.most_recent_date = tx.date;
+          profile.most_recent_category_id = tx.category_id;
+        }
+
+        let items = perPayeeBucketItems.get(tx.payee_id);
+        if (!items) {
+          items = [];
+          perPayeeBucketItems.set(tx.payee_id, items);
+        }
+        items.push({
+          amount: tx.amount,
+          category_id: tx.category_id,
+        });
       }
     }
 
-    // Build amount buckets per payee
     for (const [payeeId, profile] of profiles) {
-      const payeeTxs = transactions.filter(
-        (tx) => tx.payee_id === payeeId && tx.category_id,
+      const items = perPayeeBucketItems.get(payeeId) ?? [];
+      profile.amount_buckets = buildAmountBuckets(
+        items.map((item) => ({
+          amount: item.amount,
+          category_id: item.category_id,
+        })),
       );
-      profile.amount_buckets = buildAmountBuckets(payeeTxs);
     }
 
     return profiles;

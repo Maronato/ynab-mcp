@@ -3,6 +3,7 @@ import type { MockAppContext } from "../test-utils.js";
 import {
   captureToolHandlers,
   createMockContext,
+  createMockSplitTransaction,
   createMockTransaction,
 } from "../test-utils.js";
 import { registerAnalysisTools } from "./analysis.js";
@@ -152,6 +153,77 @@ describe("get_spending_analysis", () => {
 
       expect(result.by_category[0].id).toBe("uncategorized");
       expect(result.by_category[0].name).toBe("Uncategorized");
+    });
+
+    it("attributes split subtransaction amounts to individual categories", async () => {
+      ctx.ynabClient.getTransactionsInRange.mockResolvedValue([
+        createMockSplitTransaction({
+          id: "t-split",
+          amount: -50000,
+          category_id: "split-cat-id",
+          payee_id: "payee-1",
+          subtransactions: [
+            {
+              id: "sub-1",
+              transaction_id: "t-split",
+              amount: -30000,
+              category_id: "cat-1",
+              category_name: "Groceries",
+              deleted: false,
+              payee_id: null,
+              payee_name: null,
+              memo: null,
+              transfer_account_id: null,
+              transfer_transaction_id: null,
+            },
+            {
+              id: "sub-2",
+              transaction_id: "t-split",
+              amount: -20000,
+              category_id: "cat-2",
+              category_name: "Rent",
+              deleted: false,
+              payee_id: null,
+              payee_name: null,
+              memo: null,
+              transfer_account_id: null,
+              transfer_transaction_id: null,
+            },
+          ],
+        }),
+      ]);
+      ctx.ynabClient.getNameLookup.mockResolvedValue({
+        accountById: new Map(),
+        categoryById: new Map([
+          [
+            "cat-1",
+            { name: "Groceries", group_id: "group-1", group_name: "Everyday" },
+          ],
+          ["cat-2", { name: "Rent", group_id: "group-2", group_name: "Bills" }],
+        ]),
+        payeeById: new Map([["payee-1", "Store A"]]),
+      });
+
+      const result = parseResult(
+        await handler({
+          since_date: "2024-01-01",
+          group_by: "both",
+        }),
+      );
+
+      expect(result.total_spending_milliunits).toBe(50000);
+      expect(result.transaction_count).toBe(2);
+      expect(result.by_category).toHaveLength(2);
+      const groceries = result.by_category.find(
+        (c: { id: string }) => c.id === "cat-1",
+      );
+      expect(groceries.total_milliunits).toBe(30000);
+      const rent = result.by_category.find(
+        (c: { id: string }) => c.id === "cat-2",
+      );
+      expect(rent.total_milliunits).toBe(20000);
+      expect(result.by_payee).toHaveLength(1);
+      expect(result.by_payee[0].total_milliunits).toBe(50000);
     });
 
     it("maps null payee_id to 'no_payee'", async () => {

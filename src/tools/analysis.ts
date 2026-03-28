@@ -97,48 +97,103 @@ export function registerAnalysisTools(
             transaction.transfer_account_id != null
           )
             continue;
-          if (internalCategoryIds.has(transaction.category_id ?? "")) continue;
           if (accountIdSet && !accountIdSet.has(transaction.account_id))
             continue;
-          if (
-            categoryIdSet &&
-            !categoryIdSet.has(transaction.category_id ?? "")
-          )
-            continue;
 
-          const absAmount = Math.abs(transaction.amount);
-          totalSpendingMilliunits += absAmount;
-          transactionCount++;
+          const activeSubs =
+            transaction.subtransactions?.filter((s) => !s.deleted) ?? [];
+          const isSplit = activeSubs.length > 0;
 
-          if (byCategoryMap) {
-            const id = transaction.category_id ?? "uncategorized";
-            const entry = byCategoryMap.get(id);
-            if (entry) {
-              entry.total_milliunits += absAmount;
-              entry.count++;
-            } else {
-              byCategoryMap.set(id, {
-                id,
-                name: "",
-                total_milliunits: absAmount,
-                count: 1,
-              });
+          if (isSplit) {
+            const payeeId = transaction.payee_id ?? "no_payee";
+            let txPayeeTotal = 0;
+
+            for (const sub of activeSubs) {
+              if (sub.amount >= 0) continue;
+              const subCatId = sub.category_id ?? "uncategorized";
+              if (internalCategoryIds.has(subCatId)) continue;
+              if (categoryIdSet && !categoryIdSet.has(subCatId)) continue;
+              if (!input.include_transfers && sub.transfer_account_id != null)
+                continue;
+
+              const absSubAmount = Math.abs(sub.amount);
+              totalSpendingMilliunits += absSubAmount;
+              transactionCount++;
+              txPayeeTotal += absSubAmount;
+
+              if (byCategoryMap) {
+                const existing = byCategoryMap.get(subCatId);
+                if (existing) {
+                  existing.total_milliunits += absSubAmount;
+                  existing.count++;
+                } else {
+                  byCategoryMap.set(subCatId, {
+                    id: subCatId,
+                    name: "",
+                    total_milliunits: absSubAmount,
+                    count: 1,
+                  });
+                }
+              }
             }
-          }
 
-          if (byPayeeMap) {
-            const id = transaction.payee_id ?? "no_payee";
-            const entry = byPayeeMap.get(id);
-            if (entry) {
-              entry.total_milliunits += absAmount;
-              entry.count++;
-            } else {
-              byPayeeMap.set(id, {
-                id,
-                name: "",
-                total_milliunits: absAmount,
-                count: 1,
-              });
+            if (byPayeeMap && txPayeeTotal > 0) {
+              const existing = byPayeeMap.get(payeeId);
+              if (existing) {
+                existing.total_milliunits += txPayeeTotal;
+                existing.count++;
+              } else {
+                byPayeeMap.set(payeeId, {
+                  id: payeeId,
+                  name: "",
+                  total_milliunits: txPayeeTotal,
+                  count: 1,
+                });
+              }
+            }
+          } else {
+            if (internalCategoryIds.has(transaction.category_id ?? ""))
+              continue;
+            if (
+              categoryIdSet &&
+              !categoryIdSet.has(transaction.category_id ?? "")
+            )
+              continue;
+
+            const absAmount = Math.abs(transaction.amount);
+            totalSpendingMilliunits += absAmount;
+            transactionCount++;
+
+            if (byCategoryMap) {
+              const id = transaction.category_id ?? "uncategorized";
+              const entry = byCategoryMap.get(id);
+              if (entry) {
+                entry.total_milliunits += absAmount;
+                entry.count++;
+              } else {
+                byCategoryMap.set(id, {
+                  id,
+                  name: "",
+                  total_milliunits: absAmount,
+                  count: 1,
+                });
+              }
+            }
+
+            if (byPayeeMap) {
+              const id = transaction.payee_id ?? "no_payee";
+              const entry = byPayeeMap.get(id);
+              if (entry) {
+                entry.total_milliunits += absAmount;
+                entry.count++;
+              } else {
+                byPayeeMap.set(id, {
+                  id,
+                  name: "",
+                  total_milliunits: absAmount,
+                  count: 1,
+                });
+              }
             }
           }
         }

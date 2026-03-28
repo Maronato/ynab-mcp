@@ -134,6 +134,37 @@ describe("PayeeProfileAnalyzer", () => {
     expect(client.getTransactionsInRange).toHaveBeenCalledTimes(2);
   });
 
+  it("processes subtransactions of split transactions", async () => {
+    const client = createMockClient();
+    client.getTransactionsInRange.mockResolvedValue([
+      {
+        ...makeTx({
+          payee_id: "p1",
+          category_id: "split-cat",
+          date: "2026-03-01",
+        }),
+        subtransactions: [
+          { amount: -30000, category_id: "groceries", deleted: false },
+          { amount: -20000, category_id: "household", deleted: false },
+        ],
+      },
+    ]);
+    client.getPayees.mockResolvedValue([
+      { id: "p1", name: "Superstore", deleted: false },
+    ]);
+
+    // biome-ignore lint/suspicious/noExplicitAny: test mock
+    const analyzer = new PayeeProfileAnalyzer(client as any);
+    const profiles = await analyzer.getProfiles("budget-1");
+
+    const p1 = profiles.get("p1");
+    expect(p1).toBeDefined();
+    expect(p1?.total_count).toBe(2);
+    expect(p1?.category_counts.get("groceries")).toBe(1);
+    expect(p1?.category_counts.get("household")).toBe(1);
+    expect(p1?.category_counts.has("split-cat")).toBe(false);
+  });
+
   it("skips transactions without payee or category", async () => {
     const client = createMockClient();
     client.getTransactionsInRange.mockResolvedValue([
