@@ -394,6 +394,8 @@ export class UndoEngine {
     }
 
     if (entry.undo_action.type === "update") {
+      const expected = entry.undo_action.expected_state;
+      const frequencyChanged = restore.frequency !== expected.frequency;
       await this.client.updateScheduledTransaction(entry.budget_id, {
         scheduled_transaction_id: resolvedEntityId,
         account_id: asOptionalString(restore.account_id),
@@ -405,21 +407,15 @@ export class UndoEngine {
         payee_id: asOptionalNullableString(restore.payee_id),
         category_id: asOptionalNullableString(restore.category_id),
         memo: asOptionalNullableString(restore.memo),
-        frequency: asOptionalString(restore.frequency) as
-          | "never"
-          | "daily"
-          | "weekly"
-          | "everyOtherWeek"
-          | "twiceAMonth"
-          | "every4Weeks"
-          | "monthly"
-          | "everyOtherMonth"
-          | "every3Months"
-          | "every4Months"
-          | "twiceAYear"
-          | "yearly"
-          | "everyOtherYear"
-          | undefined,
+        frequency: frequencyChanged
+          ? (asOptionalString(restore.frequency) as
+              | "never"
+              | "daily"
+              | "weekly"
+              | "monthly"
+              | "yearly"
+              | undefined)
+          : undefined,
         flag_color: asOptionalNullableString(restore.flag_color),
       });
 
@@ -439,16 +435,8 @@ export class UndoEngine {
           | "never"
           | "daily"
           | "weekly"
-          | "everyOtherWeek"
-          | "twiceAMonth"
-          | "every4Weeks"
           | "monthly"
-          | "everyOtherMonth"
-          | "every3Months"
-          | "every4Months"
-          | "twiceAYear"
-          | "yearly"
-          | "everyOtherYear",
+          | "yearly",
         flag_color: asOptionalNullableString(restore.flag_color),
       },
     );

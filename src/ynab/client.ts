@@ -844,9 +844,12 @@ export class YnabClient {
               transaction.memo !== undefined
                 ? transaction.memo
                 : (existing.memo ?? undefined),
-            frequency: transaction.frequency
-              ? (transaction.frequency as ynab.ScheduledTransactionFrequency)
-              : existing.frequency,
+            ...(transaction.frequency !== undefined
+              ? {
+                  frequency:
+                    transaction.frequency as ynab.ScheduledTransactionFrequency,
+                }
+              : {}),
             flag_color:
               transaction.flag_color !== undefined
                 ? (transaction.flag_color as ynab.TransactionFlagColor)
