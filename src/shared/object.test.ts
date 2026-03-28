@@ -93,13 +93,49 @@ describe("matchesExpectedState", () => {
   });
 
   describe("array handling", () => {
-    it("returns false for distinct arrays with same elements", () => {
-      expect(matchesExpectedState({ a: [1, 2] }, { a: [1, 2] })).toBe(false);
+    it("returns true for matching arrays of primitives", () => {
+      expect(matchesExpectedState({ a: [1, 2] }, { a: [1, 2] })).toBe(true);
     });
 
-    it("returns false even for same array reference (arrays rejected as non-plain-object)", () => {
+    it("returns true for same array reference", () => {
       const arr = [1, 2, 3];
-      expect(matchesExpectedState({ a: arr }, { a: arr })).toBe(false);
+      expect(matchesExpectedState({ a: arr }, { a: arr })).toBe(true);
+    });
+
+    it("returns false when array lengths differ", () => {
+      expect(matchesExpectedState({ a: [1, 2] }, { a: [1] })).toBe(false);
+    });
+
+    it("returns false when array elements differ", () => {
+      expect(matchesExpectedState({ a: [1, 2] }, { a: [1, 3] })).toBe(false);
+    });
+
+    it("returns true for matching arrays of objects", () => {
+      expect(
+        matchesExpectedState(
+          { subs: [{ amount: 100, cat: "a" }] },
+          { subs: [{ amount: 100, cat: "a" }] },
+        ),
+      ).toBe(true);
+    });
+
+    it("returns false for arrays of objects with mismatched values", () => {
+      expect(
+        matchesExpectedState(
+          { subs: [{ amount: 100 }] },
+          { subs: [{ amount: 200 }] },
+        ),
+      ).toBe(false);
+    });
+
+    it("returns false when expected has array but current has object", () => {
+      expect(matchesExpectedState({ a: [1, 2] }, { a: { 0: 1, 1: 2 } })).toBe(
+        false,
+      );
+    });
+
+    it("returns false when expected has object but current has array", () => {
+      expect(matchesExpectedState({ a: { x: 1 } }, { a: [1] })).toBe(false);
     });
   });
 });
