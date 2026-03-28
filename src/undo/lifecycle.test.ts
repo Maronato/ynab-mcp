@@ -35,6 +35,7 @@ function createMockClient() {
 describe("lifecycle: create → update → delete → undo delete → undo update → undo create", () => {
   const budgetId = "budget-lifecycle";
   const recreatedId = "tx-recreated-xyz789";
+  const sessionId = "session-lifecycle";
 
   let tempDir: string;
   let store: UndoStore;
@@ -75,50 +76,62 @@ describe("lifecycle: create → update → delete → undo delete → undo updat
   it("full undo chain works through ID remapping after re-creation", async () => {
     // ----- Record the three operations -----
 
-    const [createEntry] = await engine.recordEntries(budgetId, [
-      {
-        operation: "create_transaction",
-        description: "Created transaction.",
-        undo_action: {
-          type: "delete",
-          entity_type: "transaction",
-          entity_id: "tx-original",
-          expected_state: snapshotTransaction(afterCreate),
-          restore_state: {},
+    const [createEntry] = await engine.recordEntries(
+      budgetId,
+      [
+        {
+          operation: "create_transaction",
+          description: "Created transaction.",
+          undo_action: {
+            type: "delete",
+            entity_type: "transaction",
+            entity_id: "tx-original",
+            expected_state: snapshotTransaction(afterCreate),
+            restore_state: {},
+          },
         },
-      },
-    ]);
+      ],
+      sessionId,
+    );
 
-    const [updateEntry] = await engine.recordEntries(budgetId, [
-      {
-        operation: "update_transaction",
-        description: "Updated transaction.",
-        undo_action: {
-          type: "update",
-          entity_type: "transaction",
-          entity_id: "tx-original",
-          expected_state: snapshotTransaction(afterUpdate),
-          restore_state: snapshotTransaction(afterCreate),
+    const [updateEntry] = await engine.recordEntries(
+      budgetId,
+      [
+        {
+          operation: "update_transaction",
+          description: "Updated transaction.",
+          undo_action: {
+            type: "update",
+            entity_type: "transaction",
+            entity_id: "tx-original",
+            expected_state: snapshotTransaction(afterUpdate),
+            restore_state: snapshotTransaction(afterCreate),
+          },
         },
-      },
-    ]);
+      ],
+      sessionId,
+    );
 
-    const [deleteEntry] = await engine.recordEntries(budgetId, [
-      {
-        operation: "delete_transaction",
-        description: "Deleted transaction.",
-        undo_action: {
-          type: "create",
-          entity_type: "transaction",
-          entity_id: "tx-original",
-          expected_state: {},
-          restore_state: snapshotTransaction(afterUpdate),
+    const [deleteEntry] = await engine.recordEntries(
+      budgetId,
+      [
+        {
+          operation: "delete_transaction",
+          description: "Deleted transaction.",
+          undo_action: {
+            type: "create",
+            entity_type: "transaction",
+            entity_id: "tx-original",
+            expected_state: {},
+            restore_state: snapshotTransaction(afterUpdate),
+          },
         },
-      },
-    ]);
+      ],
+      sessionId,
+    );
 
     // Verify all three entries are stored and active
-    const historyBefore = await engine.listHistory(budgetId, "current", 10);
+    const historyBefore = await engine.listHistory(budgetId, sessionId, 10);
     expect(historyBefore).toHaveLength(3);
     expect(historyBefore.every((e) => e.status === "active")).toBe(true);
 
@@ -130,7 +143,11 @@ describe("lifecycle: create → update → delete → undo delete → undo updat
     mockClient.getTransactionById.mockResolvedValueOnce(null);
     mockClient.createTransactions.mockResolvedValueOnce([{ id: recreatedId }]);
 
-    const undoDelete = await engine.undoOperations([deleteEntry.id], false);
+    const undoDelete = await engine.undoOperations(
+      [deleteEntry.id],
+      sessionId,
+      false,
+    );
 
     expect(undoDelete.results[0].status).toBe("undone");
     expect(undoDelete.results[0].message).toContain("Re-created");
@@ -168,7 +185,11 @@ describe("lifecycle: create → update → delete → undo delete → undo updat
       id: recreatedId,
     });
 
-    const undoUpdate = await engine.undoOperations([updateEntry.id], false);
+    const undoUpdate = await engine.undoOperations(
+      [updateEntry.id],
+      sessionId,
+      false,
+    );
 
     expect(undoUpdate.results[0].status).toBe("undone");
     expect(undoUpdate.results[0].message).toContain("Updated transaction");
@@ -206,7 +227,11 @@ describe("lifecycle: create → update → delete → undo delete → undo updat
       id: recreatedId,
     });
 
-    const undoCreate = await engine.undoOperations([createEntry.id], false);
+    const undoCreate = await engine.undoOperations(
+      [createEntry.id],
+      sessionId,
+      false,
+    );
 
     expect(undoCreate.results[0].status).toBe("undone");
     expect(undoCreate.results[0].message).toContain("Deleted transaction");
@@ -220,7 +245,7 @@ describe("lifecycle: create → update → delete → undo delete → undo updat
 
     const historyAfter = await engine.listHistory(
       budgetId,
-      "current",
+      sessionId,
       10,
       true,
     );
@@ -230,32 +255,40 @@ describe("lifecycle: create → update → delete → undo delete → undo updat
 
   it("undo chain detects real conflicts when entity content changed externally", async () => {
     const [, updateEntry] = await Promise.all([
-      engine.recordEntries(budgetId, [
-        {
-          operation: "create_transaction",
-          description: "Created.",
-          undo_action: {
-            type: "delete",
-            entity_type: "transaction",
-            entity_id: "tx-original",
-            expected_state: snapshotTransaction(afterCreate),
-            restore_state: {},
+      engine.recordEntries(
+        budgetId,
+        [
+          {
+            operation: "create_transaction",
+            description: "Created.",
+            undo_action: {
+              type: "delete",
+              entity_type: "transaction",
+              entity_id: "tx-original",
+              expected_state: snapshotTransaction(afterCreate),
+              restore_state: {},
+            },
           },
-        },
-      ]),
-      engine.recordEntries(budgetId, [
-        {
-          operation: "update_transaction",
-          description: "Updated.",
-          undo_action: {
-            type: "update",
-            entity_type: "transaction",
-            entity_id: "tx-original",
-            expected_state: snapshotTransaction(afterUpdate),
-            restore_state: snapshotTransaction(afterCreate),
+        ],
+        sessionId,
+      ),
+      engine.recordEntries(
+        budgetId,
+        [
+          {
+            operation: "update_transaction",
+            description: "Updated.",
+            undo_action: {
+              type: "update",
+              entity_type: "transaction",
+              entity_id: "tx-original",
+              expected_state: snapshotTransaction(afterUpdate),
+              restore_state: snapshotTransaction(afterCreate),
+            },
           },
-        },
-      ]),
+        ],
+        sessionId,
+      ),
     ]);
 
     // The transaction still exists at the original ID but its amount was
@@ -265,7 +298,11 @@ describe("lifecycle: create → update → delete → undo delete → undo updat
       amount: -99000,
     });
 
-    const result = await engine.undoOperations([updateEntry[0].id], false);
+    const result = await engine.undoOperations(
+      [updateEntry[0].id],
+      sessionId,
+      false,
+    );
 
     expect(result.results[0].status).toBe("conflict");
     expect(result.results[0].message).toContain("force=true");
@@ -276,27 +313,35 @@ describe("lifecycle: create → update → delete → undo delete → undo updat
   });
 
   it("undo chain skips already-undone entries", async () => {
-    const [deleteEntry] = await engine.recordEntries(budgetId, [
-      {
-        operation: "delete_transaction",
-        description: "Deleted.",
-        undo_action: {
-          type: "create",
-          entity_type: "transaction",
-          entity_id: "tx-original",
-          expected_state: {},
-          restore_state: snapshotTransaction(afterUpdate),
+    const [deleteEntry] = await engine.recordEntries(
+      budgetId,
+      [
+        {
+          operation: "delete_transaction",
+          description: "Deleted.",
+          undo_action: {
+            type: "create",
+            entity_type: "transaction",
+            entity_id: "tx-original",
+            expected_state: {},
+            restore_state: snapshotTransaction(afterUpdate),
+          },
         },
-      },
-    ]);
+      ],
+      sessionId,
+    );
 
     // Undo once
     mockClient.getTransactionById.mockResolvedValueOnce(null);
     mockClient.createTransactions.mockResolvedValueOnce([{ id: recreatedId }]);
-    await engine.undoOperations([deleteEntry.id], false);
+    await engine.undoOperations([deleteEntry.id], sessionId, false);
 
     // Attempt to undo the same entry again
-    const result = await engine.undoOperations([deleteEntry.id], false);
+    const result = await engine.undoOperations(
+      [deleteEntry.id],
+      sessionId,
+      false,
+    );
 
     expect(result.results[0].status).toBe("skipped");
     expect(result.results[0].message).toContain("already undone");

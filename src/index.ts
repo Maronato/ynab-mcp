@@ -12,6 +12,27 @@ import { createYnabMcpServer } from "./server.js";
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
 
+function parseBooleanEnv(
+  name: string,
+  value: string | undefined,
+): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === "true" || value === "1") {
+    return true;
+  }
+
+  if (value === "false" || value === "0") {
+    return false;
+  }
+
+  throw new Error(
+    `Invalid ${name} value "${value}". Use "true", "false", "1", or "0".`,
+  );
+}
+
 async function main(): Promise<void> {
   const accessToken = process.env.YNAB_API_TOKEN;
   if (!accessToken) {
@@ -23,19 +44,11 @@ async function main(): Promise<void> {
     process.env.YNAB_MCP_DATA_DIR ?? join(homedir(), ".ynab-mcp");
   await mkdir(dataDirectory, { recursive: true });
 
-  const readOnlyEnv = process.env.YNAB_READ_ONLY;
-  let readOnly = false;
-  if (readOnlyEnv !== undefined) {
-    if (readOnlyEnv === "true" || readOnlyEnv === "1") {
-      readOnly = true;
-    } else if (readOnlyEnv === "false" || readOnlyEnv === "0") {
-      readOnly = false;
-    } else {
-      throw new Error(
-        `Invalid YNAB_READ_ONLY value "${readOnlyEnv}". Use "true", "false", "1", or "0".`,
-      );
-    }
-  }
+  const readOnly =
+    parseBooleanEnv("YNAB_READ_ONLY", process.env.YNAB_READ_ONLY) ?? false;
+  const requireSession =
+    parseBooleanEnv("YNAB_REQUIRE_SESSION", process.env.YNAB_REQUIRE_SESSION) ??
+    false;
 
   const { server } = createYnabMcpServer({
     accessToken,
@@ -43,6 +56,7 @@ async function main(): Promise<void> {
     dataDirectory,
     version,
     readOnly,
+    requireSession,
   });
 
   const transport = new StdioServerTransport();

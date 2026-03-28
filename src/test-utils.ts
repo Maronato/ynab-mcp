@@ -104,6 +104,7 @@ export interface MockAppContext {
   undoEngine: Record<string, Mock>;
   samplingClient: Record<string, Mock>;
   payeeProfileAnalyzer: Record<string, Mock>;
+  requireSession: boolean;
 }
 
 export function captureToolHandlers(
@@ -156,7 +157,6 @@ export function createMockContext(): MockAppContext {
       snapshotScheduledTransaction: vi.fn((tx: Record<string, unknown>) => tx),
     },
     undoEngine: {
-      getSessionId: vi.fn(() => "test-session"),
       recordEntries: vi.fn().mockResolvedValue([]),
       listHistory: vi.fn().mockResolvedValue([]),
       undoOperations: vi.fn().mockResolvedValue({ results: [], summary: {} }),
@@ -170,5 +170,6 @@ export function createMockContext(): MockAppContext {
       getProfiles: vi.fn().mockResolvedValue(new Map()),
       invalidate: vi.fn(),
     },
+    requireSession: false,
   };
 }

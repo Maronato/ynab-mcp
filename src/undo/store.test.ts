@@ -24,6 +24,7 @@ function entry(id: string, overrides: Record<string, unknown> = {}) {
   return createMockUndoEntry({
     id,
     budget_id: BUDGET_ID,
+    timestamp: new Date().toISOString(),
     ...overrides,
   });
 }
@@ -34,7 +35,7 @@ describe("appendEntries and persistence", () => {
     await store.appendEntries(BUDGET_ID, [e]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: false,
@@ -52,7 +53,7 @@ describe("appendEntries and persistence", () => {
     await store.appendEntries(BUDGET_ID, [e2]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: false,
@@ -70,7 +71,7 @@ describe("appendEntries and persistence", () => {
     }
 
     const result = await smallStore.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: true,
@@ -82,14 +83,14 @@ describe("appendEntries and persistence", () => {
 });
 
 describe("listEntries", () => {
-  it("returns all active entries with sessionScope 'all'", async () => {
+  it("returns all active entries when includeAllSessions is true", async () => {
     await store.appendEntries(BUDGET_ID, [
       entry("budget-1::1::a", { session_id: "s1" }),
       entry("budget-1::2::b", { session_id: "s2" }),
     ]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "s1",
       limit: 100,
       includeUndone: false,
@@ -98,14 +99,13 @@ describe("listEntries", () => {
     expect(result).toHaveLength(2);
   });
 
-  it("filters to matching sessionId with sessionScope 'current'", async () => {
+  it("filters to matching sessionId by default", async () => {
     await store.appendEntries(BUDGET_ID, [
       entry("budget-1::1::a", { session_id: "s1" }),
       entry("budget-1::2::b", { session_id: "s2" }),
     ]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "current",
       sessionId: "s1",
       limit: 100,
       includeUndone: false,
@@ -123,7 +123,7 @@ describe("listEntries", () => {
     await store.markEntriesUndone(BUDGET_ID, ["budget-1::1::a"]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: false,
@@ -138,7 +138,7 @@ describe("listEntries", () => {
     await store.markEntriesUndone(BUDGET_ID, ["budget-1::1::a"]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: true,
@@ -156,7 +156,7 @@ describe("listEntries", () => {
     ]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 2,
       includeUndone: false,
@@ -167,7 +167,7 @@ describe("listEntries", () => {
 
   it("returns empty array for a budget with no history", async () => {
     const result = await store.listEntries("nonexistent", {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: false,
@@ -218,7 +218,7 @@ describe("markEntriesUndone", () => {
     await store.markEntriesUndone(BUDGET_ID, ["budget-1::1::a"]);
 
     const all = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: true,
@@ -236,7 +236,7 @@ describe("markEntriesUndone", () => {
     await store.markEntriesUndone(BUDGET_ID, []);
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: false,
@@ -314,7 +314,7 @@ describe("concurrency", () => {
     await Promise.all(entries.map((e) => store.appendEntries(BUDGET_ID, [e])));
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: true,
@@ -340,7 +340,7 @@ describe("concurrency", () => {
     );
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: true,
@@ -353,7 +353,7 @@ describe("concurrency", () => {
 describe("error handling", () => {
   it("returns default empty history for missing file", async () => {
     const result = await store.listEntries("no-such-budget", {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: true,
@@ -370,7 +370,7 @@ describe("error handling", () => {
     await writeFile(filePath, "not valid json{{{");
 
     const result = await store.listEntries(BUDGET_ID, {
-      sessionScope: "all",
+      includeAllSessions: true,
       sessionId: "any",
       limit: 100,
       includeUndone: true,

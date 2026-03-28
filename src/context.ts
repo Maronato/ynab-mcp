@@ -8,4 +8,5 @@ export interface AppContext {
   undoEngine: UndoEngine;
   samplingClient: SamplingClient;
   payeeProfileAnalyzer: PayeeProfileAnalyzer;
+  requireSession: boolean;
 }

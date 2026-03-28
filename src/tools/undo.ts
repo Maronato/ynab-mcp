@@ -3,35 +3,38 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { DEFAULT_SESSION_ID, sessionIdSchema } from "../shared/session.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-
-const listUndoHistorySchema = z.object({
-  budget_id: z.string().optional(),
-  session: z.enum(["current", "all"]).default("current"),
-  limit: z.number().int().min(1).max(200).default(20),
-  include_undone: z.boolean().default(false),
-});
-
-const undoOperationsSchema = z.object({
-  undo_history_ids: z
-    .array(z.string())
-    .min(1)
-    .describe(
-      "The undo entry IDs to undo (returned as undo_history_ids by write tools).",
-    ),
-  force: z.boolean().default(false),
-});
 
 export function registerUndoTools(
   server: McpServer,
   context: AppContext,
 ): void {
+  const listUndoHistorySchema = z.object({
+    budget_id: z.string().optional(),
+    session_id: sessionIdSchema(context.requireSession),
+    include_all_sessions: z.boolean().default(false),
+    limit: z.number().int().min(1).max(200).default(20),
+    include_undone: z.boolean().default(false),
+  });
+
+  const undoOperationsSchema = z.object({
+    session_id: sessionIdSchema(context.requireSession),
+    undo_history_ids: z
+      .array(z.string())
+      .min(1)
+      .describe(
+        "The undo entry IDs to undo (returned as undo_history_ids by write tools).",
+      ),
+    force: z.boolean().default(false),
+  });
+
   server.registerTool(
     "list_undo_history",
     {
       title: "List Undo History",
       description:
-        "List undoable operations with optional session scoping (current session or all sessions).",
+        "List undoable operations for a session, or include all sessions when requested.",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -41,26 +44,29 @@ export function registerUndoTools(
     },
     async (input) => {
       try {
+        const sessionId = input.session_id ?? DEFAULT_SESSION_ID;
+        const includeAllSessions = input.include_all_sessions ?? false;
+        const includeUndone = input.include_undone ?? false;
+        const limit = input.limit ?? 20;
         const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(
           input.budget_id,
         );
         const entries = await context.undoEngine.listHistory(
           resolvedBudgetId,
-          input.session,
-          input.limit,
-          input.include_undone,
+          sessionId,
+          limit,
+          includeUndone,
+          includeAllSessions,
         );
-        const currentSessionId = context.undoEngine.getSessionId();
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
-          session_scope: input.session,
-          current_session_id: currentSessionId,
+          session_id: sessionId,
+          include_all_sessions: includeAllSessions,
           count: entries.length,
           entries: entries.map((entry) => ({
             id: entry.id,
             session_id: entry.session_id,
-            is_current_session: entry.session_id === currentSessionId,
             timestamp: entry.timestamp,
             operation: entry.operation,
             description: entry.description,
@@ -91,12 +97,17 @@ export function registerUndoTools(
     },
     async (input) => {
       try {
+        const sessionId = input.session_id ?? DEFAULT_SESSION_ID;
         const result = await context.undoEngine.undoOperations(
           input.undo_history_ids,
-          input.force,
+          sessionId,
+          input.force ?? false,
         );
 
-        return jsonToolResult(result);
+        return jsonToolResult({
+          session_id: sessionId,
+          ...result,
+        });
       } catch (error) {
         return errorToolResult(
           extractErrorMessage(error, "Failed to undo operations."),

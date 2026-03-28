@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { DEFAULT_SESSION_ID, sessionIdSchema } from "../shared/session.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
   formatCurrency,
@@ -115,10 +116,13 @@ const createTransactionItemSchema = z.object({
     ),
 });
 
-const createTransactionsSchema = z.object({
-  budget_id: z.string().optional(),
-  transactions: z.array(createTransactionItemSchema).min(1),
-});
+function buildCreateTransactionsSchema(requireSession: boolean) {
+  return z.object({
+    budget_id: z.string().optional(),
+    session_id: sessionIdSchema(requireSession),
+    transactions: z.array(createTransactionItemSchema).min(1),
+  });
+}
 
 const updateTransactionItemSchema = z.object({
   transaction_id: z.string(),
@@ -145,20 +149,36 @@ const updateTransactionItemSchema = z.object({
     ),
 });
 
-const updateTransactionsSchema = z.object({
-  budget_id: z.string().optional(),
-  transactions: z.array(updateTransactionItemSchema).min(1),
-});
+function buildUpdateTransactionsSchema(requireSession: boolean) {
+  return z.object({
+    budget_id: z.string().optional(),
+    session_id: sessionIdSchema(requireSession),
+    transactions: z.array(updateTransactionItemSchema).min(1),
+  });
+}
 
-const deleteTransactionsSchema = z.object({
-  budget_id: z.string().optional(),
-  transaction_ids: z.array(z.string()).min(1),
-});
+function buildDeleteTransactionsSchema(requireSession: boolean) {
+  return z.object({
+    budget_id: z.string().optional(),
+    session_id: sessionIdSchema(requireSession),
+    transaction_ids: z.array(z.string()).min(1),
+  });
+}
 
 export function registerTransactionTools(
   server: McpServer,
   context: AppContext,
 ): void {
+  const createTransactionsSchema = buildCreateTransactionsSchema(
+    context.requireSession,
+  );
+  const updateTransactionsSchema = buildUpdateTransactionsSchema(
+    context.requireSession,
+  );
+  const deleteTransactionsSchema = buildDeleteTransactionsSchema(
+    context.requireSession,
+  );
+
   server.registerTool(
     "search_transactions",
     {
@@ -227,7 +247,11 @@ export function registerTransactionTools(
       },
       inputSchema: createTransactionsSchema,
     },
-    async ({ budget_id: budgetId, transactions }) => {
+    async ({
+      budget_id: budgetId,
+      transactions,
+      session_id: sessionId = DEFAULT_SESSION_ID,
+    }) => {
       try {
         const resolvedBudgetId =
           await context.ynabClient.resolveRealBudgetId(budgetId);
@@ -277,12 +301,14 @@ export function registerTransactionTools(
                 await context.undoEngine.recordEntries(
                   resolvedBudgetId,
                   undoEntries,
+                  sessionId,
                 )
               ).map((entry) => entry.id)
             : [];
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
+          session_id: sessionId,
           created_count: created.length,
           transactions: formatted,
           undo_history_ids: undoHistoryIds,
@@ -309,7 +335,11 @@ export function registerTransactionTools(
       },
       inputSchema: updateTransactionsSchema,
     },
-    async ({ budget_id: budgetId, transactions }) => {
+    async ({
+      budget_id: budgetId,
+      transactions,
+      session_id: sessionId = DEFAULT_SESSION_ID,
+    }) => {
       try {
         const resolvedBudgetId =
           await context.ynabClient.resolveRealBudgetId(budgetId);
@@ -423,12 +453,14 @@ export function registerTransactionTools(
                 await context.undoEngine.recordEntries(
                   resolvedBudgetId,
                   undoEntries,
+                  sessionId,
                 )
               ).map((entry) => entry.id)
             : [];
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
+          session_id: sessionId,
           results,
           undo_history_ids: undoHistoryIds,
         });
@@ -454,7 +486,11 @@ export function registerTransactionTools(
       },
       inputSchema: deleteTransactionsSchema,
     },
-    async ({ budget_id: budgetId, transaction_ids: transactionIds }) => {
+    async ({
+      budget_id: budgetId,
+      transaction_ids: transactionIds,
+      session_id: sessionId = DEFAULT_SESSION_ID,
+    }) => {
       try {
         const resolvedBudgetId =
           await context.ynabClient.resolveRealBudgetId(budgetId);
@@ -547,12 +583,14 @@ export function registerTransactionTools(
                 await context.undoEngine.recordEntries(
                   resolvedBudgetId,
                   undoEntries,
+                  sessionId,
                 )
               ).map((entry) => entry.id)
             : [];
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
+          session_id: sessionId,
           results,
           undo_history_ids: undoHistoryIds,
         });

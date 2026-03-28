@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
+import { DEFAULT_SESSION_ID, sessionIdSchema } from "../shared/session.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
@@ -38,27 +39,34 @@ const getMonthlyBudgetSchema = z.object({
     ),
 });
 
-const setCategoryBudgetsSchema = z.object({
-  budget_id: z.string().optional(),
-  assignments: z
-    .array(
-      z.object({
-        category_id: z.string(),
-        month: z.string(),
-        budgeted: z
-          .number()
-          .describe(
-            "Budgeted amount in currency units (e.g., 150.00 for one hundred fifty dollars). Do NOT use milliunits.",
-          ),
-      }),
-    )
-    .min(1),
-});
+function buildSetCategoryBudgetsSchema(requireSession: boolean) {
+  return z.object({
+    budget_id: z.string().optional(),
+    session_id: sessionIdSchema(requireSession),
+    assignments: z
+      .array(
+        z.object({
+          category_id: z.string(),
+          month: z.string(),
+          budgeted: z
+            .number()
+            .describe(
+              "Budgeted amount in currency units (e.g., 150.00 for one hundred fifty dollars). Do NOT use milliunits.",
+            ),
+        }),
+      )
+      .min(1),
+  });
+}
 
 export function registerCategoryTools(
   server: McpServer,
   context: AppContext,
 ): void {
+  const setCategoryBudgetsSchema = buildSetCategoryBudgetsSchema(
+    context.requireSession,
+  );
+
   server.registerTool(
     "list_categories",
     {
@@ -315,6 +323,7 @@ export function registerCategoryTools(
         const budgetId = await context.ynabClient.resolveRealBudgetId(
           input.budget_id,
         );
+        const sessionId = input.session_id ?? DEFAULT_SESSION_ID;
         const prefetchResults = await Promise.all(
           input.assignments.map(async (assignment) => ({
             assignment,
@@ -398,12 +407,14 @@ export function registerCategoryTools(
           const created = await context.undoEngine.recordEntries(
             budgetId,
             undoEntries,
+            sessionId,
           );
           undoHistoryIds = created.map((entry) => entry.id);
         }
 
         return jsonToolResult({
           budget_id: budgetId,
+          session_id: sessionId,
           results,
           undo_history_ids: undoHistoryIds,
         });

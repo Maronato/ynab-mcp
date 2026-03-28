@@ -9,7 +9,6 @@ import type {
   UndoEntry,
   UndoExecutionResult,
   UndoOperationType,
-  UndoSessionScope,
 } from "./types.js";
 
 interface RecordUndoEntryInput {
@@ -29,27 +28,24 @@ interface UndoResult {
 }
 
 export class UndoEngine {
-  private readonly sessionId: string;
-
   constructor(
     private readonly client: YnabClient,
     private readonly store: UndoStore,
-  ) {
-    this.sessionId = randomUUID();
-  }
-
-  getSessionId(): string {
-    return this.sessionId;
-  }
+  ) {}
 
   async recordEntries(
     budgetId: string,
     entries: RecordUndoEntryInput[],
+    sessionId: string,
   ): Promise<UndoEntry[]> {
+    if (entries.length === 0) {
+      return [];
+    }
+
     const timestamp = new Date().toISOString();
     const createdEntries: UndoEntry[] = entries.map((entry) => ({
       id: `${budgetId}::${Date.now()}::${randomUUID().slice(0, 8)}`,
-      session_id: this.sessionId,
+      session_id: sessionId,
       budget_id: budgetId,
       timestamp,
       operation: entry.operation,
@@ -64,20 +60,22 @@ export class UndoEngine {
 
   async listHistory(
     budgetId: string,
-    sessionScope: UndoSessionScope,
+    sessionId: string,
     limit: number,
     includeUndone = false,
+    includeAllSessions = false,
   ): Promise<UndoEntry[]> {
     return this.store.listEntries(budgetId, {
-      sessionScope,
-      sessionId: this.sessionId,
+      sessionId,
       limit,
       includeUndone,
+      includeAllSessions,
     });
   }
 
   async undoOperations(
     entryIds: string[],
+    sessionId: string,
     force: boolean,
   ): Promise<UndoResult> {
     const groupedByBudget = new Map<
@@ -144,7 +142,22 @@ export class UndoEngine {
           continue;
         }
 
-        const execution = await this.undoSingleEntry(entry, force);
+        const fromDifferentSession = entry.session_id !== sessionId;
+        if (fromDifferentSession && !force) {
+          indexedResults.push({
+            index: originalIndex,
+            result: {
+              entry_id: entry.id,
+              status: "conflict",
+              message:
+                `Undo entry belongs to session "${entry.session_id}" ` +
+                `but current session is "${sessionId}". Use force=true to override.`,
+            },
+          });
+          continue;
+        }
+
+        const execution = await this.undoSingleEntry(entry, sessionId, force);
         indexedResults.push({
           index: originalIndex,
           result: execution,
@@ -197,9 +210,10 @@ export class UndoEngine {
 
   private async undoSingleEntry(
     entry: UndoEntry,
+    currentSessionId: string,
     force: boolean,
   ): Promise<UndoExecutionResult> {
-    const fromDifferentSession = entry.session_id !== this.sessionId;
+    const fromDifferentSession = entry.session_id !== currentSessionId;
     const sessionPrefix = fromDifferentSession ? "[cross-session] " : "";
 
     try {

@@ -38,8 +38,6 @@ export interface UndoHistoryFile {
   id_mappings: Record<string, string>;
 }
 
-export type UndoSessionScope = "current" | "all";
-
 export interface UndoConflict {
   entry_id: string;
   reason: string;

@@ -115,6 +115,43 @@ describe("create_transactions", () => {
 
     expect(result.isError).toBe(true);
   });
+
+  it("passes session_id through to undo recording", async () => {
+    const created = [createMockTransaction({ id: "new-1", amount: -50000 })];
+    ctx.ynabClient.createTransactions.mockResolvedValue(created);
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "undo-1" }]);
+
+    const handler = tools.create_transactions;
+    const result = parseResult(
+      await handler({
+        session_id: "session-abc",
+        transactions: [
+          { account_id: "acc-1", date: "2024-01-15", amount: -50 },
+        ],
+      }),
+    );
+
+    expect(ctx.undoEngine.recordEntries.mock.calls[0][2]).toBe("session-abc");
+    expect(result.session_id).toBe("session-abc");
+  });
+
+  it("defaults session_id to shared when omitted", async () => {
+    const created = [createMockTransaction({ id: "new-1", amount: -50000 })];
+    ctx.ynabClient.createTransactions.mockResolvedValue(created);
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "undo-1" }]);
+
+    const handler = tools.create_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [
+          { account_id: "acc-1", date: "2024-01-15", amount: -50 },
+        ],
+      }),
+    );
+
+    expect(ctx.undoEngine.recordEntries.mock.calls[0][2]).toBe("shared");
+    expect(result.session_id).toBe("shared");
+  });
 });
 
 describe("update_transactions", () => {

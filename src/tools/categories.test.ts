@@ -494,4 +494,53 @@ describe("set_category_budgets", () => {
     expect(result.results[0].status).toBe("error");
     expect(result.results[1].status).toBe("updated");
   });
+
+  it("passes session_id through to undo recording", async () => {
+    ctx.ynabClient.getMonthCategoryById.mockResolvedValue({
+      id: "cat-1",
+      budgeted: 0,
+    });
+    ctx.ynabClient.setCategoryBudget.mockResolvedValue({
+      id: "cat-1",
+      budgeted: 50000,
+    });
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.set_category_budgets;
+    const result = parseResult(
+      await handler({
+        session_id: "session-abc",
+        assignments: [
+          { category_id: "cat-1", month: "2024-03-01", budgeted: 50 },
+        ],
+      }),
+    );
+
+    expect(ctx.undoEngine.recordEntries.mock.calls[0][2]).toBe("session-abc");
+    expect(result.session_id).toBe("session-abc");
+  });
+
+  it("defaults session_id to shared when omitted", async () => {
+    ctx.ynabClient.getMonthCategoryById.mockResolvedValue({
+      id: "cat-1",
+      budgeted: 0,
+    });
+    ctx.ynabClient.setCategoryBudget.mockResolvedValue({
+      id: "cat-1",
+      budgeted: 50000,
+    });
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.set_category_budgets;
+    const result = parseResult(
+      await handler({
+        assignments: [
+          { category_id: "cat-1", month: "2024-03-01", budgeted: 50 },
+        ],
+      }),
+    );
+
+    expect(ctx.undoEngine.recordEntries.mock.calls[0][2]).toBe("shared");
+    expect(result.session_id).toBe("shared");
+  });
 });

@@ -17,6 +17,7 @@ export interface CreateServerOptions {
   endpointUrl?: string;
   version?: string;
   readOnly?: boolean;
+  requireSession?: boolean;
 }
 
 export function createYnabMcpServer(options: CreateServerOptions): {
@@ -46,6 +47,7 @@ export function createYnabMcpServer(options: CreateServerOptions): {
     undoEngine,
     samplingClient,
     payeeProfileAnalyzer,
+    requireSession: options.requireSession ?? false,
   };
 
   registerTools(server, context);

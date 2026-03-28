@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import type { UndoEntry, UndoHistoryFile, UndoSessionScope } from "./types.js";
+import type { UndoEntry, UndoHistoryFile } from "./types.js";
 
 const DEFAULT_HISTORY: UndoHistoryFile = {
   entries: [],
@@ -13,10 +13,10 @@ const LOCK_TIMEOUT_MS = 5_000;
 const LOCK_STALE_MS = 30_000;
 
 interface ListHistoryOptions {
-  sessionScope: UndoSessionScope;
   sessionId: string;
   limit: number;
   includeUndone: boolean;
+  includeAllSessions?: boolean;
 }
 
 export class UndoStore {
@@ -32,6 +32,10 @@ export class UndoStore {
   }
 
   async appendEntries(budgetId: string, entries: UndoEntry[]): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+
     await this.withBudgetLock(budgetId, async () => {
       const current = await this.readBudgetHistoryUnsafe(budgetId);
       current.entries = [...entries, ...current.entries].slice(
@@ -53,7 +57,7 @@ export class UndoStore {
         return false;
       }
 
-      if (options.sessionScope === "all") {
+      if (options.includeAllSessions) {
         return true;
       }
 
