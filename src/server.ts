@@ -41,7 +41,7 @@ export function createYnabMcpServer(options: CreateServerOptions): {
   };
 
   registerTools(server, context);
-  registerResources(server, context);
+  registerResources(server);
   registerPrompts(server);
 
   return {
