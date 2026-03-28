@@ -5,7 +5,7 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
-  type CurrencyFormatLike,
+  asMilliunits,
   formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
@@ -206,19 +206,24 @@ export function registerAnomalyTools(
                     transaction_id: tx.id,
                     date: tx.date,
                     payee_name: payeeName,
-                    amount: milliunitsToCurrency(tx.amount),
-                    amount_display: formatCurrency(tx.amount, currencyFormat),
+                    amount: milliunitsToCurrency(asMilliunits(tx.amount)),
+                    amount_display: formatCurrency(
+                      asMilliunits(tx.amount),
+                      currencyFormat,
+                    ),
                     category_name: catInfo?.name ?? null,
                     anomaly_type: "unusual_amount",
                     severity,
                     detail:
-                      `Amount ${formatCurrency(absAmount, currencyFormat)} is ${sigmas} standard deviations ` +
-                      `from the mean of ${formatCurrency(Math.round(stats.mean), currencyFormat)} ` +
+                      `Amount ${formatCurrency(asMilliunits(absAmount), currencyFormat)} is ${sigmas} standard deviations ` +
+                      `from the mean of ${formatCurrency(asMilliunits(Math.round(stats.mean)), currencyFormat)} ` +
                       `for ${payeeName ?? "this payee"} (${stats.amounts.length} historical transactions).`,
                     reference: {
-                      payee_mean: milliunitsToCurrency(Math.round(stats.mean)),
+                      payee_mean: milliunitsToCurrency(
+                        asMilliunits(Math.round(stats.mean)),
+                      ),
                       payee_stddev: milliunitsToCurrency(
-                        Math.round(stats.stddev),
+                        asMilliunits(Math.round(stats.stddev)),
                       ),
                       sigma_distance: sigmas,
                     },
@@ -252,17 +257,22 @@ export function registerAnomalyTools(
                   transaction_id: tx.id,
                   date: tx.date,
                   payee_name: payeeName,
-                  amount: milliunitsToCurrency(tx.amount),
-                  amount_display: formatCurrency(tx.amount, currencyFormat),
+                  amount: milliunitsToCurrency(asMilliunits(tx.amount)),
+                  amount_display: formatCurrency(
+                    asMilliunits(tx.amount),
+                    currencyFormat,
+                  ),
                   category_name: catInfo?.name ?? null,
                   anomaly_type: "new_payee_large",
                   severity: "warning",
                   detail:
                     `New payee "${payeeName ?? "Unknown"}" with a charge of ` +
-                    `${formatCurrency(absAmount, currencyFormat)}, which exceeds the 75th percentile ` +
-                    `of all spending (${formatCurrency(Math.round(p75Amount), currencyFormat)}).`,
+                    `${formatCurrency(asMilliunits(absAmount), currencyFormat)}, which exceeds the 75th percentile ` +
+                    `of all spending (${formatCurrency(asMilliunits(Math.round(p75Amount)), currencyFormat)}).`,
                   reference: {
-                    p75_threshold: milliunitsToCurrency(Math.round(p75Amount)),
+                    p75_threshold: milliunitsToCurrency(
+                      asMilliunits(Math.round(p75Amount)),
+                    ),
                     payee_history_count: historyCount,
                   },
                 });
@@ -293,21 +303,24 @@ export function registerAnomalyTools(
                     transaction_id: tx.id,
                     date: tx.date,
                     payee_name: payeeName,
-                    amount: milliunitsToCurrency(tx.amount),
-                    amount_display: formatCurrency(tx.amount, currencyFormat),
+                    amount: milliunitsToCurrency(asMilliunits(tx.amount)),
+                    amount_display: formatCurrency(
+                      asMilliunits(tx.amount),
+                      currencyFormat,
+                    ),
                     category_name: catInfo?.name ?? null,
                     anomaly_type: "potential_duplicate",
                     severity: "info",
                     detail:
                       `Possible duplicate: two charges to "${payeeName ?? "Unknown"}" ` +
-                      `(${formatCurrency(tx.amount, currencyFormat)} on ${tx.date} and ` +
-                      `${formatCurrency(other.amount, currencyFormat)} on ${other.date}) ` +
+                      `(${formatCurrency(asMilliunits(tx.amount), currencyFormat)} on ${tx.date} and ` +
+                      `${formatCurrency(asMilliunits(other.amount), currencyFormat)} on ${other.date}) ` +
                       `within 3 days with similar amounts.`,
                     reference: {
                       duplicate_candidate_id: other.id,
                       duplicate_candidate_date: other.date,
                       duplicate_candidate_amount: milliunitsToCurrency(
-                        other.amount,
+                        asMilliunits(other.amount),
                       ),
                     },
                   });

@@ -4,7 +4,11 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
+import {
+  asMilliunits,
+  formatCurrency,
+  milliunitsToCurrency,
+} from "../ynab/format.js";
 
 const INTERNAL_GROUP_NAMES = new Set([
   "Internal Master Category",
@@ -160,8 +164,8 @@ export function registerHealthTools(
                 id: cat.id,
                 name: cat.name,
                 group_name: group.name,
-                balance: milliunitsToCurrency(cat.balance),
-                balance_display: formatCurrency(cat.balance, cf),
+                balance: milliunitsToCurrency(asMilliunits(cat.balance)),
+                balance_display: formatCurrency(asMilliunits(cat.balance), cf),
                 type: isCreditOverspend ? "credit" : "cash",
                 _balance_milliunits: cat.balance,
               });
@@ -178,8 +182,13 @@ export function registerHealthTools(
                 id: cat.id,
                 name: cat.name,
                 group_name: group.name,
-                underfunded: milliunitsToCurrency(cat.goal_under_funded),
-                underfunded_display: formatCurrency(cat.goal_under_funded, cf),
+                underfunded: milliunitsToCurrency(
+                  asMilliunits(cat.goal_under_funded),
+                ),
+                underfunded_display: formatCurrency(
+                  asMilliunits(cat.goal_under_funded),
+                  cf,
+                ),
                 target_type: cat.goal_type ?? null,
               });
               totalUnderfunded += cat.goal_under_funded;
@@ -223,12 +232,20 @@ export function registerHealthTools(
             creditCardGaps.push({
               account_id: account.id,
               account_name: account.name,
-              account_balance: milliunitsToCurrency(account.balance),
-              account_balance_display: formatCurrency(account.balance, cf),
-              payment_available: milliunitsToCurrency(available),
-              payment_available_display: formatCurrency(available, cf),
-              gap: milliunitsToCurrency(gap),
-              gap_display: formatCurrency(gap, cf),
+              account_balance: milliunitsToCurrency(
+                asMilliunits(account.balance),
+              ),
+              account_balance_display: formatCurrency(
+                asMilliunits(account.balance),
+                cf,
+              ),
+              payment_available: milliunitsToCurrency(asMilliunits(available)),
+              payment_available_display: formatCurrency(
+                asMilliunits(available),
+                cf,
+              ),
+              gap: milliunitsToCurrency(asMilliunits(gap)),
+              gap_display: formatCurrency(asMilliunits(gap), cf),
               _gap_milliunits: gap,
             });
           }
@@ -280,21 +297,21 @@ export function registerHealthTools(
         if (rta < 0) {
           issues.push({
             severity: "critical",
-            message: `Ready to Assign is negative (${formatCurrency(rta, cf)}). You have assigned more than you have available.`,
+            message: `Ready to Assign is negative (${formatCurrency(asMilliunits(rta), cf)}). You have assigned more than you have available.`,
           });
         }
 
         if (totalCashOverspend > 0) {
           issues.push({
             severity: "critical",
-            message: `Cash overspending of ${formatCurrency(totalCashOverspend, cf)} across ${overspentCategories.filter((c) => c.type === "cash").length} category(ies). This reduces Ready to Assign next month.`,
+            message: `Cash overspending of ${formatCurrency(asMilliunits(totalCashOverspend), cf)} across ${overspentCategories.filter((c) => c.type === "cash").length} category(ies). This reduces Ready to Assign next month.`,
           });
         }
 
         if (totalCreditOverspend > 0) {
           issues.push({
             severity: "warning",
-            message: `Credit overspending of ${formatCurrency(totalCreditOverspend, cf)} detected. This creates unbudgeted debt on your credit card(s).`,
+            message: `Credit overspending of ${formatCurrency(asMilliunits(totalCreditOverspend), cf)} detected. This creates unbudgeted debt on your credit card(s).`,
           });
         }
 
@@ -308,7 +325,7 @@ export function registerHealthTools(
         if (totalUnderfunded > 0) {
           issues.push({
             severity: "warning",
-            message: `${underfundedCategories.length} target(s) underfunded by a total of ${formatCurrency(totalUnderfunded, cf)}.`,
+            message: `${underfundedCategories.length} target(s) underfunded by a total of ${formatCurrency(asMilliunits(totalUnderfunded), cf)}.`,
           });
         }
 
@@ -329,7 +346,7 @@ export function registerHealthTools(
         if (rta > 0) {
           issues.push({
             severity: "info",
-            message: `${formatCurrency(rta, cf)} is Ready to Assign. Consider allocating to underfunded targets or priorities.`,
+            message: `${formatCurrency(asMilliunits(rta), cf)} is Ready to Assign. Consider allocating to underfunded targets or priorities.`,
           });
         }
 
@@ -348,22 +365,30 @@ export function registerHealthTools(
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
           month,
           ready_to_assign: {
-            amount: milliunitsToCurrency(rta),
-            display: formatCurrency(rta, cf),
+            amount: milliunitsToCurrency(asMilliunits(rta)),
+            display: formatCurrency(asMilliunits(rta), cf),
             status: rtaStatus,
           },
           overspending: {
-            total_cash: milliunitsToCurrency(totalCashOverspend),
-            total_cash_display: formatCurrency(totalCashOverspend, cf),
-            total_credit: milliunitsToCurrency(totalCreditOverspend),
-            total_credit_display: formatCurrency(totalCreditOverspend, cf),
+            total_cash: milliunitsToCurrency(asMilliunits(totalCashOverspend)),
+            total_cash_display: formatCurrency(
+              asMilliunits(totalCashOverspend),
+              cf,
+            ),
+            total_credit: milliunitsToCurrency(
+              asMilliunits(totalCreditOverspend),
+            ),
+            total_credit_display: formatCurrency(
+              asMilliunits(totalCreditOverspend),
+              cf,
+            ),
             categories: overspentCategories.map(
               ({ _balance_milliunits: _, ...rest }) => rest,
             ),
           },
           underfunded_targets: {
-            total: milliunitsToCurrency(totalUnderfunded),
-            total_display: formatCurrency(totalUnderfunded, cf),
+            total: milliunitsToCurrency(asMilliunits(totalUnderfunded)),
+            total_display: formatCurrency(asMilliunits(totalUnderfunded), cf),
             count: underfundedCategories.length,
             top_underfunded: underfundedCategories.slice(0, 10),
           },

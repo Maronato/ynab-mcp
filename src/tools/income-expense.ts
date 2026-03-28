@@ -5,6 +5,7 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
+  asMilliunits,
   type CurrencyFormatLike,
   formatCurrency,
   milliunitsToCurrency,
@@ -40,9 +41,10 @@ function formatAmount(
   milliunits: number,
   currencyFormat?: CurrencyFormatLike,
 ): { value: number; display: string } {
+  const m = asMilliunits(milliunits);
   return {
-    value: milliunitsToCurrency(milliunits),
-    display: formatCurrency(milliunits, currencyFormat),
+    value: milliunitsToCurrency(m),
+    display: formatCurrency(m, currencyFormat),
   };
 }
 

@@ -5,6 +5,7 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
+  asMilliunits,
   type CurrencyFormatLike,
   formatCurrency,
   milliunitsToCurrency,
@@ -137,9 +138,10 @@ function formatMonthAmount(
   milliunits: number,
   currencyFormat?: CurrencyFormatLike,
 ): { amount: number; amount_display: string } {
+  const m = asMilliunits(milliunits);
   return {
-    amount: milliunitsToCurrency(milliunits),
-    amount_display: formatCurrency(milliunits, currencyFormat),
+    amount: milliunitsToCurrency(m),
+    amount_display: formatCurrency(m, currencyFormat),
   };
 }
 
@@ -273,19 +275,21 @@ export function registerTrendTools(
                 month,
                 ...formatMonthAmount(amount, settings.currency_format),
                 transaction_count: bucket?.count ?? 0,
-                moving_average_3m: milliunitsToCurrency(movingAvg[idx]),
+                moving_average_3m: milliunitsToCurrency(
+                  asMilliunits(movingAvg[idx]),
+                ),
               };
             }),
-            total: milliunitsToCurrency(entity.total),
+            total: milliunitsToCurrency(asMilliunits(entity.total)),
             total_display: formatCurrency(
-              entity.total,
+              asMilliunits(entity.total),
               settings.currency_format,
             ),
             average_monthly: milliunitsToCurrency(
-              Math.round(entity.total / monthKeys.length),
+              asMilliunits(Math.round(entity.total / monthKeys.length)),
             ),
             average_monthly_display: formatCurrency(
-              Math.round(entity.total / monthKeys.length),
+              asMilliunits(Math.round(entity.total / monthKeys.length)),
               settings.currency_format,
             ),
             trend_direction: trend.direction,
@@ -298,8 +302,11 @@ export function registerTrendTools(
           const total = monthTotals.get(month) ?? 0;
           return {
             month,
-            total: milliunitsToCurrency(total),
-            total_display: formatCurrency(total, settings.currency_format),
+            total: milliunitsToCurrency(asMilliunits(total)),
+            total_display: formatCurrency(
+              asMilliunits(total),
+              settings.currency_format,
+            ),
           };
         });
 

@@ -5,7 +5,12 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { recordUndoAndGetIds } from "../shared/undo-helpers.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { currencyToMilliunits, milliunitsToCurrency } from "../ynab/format.js";
+import {
+  asCurrency,
+  asMilliunits,
+  currencyToMilliunits,
+  milliunitsToCurrency,
+} from "../ynab/format.js";
 
 const setCategoryTargetsSchema = z.object({
   budget_id: z
@@ -90,7 +95,7 @@ export function registerTargetTools(
               if (target.goal_target !== undefined) {
                 updates.goal_target =
                   target.goal_target !== null
-                    ? currencyToMilliunits(target.goal_target)
+                    ? currencyToMilliunits(asCurrency(target.goal_target))
                     : null;
               }
 
@@ -106,12 +111,12 @@ export function registerTargetTools(
 
               const beforeTarget =
                 before.goal_target !== null && before.goal_target !== undefined
-                  ? milliunitsToCurrency(before.goal_target)
+                  ? milliunitsToCurrency(asMilliunits(before.goal_target))
                   : null;
               const afterTarget =
                 updated.goal_target !== null &&
                 updated.goal_target !== undefined
-                  ? milliunitsToCurrency(updated.goal_target)
+                  ? milliunitsToCurrency(asMilliunits(updated.goal_target))
                   : null;
 
               return {

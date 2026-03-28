@@ -4,7 +4,13 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
+import {
+  asCurrency,
+  asMilliunits,
+  currencyToMilliunits,
+  formatCurrency,
+  milliunitsToCurrency,
+} from "../ynab/format.js";
 import type { ScheduledFrequency } from "../ynab/types.js";
 
 const detectRecurringChargesSchema = z.object({
@@ -304,17 +310,26 @@ export function registerRecurringTools(
             detected_frequency_days: Math.round(medianInterval),
             detected_frequency_label: frequencyLabel,
             occurrence_count: sortedAmounts.length,
-            current_amount: milliunitsToCurrency(absLast),
-            current_amount_display: formatCurrency(absLast, currencyFormat),
+            current_amount: milliunitsToCurrency(asMilliunits(absLast)),
+            current_amount_display: formatCurrency(
+              asMilliunits(absLast),
+              currencyFormat,
+            ),
             previous_amount:
-              absPrev !== null ? milliunitsToCurrency(absPrev) : null,
+              absPrev !== null
+                ? milliunitsToCurrency(asMilliunits(absPrev))
+                : null,
             previous_amount_display:
-              absPrev !== null ? formatCurrency(absPrev, currencyFormat) : null,
+              absPrev !== null
+                ? formatCurrency(asMilliunits(absPrev), currencyFormat)
+                : null,
             price_changed: priceChanged,
             price_change_percent: priceChangePercent,
-            monthly_equivalent: milliunitsToCurrency(monthlyEquivalent),
+            monthly_equivalent: milliunitsToCurrency(
+              asMilliunits(monthlyEquivalent),
+            ),
             monthly_equivalent_display: formatCurrency(
-              monthlyEquivalent,
+              asMilliunits(monthlyEquivalent),
               currencyFormat,
             ),
             last_charge_date: lastChargeDate,
@@ -323,7 +338,7 @@ export function registerRecurringTools(
             days_overdue: Math.max(0, daysOverdue),
             has_scheduled_transaction: hasScheduled,
             scheduled_transaction_id: scheduledMatch?.id ?? null,
-            amount_variance: milliunitsToCurrency(amountVariance),
+            amount_variance: milliunitsToCurrency(asMilliunits(amountVariance)),
           });
         }
 
@@ -335,20 +350,23 @@ export function registerRecurringTools(
         // Step 6: Build create_scheduled_actions for unmatched
         const createScheduledActions = subscriptions
           .filter((sub) => !sub.has_scheduled_transaction)
-          .map((sub) => {
-            const group = payeeGroups.get(sub.payee_id)!;
+          .flatMap((sub) => {
+            const group = payeeGroups.get(sub.payee_id);
+            if (!group) return [];
             const frequency = labelToScheduledFrequency(
               sub.detected_frequency_label,
             );
-            return {
-              account_id: group.account_id,
-              date: sub.next_expected_date,
-              amount: -sub.current_amount,
-              payee_id: sub.payee_id,
-              category_id: sub.category_id,
-              frequency,
-              memo: `Auto-detected ${sub.detected_frequency_label} charge`,
-            };
+            return [
+              {
+                account_id: group.account_id,
+                date: sub.next_expected_date,
+                amount: -sub.current_amount,
+                payee_id: sub.payee_id,
+                category_id: sub.category_id,
+                frequency,
+                memo: `Auto-detected ${sub.detected_frequency_label} charge`,
+              },
+            ];
           });
 
         const unmatchedCount = subscriptions.filter(
@@ -356,7 +374,8 @@ export function registerRecurringTools(
         ).length;
 
         const totalMonthlyCostMilliunits = subscriptions.reduce(
-          (sum, s) => sum + Math.round(s.monthly_equivalent * 1000),
+          (sum, s) =>
+            sum + currencyToMilliunits(asCurrency(s.monthly_equivalent)),
           0,
         );
 
@@ -364,9 +383,11 @@ export function registerRecurringTools(
           budget_id: resolvedBudgetId,
           subscription_count: subscriptions.length,
           unmatched_count: unmatchedCount,
-          total_monthly_cost: milliunitsToCurrency(totalMonthlyCostMilliunits),
+          total_monthly_cost: milliunitsToCurrency(
+            asMilliunits(totalMonthlyCostMilliunits),
+          ),
           total_monthly_cost_display: formatCurrency(
-            totalMonthlyCostMilliunits,
+            asMilliunits(totalMonthlyCostMilliunits),
             currencyFormat,
           ),
           subscriptions,

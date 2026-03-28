@@ -5,6 +5,7 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
+  asMilliunits,
   type CurrencyFormatLike,
   formatCurrency,
   milliunitsToCurrency,
@@ -208,9 +209,11 @@ export function registerAnalysisTools(
           since_date: input.since_date,
           until_date: input.until_date ?? null,
           total_spending_milliunits: totalSpendingMilliunits,
-          total_spending: milliunitsToCurrency(totalSpendingMilliunits),
+          total_spending: milliunitsToCurrency(
+            asMilliunits(totalSpendingMilliunits),
+          ),
           total_spending_display: formatCurrency(
-            totalSpendingMilliunits,
+            asMilliunits(totalSpendingMilliunits),
             settings.currency_format,
           ),
           transaction_count: transactionCount,
@@ -275,8 +278,11 @@ function formatAggregateEntry(
     id: entry.id,
     name: entry.name,
     total_milliunits: entry.total_milliunits,
-    total: milliunitsToCurrency(entry.total_milliunits),
-    total_display: formatCurrency(entry.total_milliunits, currencyFormat),
+    total: milliunitsToCurrency(asMilliunits(entry.total_milliunits)),
+    total_display: formatCurrency(
+      asMilliunits(entry.total_milliunits),
+      currencyFormat,
+    ),
     count: entry.count,
   };
 }

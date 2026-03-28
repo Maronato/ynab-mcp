@@ -5,7 +5,8 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
-  type CurrencyFormatLike,
+  asCurrency,
+  asMilliunits,
   currencyToMilliunits,
   formatCurrency,
   milliunitsToCurrency,
@@ -99,7 +100,9 @@ export function registerAllocationTools(
         // Determine available amount
         let availableMilliunits: number;
         if (input.available_amount !== undefined) {
-          availableMilliunits = currencyToMilliunits(input.available_amount);
+          availableMilliunits = currencyToMilliunits(
+            asCurrency(input.available_amount),
+          );
         } else {
           availableMilliunits = monthSummary.to_be_budgeted;
         }
@@ -108,8 +111,13 @@ export function registerAllocationTools(
           return jsonToolResult({
             budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
             month,
-            available_amount: milliunitsToCurrency(availableMilliunits),
-            available_amount_display: formatCurrency(availableMilliunits, cf),
+            available_amount: milliunitsToCurrency(
+              asMilliunits(availableMilliunits),
+            ),
+            available_amount_display: formatCurrency(
+              asMilliunits(availableMilliunits),
+              cf,
+            ),
             message:
               availableMilliunits === 0
                 ? "Nothing available to allocate. Ready to Assign is zero."
@@ -254,7 +262,7 @@ export function registerAllocationTools(
                 p3Variable.push({
                   cat: info,
                   needed: gap,
-                  reason: `Historical avg spending (${formatCurrency(histAvg, cf)}) exceeds current balance. Gap needs funding.`,
+                  reason: `Historical avg spending (${formatCurrency(asMilliunits(histAvg), cf)}) exceeds current balance. Gap needs funding.`,
                 });
               }
             }
@@ -280,8 +288,8 @@ export function registerAllocationTools(
               category_name: item.cat.name,
               group_name: item.cat.group_name,
               priority,
-              amount: milliunitsToCurrency(amount),
-              amount_display: formatCurrency(amount, cf),
+              amount: milliunitsToCurrency(asMilliunits(amount)),
+              amount_display: formatCurrency(asMilliunits(amount), cf),
               reason: item.reason,
             });
           }
@@ -314,8 +322,8 @@ export function registerAllocationTools(
                   category_name: item.cat.name,
                   group_name: item.cat.group_name,
                   priority: "P4_savings",
-                  amount: milliunitsToCurrency(amount),
-                  amount_display: formatCurrency(amount, cf),
+                  amount: milliunitsToCurrency(asMilliunits(amount)),
+                  amount_display: formatCurrency(asMilliunits(amount), cf),
                   reason: `${item.reason} (prorated — not enough to fully fund all savings)`,
                 });
               }
@@ -337,7 +345,7 @@ export function registerAllocationTools(
           const current = allocationByCategory.get(alloc.category_id) ?? 0;
           allocationByCategory.set(
             alloc.category_id,
-            current + currencyToMilliunits(alloc.amount),
+            current + currencyToMilliunits(asCurrency(alloc.amount)),
           );
         }
 
@@ -355,7 +363,9 @@ export function registerAllocationTools(
           setBudgetActions.push({
             category_id: catId,
             month,
-            budgeted: milliunitsToCurrency(currentBudgeted + addMilliunits),
+            budgeted: milliunitsToCurrency(
+              asMilliunits(currentBudgeted + addMilliunits),
+            ),
           });
         }
 
@@ -364,12 +374,23 @@ export function registerAllocationTools(
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
           month,
-          available_amount: milliunitsToCurrency(availableMilliunits),
-          available_amount_display: formatCurrency(availableMilliunits, cf),
-          total_allocated: milliunitsToCurrency(totalAllocated),
-          total_allocated_display: formatCurrency(totalAllocated, cf),
-          unallocated_remainder: milliunitsToCurrency(remaining),
-          unallocated_remainder_display: formatCurrency(remaining, cf),
+          available_amount: milliunitsToCurrency(
+            asMilliunits(availableMilliunits),
+          ),
+          available_amount_display: formatCurrency(
+            asMilliunits(availableMilliunits),
+            cf,
+          ),
+          total_allocated: milliunitsToCurrency(asMilliunits(totalAllocated)),
+          total_allocated_display: formatCurrency(
+            asMilliunits(totalAllocated),
+            cf,
+          ),
+          unallocated_remainder: milliunitsToCurrency(asMilliunits(remaining)),
+          unallocated_remainder_display: formatCurrency(
+            asMilliunits(remaining),
+            cf,
+          ),
           allocation_count: allocations.length,
           allocations,
           set_budget_actions: setBudgetActions,

@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { formatCurrency } from "../ynab/format.js";
+import { asMilliunits, formatCurrency } from "../ynab/format.js";
 
 const budgetIdSchema = z.object({
   budget_id: z
@@ -72,30 +72,30 @@ export function registerBudgetTools(
         return jsonToolResult({
           ...summary,
           net_worth_display: formatCurrency(
-            summary.net_worth_milliunits,
+            asMilliunits(summary.net_worth_milliunits),
             settings.currency_format,
           ),
           income_display: formatCurrency(
-            summary.income_milliunits,
+            asMilliunits(summary.income_milliunits),
             settings.currency_format,
           ),
           budgeted_display: formatCurrency(
-            summary.budgeted_milliunits,
+            asMilliunits(summary.budgeted_milliunits),
             settings.currency_format,
           ),
           activity_display: formatCurrency(
-            summary.activity_milliunits,
+            asMilliunits(summary.activity_milliunits),
             settings.currency_format,
           ),
           to_be_budgeted_display: formatCurrency(
-            summary.to_be_budgeted_milliunits,
+            asMilliunits(summary.to_be_budgeted_milliunits),
             settings.currency_format,
           ),
           account_summary_by_type: summary.account_summary_by_type.map(
             (entry) => ({
               ...entry,
               total_balance_display: formatCurrency(
-                entry.total_balance_milliunits,
+                asMilliunits(entry.total_balance_milliunits),
                 settings.currency_format,
               ),
             }),

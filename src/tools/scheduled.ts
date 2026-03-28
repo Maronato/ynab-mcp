@@ -6,6 +6,7 @@ import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { recordUndoAndGetIds } from "../shared/undo-helpers.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
+  asMilliunits,
   formatCurrency,
   formatScheduledTransactionForOutput,
   snapshotScheduledTransaction,
@@ -151,7 +152,7 @@ export function registerScheduledTransactionTools(
           count: transactions.length,
           transactions: transactions.map((transaction) =>
             formatScheduledTransactionForOutput(
-              transaction,
+              { ...transaction, amount: asMilliunits(transaction.amount) },
               lookups,
               settings.currency_format,
             ),
@@ -215,7 +216,7 @@ export function registerScheduledTransactionTools(
               lookups.payeeById.set(created.payee_id, transaction.payee_name);
             }
             const formatted = formatScheduledTransactionForOutput(
-              created,
+              { ...created, amount: asMilliunits(created.amount) },
               lookups,
               settings.currency_format,
             );
@@ -228,7 +229,7 @@ export function registerScheduledTransactionTools(
             });
             undoEntries.push({
               operation: "create_scheduled_transaction",
-              description: `Created scheduled transaction ${created.id} (${formatCurrency(created.amount, settings.currency_format)}).`,
+              description: `Created scheduled transaction ${created.id} (${formatCurrency(asMilliunits(created.amount), settings.currency_format)}).`,
               undo_action: {
                 type: "delete",
                 entity_type: "scheduled_transaction",
@@ -339,7 +340,7 @@ export function registerScheduledTransactionTools(
               scheduled_transaction_id: transaction.scheduled_transaction_id,
               status: "updated",
               transaction: formatScheduledTransactionForOutput(
-                updated,
+                { ...updated, amount: asMilliunits(updated.amount) },
                 lookups,
                 settings.currency_format,
               ),

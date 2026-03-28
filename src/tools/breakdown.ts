@@ -5,6 +5,7 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
+  asMilliunits,
   type CurrencyFormatLike,
   formatCurrency,
   milliunitsToCurrency,
@@ -50,7 +51,7 @@ function getBucketKey(
   dateStr: string,
   granularity: "daily" | "weekly" | "day_of_week" | "week_of_month",
 ): { key: string; label: string } {
-  const date = new Date(dateStr + "T00:00:00");
+  const date = new Date(`${dateStr}T00:00:00`);
 
   switch (granularity) {
     case "daily":
@@ -98,9 +99,10 @@ function formatBucketAmount(
   milliunits: number,
   cf?: CurrencyFormatLike,
 ): { total: number; total_display: string } {
+  const m = asMilliunits(milliunits);
   return {
-    total: milliunitsToCurrency(milliunits),
-    total_display: formatCurrency(milliunits, cf),
+    total: milliunitsToCurrency(m),
+    total_display: formatCurrency(m, cf),
   };
 }
 
@@ -236,8 +238,8 @@ export function registerBreakdownTools(
           since_date: input.since_date,
           until_date: input.until_date ?? null,
           granularity: input.granularity,
-          total_spending: milliunitsToCurrency(grandTotal),
-          total_spending_display: formatCurrency(grandTotal, cf),
+          total_spending: milliunitsToCurrency(asMilliunits(grandTotal)),
+          total_spending_display: formatCurrency(asMilliunits(grandTotal), cf),
           transaction_count: totalTransactionCount,
           bucket_count: buckets.length,
           buckets,
@@ -256,10 +258,15 @@ export function registerBreakdownTools(
                   percentage: lowestBucket.percentage,
                 }
               : null,
-            average_per_bucket: milliunitsToCurrency(avgPerBucket),
-            average_per_bucket_display: formatCurrency(avgPerBucket, cf),
-            std_deviation: milliunitsToCurrency(stdDev),
-            std_deviation_display: formatCurrency(stdDev, cf),
+            average_per_bucket: milliunitsToCurrency(
+              asMilliunits(avgPerBucket),
+            ),
+            average_per_bucket_display: formatCurrency(
+              asMilliunits(avgPerBucket),
+              cf,
+            ),
+            std_deviation: milliunitsToCurrency(asMilliunits(stdDev)),
+            std_deviation_display: formatCurrency(asMilliunits(stdDev), cf),
           },
         });
       } catch (error) {

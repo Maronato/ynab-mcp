@@ -4,7 +4,13 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
+import {
+  asCurrency,
+  asMilliunits,
+  currencyToMilliunits,
+  formatCurrency,
+  milliunitsToCurrency,
+} from "../ynab/format.js";
 
 const INTERNAL_GROUP_NAMES = new Set([
   "Internal Master Category",
@@ -88,7 +94,7 @@ async function buildDeterministicRebalance(
         to_category_name: category.name,
         amount: moveAmount,
         amount_display: formatCurrency(
-          Math.round(moveAmount * 1000),
+          currencyToMilliunits(asCurrency(moveAmount)),
           settings.currency_format,
         ),
         reasoning: `Cover ${category.name} deficit from largest available surplus.`,
@@ -128,7 +134,9 @@ async function buildDeterministicRebalance(
   }
 
   for (const suggestion of suggestions) {
-    const amountMilliunits = Math.round(suggestion.amount * 1000);
+    const amountMilliunits = currencyToMilliunits(
+      asCurrency(suggestion.amount),
+    );
     const from = budgetAdjustments.get(suggestion.from_category_id);
     const to = budgetAdjustments.get(suggestion.to_category_id);
     if (from) from.delta -= amountMilliunits;
@@ -140,7 +148,9 @@ async function buildDeterministicRebalance(
     .map(([catId, adj]) => ({
       category_id: catId,
       month: resolvedMonth,
-      budgeted: milliunitsToCurrency(adj.currentBudgeted + adj.delta),
+      budgeted: milliunitsToCurrency(
+        asMilliunits(adj.currentBudgeted + adj.delta),
+      ),
     }));
 
   return {
@@ -218,13 +228,13 @@ export function registerRebalanceTools(
                 id: cat.id,
                 name: cat.name,
                 group_name: group.name,
-                balance: milliunitsToCurrency(cat.balance),
+                balance: milliunitsToCurrency(asMilliunits(cat.balance)),
                 balance_display: formatCurrency(
-                  cat.balance,
+                  asMilliunits(cat.balance),
                   settings.currency_format,
                 ),
-                budgeted: milliunitsToCurrency(cat.budgeted),
-                activity: milliunitsToCurrency(cat.activity),
+                budgeted: milliunitsToCurrency(asMilliunits(cat.budgeted)),
+                activity: milliunitsToCurrency(asMilliunits(cat.activity)),
                 target_type: cat.goal_type ?? null,
               });
             } else if (cat.balance > 0) {
@@ -232,15 +242,15 @@ export function registerRebalanceTools(
                 id: cat.id,
                 name: cat.name,
                 group_name: group.name,
-                balance: milliunitsToCurrency(cat.balance),
+                balance: milliunitsToCurrency(asMilliunits(cat.balance)),
                 balance_display: formatCurrency(
-                  cat.balance,
+                  asMilliunits(cat.balance),
                   settings.currency_format,
                 ),
-                budgeted: milliunitsToCurrency(cat.budgeted),
+                budgeted: milliunitsToCurrency(asMilliunits(cat.budgeted)),
                 target_type: cat.goal_type ?? null,
                 target_amount: cat.goal_target
-                  ? milliunitsToCurrency(cat.goal_target)
+                  ? milliunitsToCurrency(asMilliunits(cat.goal_target))
                   : null,
                 target_percentage_complete:
                   cat.goal_percentage_complete ?? null,

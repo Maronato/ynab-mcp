@@ -5,7 +5,7 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
-  type CurrencyFormatLike,
+  asMilliunits,
   formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
@@ -210,28 +210,53 @@ export function registerForecastTools(
               id: cat.id,
               name: cat.name,
               group_name: group.name,
-              current_balance: milliunitsToCurrency(cat.balance),
-              current_balance_display: formatCurrency(cat.balance, cf),
-              budgeted: milliunitsToCurrency(cat.budgeted),
-              budgeted_display: formatCurrency(cat.budgeted, cf),
-              spent_so_far: milliunitsToCurrency(Math.abs(cat.activity)),
-              spent_so_far_display: formatCurrency(Math.abs(cat.activity), cf),
-              scheduled_outflows: milliunitsToCurrency(scheduledOut),
-              scheduled_outflows_display: formatCurrency(scheduledOut, cf),
-              scheduled_inflows: milliunitsToCurrency(scheduledIn),
-              scheduled_inflows_display: formatCurrency(scheduledIn, cf),
-              historical_daily_rate: milliunitsToCurrency(dailyRate),
-              historical_daily_rate_display: formatCurrency(dailyRate, cf),
-              projected_additional_spend: milliunitsToCurrency(
-                projectedAdditionalSpend,
-              ),
-              projected_additional_spend_display: formatCurrency(
-                projectedAdditionalSpend,
+              current_balance: milliunitsToCurrency(asMilliunits(cat.balance)),
+              current_balance_display: formatCurrency(
+                asMilliunits(cat.balance),
                 cf,
               ),
-              projected_end_balance: milliunitsToCurrency(projectedEndBalance),
+              budgeted: milliunitsToCurrency(asMilliunits(cat.budgeted)),
+              budgeted_display: formatCurrency(asMilliunits(cat.budgeted), cf),
+              spent_so_far: milliunitsToCurrency(
+                asMilliunits(Math.abs(cat.activity)),
+              ),
+              spent_so_far_display: formatCurrency(
+                asMilliunits(Math.abs(cat.activity)),
+                cf,
+              ),
+              scheduled_outflows: milliunitsToCurrency(
+                asMilliunits(scheduledOut),
+              ),
+              scheduled_outflows_display: formatCurrency(
+                asMilliunits(scheduledOut),
+                cf,
+              ),
+              scheduled_inflows: milliunitsToCurrency(
+                asMilliunits(scheduledIn),
+              ),
+              scheduled_inflows_display: formatCurrency(
+                asMilliunits(scheduledIn),
+                cf,
+              ),
+              historical_daily_rate: milliunitsToCurrency(
+                asMilliunits(dailyRate),
+              ),
+              historical_daily_rate_display: formatCurrency(
+                asMilliunits(dailyRate),
+                cf,
+              ),
+              projected_additional_spend: milliunitsToCurrency(
+                asMilliunits(projectedAdditionalSpend),
+              ),
+              projected_additional_spend_display: formatCurrency(
+                asMilliunits(projectedAdditionalSpend),
+                cf,
+              ),
+              projected_end_balance: milliunitsToCurrency(
+                asMilliunits(projectedEndBalance),
+              ),
               projected_end_balance_display: formatCurrency(
-                projectedEndBalance,
+                asMilliunits(projectedEndBalance),
                 cf,
               ),
               will_go_negative: willGoNegative,
@@ -244,10 +269,11 @@ export function registerForecastTools(
               goingNegative.push({
                 id: cat.id,
                 name: cat.name,
-                projected_end_balance:
-                  milliunitsToCurrency(projectedEndBalance),
+                projected_end_balance: milliunitsToCurrency(
+                  asMilliunits(projectedEndBalance),
+                ),
                 projected_end_balance_display: formatCurrency(
-                  projectedEndBalance,
+                  asMilliunits(projectedEndBalance),
                   cf,
                 ),
               });

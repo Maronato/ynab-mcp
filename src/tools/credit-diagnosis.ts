@@ -4,7 +4,11 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
+import {
+  asMilliunits,
+  formatCurrency,
+  milliunitsToCurrency,
+} from "../ynab/format.js";
 
 const diagnoseCreditCardDebtSchema = z.object({
   budget_id: z
@@ -98,7 +102,7 @@ export function registerCreditDiagnosisTools(
             budget_id: resolvedBudgetId,
             cards: [],
             total_debt: 0,
-            total_debt_display: formatCurrency(0, currencyFormat),
+            total_debt_display: formatCurrency(asMilliunits(0), currencyFormat),
             set_budget_actions: [],
             message: "No credit card accounts found.",
           });
@@ -192,9 +196,11 @@ export function registerCreditDiagnosisTools(
                   debtSources.push({
                     month,
                     category_name: cat.name,
-                    overspent_amount: milliunitsToCurrency(overspent),
+                    overspent_amount: milliunitsToCurrency(
+                      asMilliunits(overspent),
+                    ),
                     overspent_display: formatCurrency(
-                      overspent,
+                      asMilliunits(overspent),
                       currencyFormat,
                     ),
                   });
@@ -211,7 +217,7 @@ export function registerCreditDiagnosisTools(
               setBudgetActions.push({
                 category_id: paymentCat.id,
                 month: currentMonth,
-                budgeted: milliunitsToCurrency(gap),
+                budgeted: milliunitsToCurrency(asMilliunits(gap)),
               });
             }
           }
@@ -219,15 +225,20 @@ export function registerCreditDiagnosisTools(
           cards.push({
             account_id: card.id,
             account_name: card.name,
-            card_balance: milliunitsToCurrency(cardBalance),
-            card_balance_display: formatCurrency(cardBalance, currencyFormat),
-            payment_available: milliunitsToCurrency(paymentAvailable),
-            payment_available_display: formatCurrency(
-              paymentAvailable,
+            card_balance: milliunitsToCurrency(asMilliunits(cardBalance)),
+            card_balance_display: formatCurrency(
+              asMilliunits(cardBalance),
               currencyFormat,
             ),
-            gap: milliunitsToCurrency(gap),
-            gap_display: formatCurrency(gap, currencyFormat),
+            payment_available: milliunitsToCurrency(
+              asMilliunits(paymentAvailable),
+            ),
+            payment_available_display: formatCurrency(
+              asMilliunits(paymentAvailable),
+              currencyFormat,
+            ),
+            gap: milliunitsToCurrency(asMilliunits(gap)),
+            gap_display: formatCurrency(asMilliunits(gap), currencyFormat),
             has_debt: hasDebt,
             debt_sources: debtSources,
           });
@@ -236,9 +247,9 @@ export function registerCreditDiagnosisTools(
         return jsonToolResult({
           budget_id: resolvedBudgetId,
           cards,
-          total_debt: milliunitsToCurrency(totalDebtMilliunits),
+          total_debt: milliunitsToCurrency(asMilliunits(totalDebtMilliunits)),
           total_debt_display: formatCurrency(
-            totalDebtMilliunits,
+            asMilliunits(totalDebtMilliunits),
             currencyFormat,
           ),
           set_budget_actions: setBudgetActions,

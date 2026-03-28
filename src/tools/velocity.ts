@@ -5,7 +5,7 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
-  type CurrencyFormatLike,
+  asMilliunits,
   formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
@@ -161,36 +161,45 @@ export function registerVelocityTools(
               id: cat.id,
               name: cat.name,
               group_name: group.name,
-              budgeted: milliunitsToCurrency(cat.budgeted),
-              budgeted_display: formatCurrency(cat.budgeted, cf),
-              spent_so_far: milliunitsToCurrency(spentSoFar),
-              spent_so_far_display: formatCurrency(spentSoFar, cf),
-              balance: milliunitsToCurrency(cat.balance),
-              balance_display: formatCurrency(cat.balance, cf),
-              daily_burn_rate: milliunitsToCurrency(Math.round(dailyBurnRate)),
+              budgeted: milliunitsToCurrency(asMilliunits(cat.budgeted)),
+              budgeted_display: formatCurrency(asMilliunits(cat.budgeted), cf),
+              spent_so_far: milliunitsToCurrency(asMilliunits(spentSoFar)),
+              spent_so_far_display: formatCurrency(
+                asMilliunits(spentSoFar),
+                cf,
+              ),
+              balance: milliunitsToCurrency(asMilliunits(cat.balance)),
+              balance_display: formatCurrency(asMilliunits(cat.balance), cf),
+              daily_burn_rate: milliunitsToCurrency(
+                asMilliunits(Math.round(dailyBurnRate)),
+              ),
               daily_burn_rate_display: formatCurrency(
-                Math.round(dailyBurnRate),
+                asMilliunits(Math.round(dailyBurnRate)),
                 cf,
               ),
               projected_total_spend: milliunitsToCurrency(
-                Math.round(projectedTotalSpend),
+                asMilliunits(Math.round(projectedTotalSpend)),
               ),
               projected_total_spend_display: formatCurrency(
-                Math.round(projectedTotalSpend),
+                asMilliunits(Math.round(projectedTotalSpend)),
                 cf,
               ),
               projected_remaining: milliunitsToCurrency(
-                Math.round(projectedRemaining),
+                asMilliunits(Math.round(projectedRemaining)),
               ),
               projected_remaining_display: formatCurrency(
-                Math.round(projectedRemaining),
+                asMilliunits(Math.round(projectedRemaining)),
                 cf,
               ),
               risk,
               historical_monthly_avg:
-                histAvg !== null ? milliunitsToCurrency(histAvg) : null,
+                histAvg !== null
+                  ? milliunitsToCurrency(asMilliunits(histAvg))
+                  : null,
               historical_monthly_avg_display:
-                histAvg !== null ? formatCurrency(histAvg, cf) : null,
+                histAvg !== null
+                  ? formatCurrency(asMilliunits(histAvg), cf)
+                  : null,
             };
 
             categories.push(entry);
@@ -204,10 +213,10 @@ export function registerVelocityTools(
                 name: cat.name,
                 risk,
                 projected_overspend: milliunitsToCurrency(
-                  Math.max(0, overspendAmount),
+                  asMilliunits(Math.max(0, overspendAmount)),
                 ),
                 projected_overspend_display: formatCurrency(
-                  Math.max(0, overspendAmount),
+                  asMilliunits(Math.max(0, overspendAmount)),
                   cf,
                 ),
               });

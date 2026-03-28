@@ -6,8 +6,10 @@ import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { recordUndoAndGetIds } from "../shared/undo-helpers.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
+  asMilliunits,
   formatCurrency,
   formatTransactionForOutput,
+  type Milliunits,
   milliunitsToCurrency,
   snapshotTransaction,
 } from "../ynab/format.js";
@@ -17,6 +19,32 @@ import type {
   TransactionSearchQuery,
   UpdateTransactionInput,
 } from "../ynab/types.js";
+
+/** Brand a YNAB API transaction's amounts as Milliunits for the format helpers. */
+function brandAmounts<
+  T extends { amount: number; subtransactions?: Array<{ amount: number }> },
+>(
+  tx: T,
+): Omit<T, "amount" | "subtransactions"> & {
+  amount: Milliunits;
+  subtransactions?: Array<
+    Omit<T["subtransactions"] extends Array<infer U> ? U : never, "amount"> & {
+      amount: Milliunits;
+    }
+  >;
+} {
+  const { subtransactions, ...rest } = tx;
+  return {
+    ...rest,
+    amount: asMilliunits(tx.amount),
+    ...(subtransactions && {
+      subtransactions: subtransactions.map((s) => ({
+        ...s,
+        amount: asMilliunits(s.amount),
+      })),
+    }),
+  } as ReturnType<typeof brandAmounts<T>>;
+}
 
 const searchQuerySchema = z.object({
   since_date: z.string().optional().describe("Date in YYYY-MM-DD format."),
@@ -214,7 +242,7 @@ export function registerTransactionTools(
               count: transactions.length,
               transactions: transactions.map((transaction) =>
                 formatTransactionForOutput(
-                  transaction,
+                  brandAmounts(transaction),
                   lookups,
                   settings.currency_format,
                 ),
@@ -275,7 +303,7 @@ export function registerTransactionTools(
 
         const formatted = created.map((transaction) =>
           formatTransactionForOutput(
-            transaction,
+            brandAmounts(transaction),
             lookups,
             settings.currency_format,
           ),
@@ -283,7 +311,7 @@ export function registerTransactionTools(
 
         const undoEntries = created.map((transaction) => ({
           operation: "create_transaction" as const,
-          description: `Created transaction ${transaction.id} (${formatCurrency(transaction.amount, settings.currency_format)}).`,
+          description: `Created transaction ${transaction.id} (${formatCurrency(asMilliunits(transaction.amount), settings.currency_format)}).`,
           undo_action: {
             type: "delete" as const,
             entity_type: "transaction" as const,
@@ -436,7 +464,7 @@ export function registerTransactionTools(
             current_transaction_id: after.id,
             status: "updated",
             transaction: formatTransactionForOutput(
-              after,
+              brandAmounts(after),
               lookups,
               settings.currency_format,
             ),
@@ -478,7 +506,7 @@ export function registerTransactionTools(
               current_transaction_id: after.id,
               status: "updated",
               transaction: formatTransactionForOutput(
-                after,
+                brandAmounts(after),
                 lookups,
                 settings.currency_format,
               ),
@@ -679,7 +707,8 @@ function buildReplacementFromUpdate(
   },
   update: UpdateTransactionInput,
 ): CreateTransactionInput {
-  const amount = update.amount ?? milliunitsToCurrency(existing.amount);
+  const amount =
+    update.amount ?? milliunitsToCurrency(asMilliunits(existing.amount));
   const hasSubs = update.subtransactions !== undefined;
   return {
     account_id: update.account_id ?? existing.account_id,

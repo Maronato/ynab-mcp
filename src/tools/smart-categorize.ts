@@ -9,7 +9,11 @@ import {
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
+import {
+  asMilliunits,
+  formatCurrency,
+  milliunitsToCurrency,
+} from "../ynab/format.js";
 import type { NameLookup } from "../ynab/types.js";
 
 const autoCategorizeSchema = z.object({
@@ -283,8 +287,11 @@ export function registerCategorizationTools(
           transaction_id: s.transaction_id,
           date: s.date,
           payee_name: s.payee_name,
-          amount: milliunitsToCurrency(s.amount),
-          amount_display: formatCurrency(s.amount, settings.currency_format),
+          amount: milliunitsToCurrency(asMilliunits(s.amount)),
+          amount_display: formatCurrency(
+            asMilliunits(s.amount),
+            settings.currency_format,
+          ),
           memo: s.memo,
           current_category_id: s.current_category_id,
           current_category_name: s.current_category_name,

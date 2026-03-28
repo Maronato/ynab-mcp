@@ -5,7 +5,11 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { recordUndoAndGetIds } from "../shared/undo-helpers.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
+import {
+  asMilliunits,
+  formatCurrency,
+  milliunitsToCurrency,
+} from "../ynab/format.js";
 
 const listCategoriesSchema = z.object({
   budget_id: z
@@ -169,13 +173,13 @@ export function registerCategoryTools(
               target_amount:
                 category.goal_target !== null &&
                 category.goal_target !== undefined
-                  ? milliunitsToCurrency(category.goal_target)
+                  ? milliunitsToCurrency(asMilliunits(category.goal_target))
                   : null,
               target_amount_display:
                 category.goal_target !== null &&
                 category.goal_target !== undefined
                   ? formatCurrency(
-                      category.goal_target,
+                      asMilliunits(category.goal_target),
                       settings.currency_format,
                     )
                   : null,
@@ -184,26 +188,30 @@ export function registerCategoryTools(
               target_underfunded:
                 category.goal_under_funded !== null &&
                 category.goal_under_funded !== undefined
-                  ? milliunitsToCurrency(category.goal_under_funded)
+                  ? milliunitsToCurrency(
+                      asMilliunits(category.goal_under_funded),
+                    )
                   : null,
               target_underfunded_display:
                 category.goal_under_funded !== null &&
                 category.goal_under_funded !== undefined
                   ? formatCurrency(
-                      category.goal_under_funded,
+                      asMilliunits(category.goal_under_funded),
                       settings.currency_format,
                     )
                   : null,
               target_overall_funded:
                 category.goal_overall_funded !== null &&
                 category.goal_overall_funded !== undefined
-                  ? milliunitsToCurrency(category.goal_overall_funded)
+                  ? milliunitsToCurrency(
+                      asMilliunits(category.goal_overall_funded),
+                    )
                   : null,
               target_overall_funded_display:
                 category.goal_overall_funded !== null &&
                 category.goal_overall_funded !== undefined
                   ? formatCurrency(
-                      category.goal_overall_funded,
+                      asMilliunits(category.goal_overall_funded),
                       settings.currency_format,
                     )
                   : null,
@@ -212,13 +220,15 @@ export function registerCategoryTools(
               target_overall_left:
                 category.goal_overall_left !== null &&
                 category.goal_overall_left !== undefined
-                  ? milliunitsToCurrency(category.goal_overall_left)
+                  ? milliunitsToCurrency(
+                      asMilliunits(category.goal_overall_left),
+                    )
                   : null,
               target_overall_left_display:
                 category.goal_overall_left !== null &&
                 category.goal_overall_left !== undefined
                   ? formatCurrency(
-                      category.goal_overall_left,
+                      asMilliunits(category.goal_overall_left),
                       settings.currency_format,
                     )
                   : null,
@@ -269,24 +279,26 @@ export function registerCategoryTools(
 
         return jsonToolResult({
           month: month.month,
-          income: milliunitsToCurrency(month.income),
+          income: milliunitsToCurrency(asMilliunits(month.income)),
           income_display: formatCurrency(
-            month.income,
+            asMilliunits(month.income),
             settings.currency_format,
           ),
-          budgeted: milliunitsToCurrency(month.budgeted),
+          budgeted: milliunitsToCurrency(asMilliunits(month.budgeted)),
           budgeted_display: formatCurrency(
-            month.budgeted,
+            asMilliunits(month.budgeted),
             settings.currency_format,
           ),
-          activity: milliunitsToCurrency(month.activity),
+          activity: milliunitsToCurrency(asMilliunits(month.activity)),
           activity_display: formatCurrency(
-            month.activity,
+            asMilliunits(month.activity),
             settings.currency_format,
           ),
-          to_be_budgeted: milliunitsToCurrency(month.to_be_budgeted),
+          to_be_budgeted: milliunitsToCurrency(
+            asMilliunits(month.to_be_budgeted),
+          ),
           to_be_budgeted_display: formatCurrency(
-            month.to_be_budgeted,
+            asMilliunits(month.to_be_budgeted),
             settings.currency_format,
           ),
           age_of_money: month.age_of_money ?? null,
@@ -305,19 +317,19 @@ export function registerCategoryTools(
                 category_group_id: group.id,
                 category_group_name: group.name,
                 hidden: treeCat.hidden,
-                budgeted: milliunitsToCurrency(budgeted),
+                budgeted: milliunitsToCurrency(asMilliunits(budgeted)),
                 budgeted_display: formatCurrency(
-                  budgeted,
+                  asMilliunits(budgeted),
                   settings.currency_format,
                 ),
-                activity: milliunitsToCurrency(activity),
+                activity: milliunitsToCurrency(asMilliunits(activity)),
                 activity_display: formatCurrency(
-                  activity,
+                  asMilliunits(activity),
                   settings.currency_format,
                 ),
-                balance: milliunitsToCurrency(balance),
+                balance: milliunitsToCurrency(asMilliunits(balance)),
                 balance_display: formatCurrency(
-                  balance,
+                  asMilliunits(balance),
                   settings.currency_format,
                 ),
                 overspent: balance < 0,
@@ -389,8 +401,12 @@ export function registerCategoryTools(
                   status: "updated",
                   previous_budgeted_milliunits: before.budgeted,
                   updated_budgeted_milliunits: updated.budgeted,
-                  previous_budgeted: milliunitsToCurrency(before.budgeted),
-                  updated_budgeted: milliunitsToCurrency(updated.budgeted),
+                  previous_budgeted: milliunitsToCurrency(
+                    asMilliunits(before.budgeted),
+                  ),
+                  updated_budgeted: milliunitsToCurrency(
+                    asMilliunits(updated.budgeted),
+                  ),
                 } as Record<string, unknown>,
                 undoEntry: {
                   operation: "set_category_budget" as const,
