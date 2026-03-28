@@ -5,6 +5,7 @@ import {
   createMockContext,
   createMockCurrencyFormat,
   createMockNameLookup,
+  createMockSplitTransaction,
   createMockTransaction,
 } from "../test-utils.js";
 import { registerSmartTools } from "./smart.js";
@@ -386,6 +387,63 @@ describe("suggest_transaction_categories", () => {
     expect(content.update_actions[0].approved).toBeUndefined();
     expect(content.update_actions[0].transaction_id).toBe("tx-1");
     expect(content.update_actions[0].category_id).toBe("cat-groceries");
+  });
+
+  it("excludes fully-categorized splits and reports them as skipped", async () => {
+    const { context, handlers } = setup();
+    const split = createMockSplitTransaction({
+      id: "tx-split",
+      category_id: "split-cat",
+      approved: false,
+    });
+    const normalTx = createMockTransaction({
+      id: "tx-normal",
+      category_id: null,
+      approved: false,
+    });
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([normalTx, split])
+      .mockResolvedValueOnce([]);
+    setupDefaultMocks(context);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(new Map());
+
+    const result = await handlers.suggest_transaction_categories({
+      budget_id: "budget-1",
+    });
+    const content = JSON.parse(result.content[0].text);
+
+    expect(content.suggestion_count).toBe(1);
+    expect(content.suggestions[0].transaction_id).toBe("tx-normal");
+    expect(content.skipped_splits).toHaveLength(1);
+    expect(content.skipped_splits[0].transaction_id).toBe("tx-split");
+    expect(content.skipped_splits[0].reason).toContain("Split transaction");
+    expect(content.skipped_splits[0].reason).toContain("parent-level");
+    expect(content.skipped_splits[0].reason).not.toContain(
+      "cannot be modified via the API",
+    );
+  });
+
+  it("does not include split transactions in update_actions", async () => {
+    const { context, handlers } = setup();
+    const split = createMockSplitTransaction({
+      id: "tx-split",
+      category_id: "split-cat",
+      approved: false,
+    });
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([split])
+      .mockResolvedValueOnce([]);
+    setupDefaultMocks(context);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(new Map());
+
+    const result = await handlers.suggest_transaction_categories({
+      budget_id: "budget-1",
+    });
+    const content = JSON.parse(result.content[0].text);
+
+    expect(content.suggestion_count).toBe(0);
+    expect(content.update_actions).toBeUndefined();
+    expect(content.skipped_splits).toHaveLength(1);
   });
 
   it("returns suggestions without LLM when sampling unavailable", async () => {

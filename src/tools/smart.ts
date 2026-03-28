@@ -156,18 +156,58 @@ export function registerSmartTools(
           })),
         );
 
-        // Build target transactions
-        const targets: TargetTransaction[] = [
-          ...unapprovedUncategorized.map((tx) => toTarget(tx, lookups, false)),
-          ...approvedUncategorized.map((tx) => toTarget(tx, lookups, false)),
-          ...unapprovedCategorized.map((tx) => toTarget(tx, lookups, true)),
+        const allCandidates = [
+          ...unapprovedUncategorized.map((tx) => ({
+            tx,
+            unapprovedReview: false,
+          })),
+          ...approvedUncategorized.map((tx) => ({
+            tx,
+            unapprovedReview: false,
+          })),
+          ...unapprovedCategorized.map((tx) => ({
+            tx,
+            unapprovedReview: true,
+          })),
         ];
+
+        const targets: TargetTransaction[] = [];
+        const skippedSplits: Array<{
+          transaction_id: string;
+          reason: string;
+        }> = [];
+
+        for (const { tx, unapprovedReview } of allCandidates) {
+          const activeSubs =
+            (tx as TransactionLike).subtransactions?.filter(
+              (s) => !s.deleted,
+            ) ?? [];
+          if (activeSubs.length > 0) {
+            skippedSplits.push({
+              transaction_id: tx.id,
+              reason:
+                "Split transaction — this tool only suggests parent-level category actions, not subtransaction replacements.",
+            });
+            continue;
+          }
+          targets.push(toTarget(tx, lookups, unapprovedReview));
+        }
+
+        if (targets.length === 0 && skippedSplits.length === 0) {
+          return jsonToolResult({
+            budget_id: resolvedBudgetId,
+            suggestion_count: 0,
+            message: "No transactions to categorize.",
+          });
+        }
 
         if (targets.length === 0) {
           return jsonToolResult({
             budget_id: resolvedBudgetId,
             suggestion_count: 0,
-            message: "No transactions to categorize.",
+            skipped_splits: skippedSplits,
+            message:
+              "All uncategorized transactions are splits whose subtransactions cannot be modified via the API.",
           });
         }
 
@@ -268,6 +308,9 @@ export function registerSmartTools(
           confidence_summary: confidenceSummary,
           suggestions: formattedSuggestions,
           update_actions: updateActions,
+          ...(skippedSplits.length > 0 && {
+            skipped_splits: skippedSplits,
+          }),
         });
       } catch (error) {
         return errorToolResult(
@@ -587,6 +630,10 @@ interface TransactionLike {
   category_id?: string | null;
   memo?: string | null;
   approved: boolean;
+  subtransactions?: Array<{
+    category_id?: string | null;
+    deleted?: boolean;
+  }>;
 }
 
 function toTarget(
