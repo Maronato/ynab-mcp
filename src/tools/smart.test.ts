@@ -25,7 +25,6 @@ function makeProfile(overrides: Partial<PayeeProfile> = {}): PayeeProfile {
     total_count: 0,
     most_recent_category_id: null,
     most_recent_date: null,
-    amount_buckets: [],
     ...overrides,
   };
 }

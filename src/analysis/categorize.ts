@@ -32,11 +32,6 @@ export interface CategorizationSignals {
   payee_history: Record<string, number> | null;
   payee_history_dominant: string | null;
   payee_history_confidence: number | null;
-  amount_pattern: {
-    typical_category: string | null;
-    typical_category_name: string | null;
-    match: boolean;
-  } | null;
   scheduled_match: ScheduledTransactionMatch | null;
   ynab_existing: {
     category_id: string;
@@ -135,26 +130,7 @@ function gatherSignals(
     payeeHistoryConfidence = dominantCount / profile.total_count;
   }
 
-  // Signal 2: Amount pattern
-  let amountPattern: CategorizationSignals["amount_pattern"] = null;
-  if (profile && profile.amount_buckets.length > 0) {
-    const absAmount = Math.abs(tx.amount);
-    const matchingBucket = profile.amount_buckets.find(
-      (b) => absAmount >= b.min && absAmount <= b.max,
-    );
-    if (matchingBucket) {
-      const typicalCat = getDominantCategory(matchingBucket.category_counts);
-      amountPattern = {
-        typical_category: typicalCat,
-        typical_category_name: typicalCat
-          ? (categoryNameById.get(typicalCat) ?? null)
-          : null,
-        match: typicalCat === payeeHistoryDominant,
-      };
-    }
-  }
-
-  // Signal 3: Scheduled transaction match
+  // Signal 2: Scheduled transaction match
   let scheduledMatch: ScheduledTransactionMatch | null = null;
   if (tx.payee_id) {
     const match = scheduledTransactions.find(
@@ -174,7 +150,7 @@ function gatherSignals(
     }
   }
 
-  // Signal 4: YNAB existing (for unapproved auto-categorized)
+  // Signal 3: YNAB existing (for unapproved auto-categorized)
   let ynabExisting: CategorizationSignals["ynab_existing"] = null;
   if (tx.category_id && !tx.approved) {
     ynabExisting = {
@@ -184,7 +160,7 @@ function gatherSignals(
     };
   }
 
-  // Signal 5: Similar payees (only if no direct profile)
+  // Signal 4: Similar payees (only if no direct profile)
   let similarPayees: CategorizationSignals["similar_payees"] = null;
   if (!profile && tx.payee_name) {
     const matches = findSimilarPayees(
@@ -210,7 +186,6 @@ function gatherSignals(
     payee_history: payeeHistory,
     payee_history_dominant: payeeHistoryDominant,
     payee_history_confidence: payeeHistoryConfidence,
-    amount_pattern: amountPattern,
     scheduled_match: scheduledMatch,
     ynab_existing: ynabExisting,
     similar_payees: similarPayees,
@@ -284,23 +259,6 @@ function scoreAndAssign(
       confidence: "high",
       method: "payee_history",
       reasoning: `Payee categorized as ${categoryNameById.get(histDom) ?? histDom} ${Math.round(histConf * 100)}% of the time (${histTotal} transactions)`,
-    };
-  }
-
-  // Amount pattern as tiebreaker for moderate payee history
-  if (
-    signals.amount_pattern?.typical_category &&
-    !signals.amount_pattern.match &&
-    histTotal >= 3
-  ) {
-    const amtCat = signals.amount_pattern.typical_category;
-    return {
-      ...base,
-      suggested_category_id: amtCat,
-      suggested_category_name: categoryNameById.get(amtCat) ?? null,
-      confidence: "medium",
-      method: "amount_pattern",
-      reasoning: `Amount matches pattern for ${signals.amount_pattern.typical_category_name ?? amtCat} (payee history disagrees)`,
     };
   }
 

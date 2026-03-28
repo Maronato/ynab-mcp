@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildAmountBuckets,
-  getDominantCategory,
-  PayeeProfileAnalyzer,
-} from "./payee-profiles.js";
+import { getDominantCategory, PayeeProfileAnalyzer } from "./payee-profiles.js";
 
 function createMockClient() {
   return {
@@ -209,49 +205,6 @@ describe("PayeeProfileAnalyzer", () => {
     const newWeight = p1?.recency_weighted.get("new-cat") ?? 0;
     const oldWeight = p1?.recency_weighted.get("old-cat") ?? 0;
     expect(newWeight).toBeGreaterThan(oldWeight);
-  });
-});
-
-describe("buildAmountBuckets", () => {
-  it("returns empty for fewer than 3 transactions", () => {
-    const result = buildAmountBuckets([
-      { amount: -10000, category_id: "cat-1" },
-      { amount: -20000, category_id: "cat-2" },
-    ]);
-    expect(result).toEqual([]);
-  });
-
-  it("returns empty when all transactions use same category", () => {
-    const result = buildAmountBuckets([
-      { amount: -5000, category_id: "cat-1" },
-      { amount: -10000, category_id: "cat-1" },
-      { amount: -50000, category_id: "cat-1" },
-      { amount: -100000, category_id: "cat-1" },
-    ]);
-    expect(result).toEqual([]);
-  });
-
-  it("creates buckets when amounts cluster by category", () => {
-    // Small amounts → subscriptions, large amounts → electronics
-    const txs = [
-      { amount: -9990, category_id: "subscriptions" },
-      { amount: -9990, category_id: "subscriptions" },
-      { amount: -12990, category_id: "subscriptions" },
-      { amount: -299000, category_id: "electronics" },
-      { amount: -349000, category_id: "electronics" },
-      { amount: -499000, category_id: "electronics" },
-    ];
-    const result = buildAmountBuckets(txs);
-
-    expect(result.length).toBeGreaterThanOrEqual(2);
-
-    // Find the bucket containing small amounts
-    const smallBucket = result.find((b) => b.max < 50000);
-    if (smallBucket) {
-      expect(getDominantCategory(smallBucket.category_counts)).toBe(
-        "subscriptions",
-      );
-    }
   });
 });
 
