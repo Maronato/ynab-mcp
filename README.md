@@ -1,18 +1,19 @@
 # YNAB MCP Server
 
-An MCP server for YNAB with batch operations, robust undo support, and LLM-assisted smart tools.
+An MCP server for YNAB with batch operations, deterministic analysis tools, and robust undo support.
 
-> [!NOTE]  
+> [!NOTE]
 > **AI Disclosure:** This project was built with Claude Code and Cursor. It works and is tested, but the code is largely clanker-made.
 
 ## Highlights
 
-- **22 tools** covering budgets, accounts, transactions, categories, targets, scheduled transactions, and spending analysis
+- **32 tools** covering budgets, accounts, transactions, categories, targets, scheduled transactions, and spending analysis
+- **Deterministic analysis** — budget health, spending trends, forecasts, anomaly detection, and more with no LLM sampling
 - **Batch operations** — create, update, and delete multiple transactions or category assignments in a single call
-- **Undo support** — every write operation is recorded and reversible, scoped to sessions with configurable TTL
-- **Smart tools** — transaction categorization and overspending coverage suggestions using payee history, amount patterns, and scheduled transaction matching
+- **Undo support** — every write operation is recorded and reversible
+- **Smart tools** — transaction categorization, overspending coverage, and budget allocation suggestions using payee history and patterns
 - **Built-in knowledge base** — YNAB methodology docs (credit cards, targets, overspending, reconciliation) served as MCP resources
-- **Workflow prompts** — pre-built prompts for monthly reviews, spending reports, and unapproved transaction triage
+- **5 workflow prompts** — monthly reviews, spending reports, unapproved triage, budget optimization, and subscription audits
 - **Read-only mode** — disable all write operations for safe exploration
 - **Efficient caching** — delta sync with YNAB's server knowledge system minimizes API calls
 
@@ -62,14 +63,12 @@ For Cursor, add the same structure to `.cursor/mcp.json` in your project or `~/.
 
 All configuration is done through environment variables.
 
-| Variable                 | Description                                           | Default       |
-| ------------------------ | ----------------------------------------------------- | ------------- |
-| `YNAB_API_TOKEN`         | YNAB personal access token                            | **required**  |
-| `YNAB_API_URL`           | Override the YNAB API base URL                        | YNAB default  |
-| `YNAB_MCP_DATA_DIR`      | Directory for undo history storage                    | `~/.ynab-mcp` |
-| `YNAB_READ_ONLY`         | Disable all write operations (`true`/`false`/`1`/`0`) | `false`       |
-| `YNAB_REQUIRE_SESSION`   | Require explicit `session_id` on every write          | `false`       |
-| `YNAB_SESSION_TTL_HOURS` | How long undo history is retained                     | `24`          |
+| Variable            | Description                                           | Default       |
+| ------------------- | ----------------------------------------------------- | ------------- |
+| `YNAB_API_TOKEN`    | YNAB personal access token                            | **required**  |
+| `YNAB_API_URL`      | Override the YNAB API base URL                        | YNAB default  |
+| `YNAB_MCP_DATA_DIR` | Directory for undo history storage                    | `~/.ynab-mcp` |
+| `YNAB_READ_ONLY`    | Disable all write operations (`true`/`false`/`1`/`0`) | `false`       |
 
 ## Tools
 
@@ -98,12 +97,13 @@ All configuration is done through environment variables.
 
 ### Categories
 
-| Tool                   | Description                                                  |
-| ---------------------- | ------------------------------------------------------------ |
-| `list_categories`      | Category group hierarchy with IDs and names                  |
-| `get_targets`          | Target details: type, amounts, underfunded, percent complete |
-| `get_monthly_budget`   | Month-level budgeted/activity/balance per category           |
-| `set_category_budgets` | Batch set budgeted amounts across categories and months      |
+| Tool                   | Description                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| `list_categories`      | Category group hierarchy with IDs and names                                          |
+| `get_targets`          | Target details: type, amounts, underfunded, percent complete, cadence, and deadlines |
+| `get_monthly_budget`   | Month-level budgeted/activity/balance per category                                   |
+| `set_category_budgets` | Batch set budgeted amounts across categories and months                              |
+| `set_category_targets` | Create or update category targets (monthly, weekly, by-date, etc.)                   |
 
 ### Spending Analysis
 
@@ -126,30 +126,36 @@ All configuration is done through environment variables.
 | -------------------------------- | ------------------------------------------------------------------------------------- |
 | `suggest_transaction_categories` | Suggest categories for uncategorized transactions based on payee history and patterns |
 | `suggest_overspending_coverage`  | Suggest budget moves to cover overspent categories from surplus ones                  |
+| `suggest_budget_allocation`      | Priority-based allocation of unbudgeted funds across underfunded categories            |
 
-Both return structured actions that can be passed directly to `update_transactions` or `set_category_budgets`.
+These return structured actions that can be passed directly to `update_transactions` or `set_category_budgets`.
 
-### Sessions & Undo
+### Analysis & Diagnostics
+
+| Tool                         | Description                                                          |
+| ---------------------------- | -------------------------------------------------------------------- |
+| `get_budget_health`          | Single-call budget diagnostic: overspending, target gaps, RTA, flags |
+| `get_spending_velocity`      | Mid-month spending pace per category vs budget                       |
+| `forecast_category_balances` | End-of-month balance projections based on scheduled and past trends  |
+| `get_spending_trends`        | Multi-month time series by category or payee                         |
+| `get_income_expense_summary` | Income vs expense totals with savings rate                           |
+| `get_spending_breakdown`     | Spending by time granularity (daily, weekly, day-of-week)            |
+| `detect_recurring_charges`   | Subscription and recurring charge detection from transaction history |
+| `detect_anomalies`           | Flag unusual transactions by amount, frequency, or category          |
+| `diagnose_credit_card_debt`  | Trace credit card debt sources and suggest payoff strategies         |
+
+All analysis tools are deterministic -- no LLM sampling involved.
+
+### Undo
 
 | Tool                | Description                                      |
 | ------------------- | ------------------------------------------------ |
-| `setup_session`     | Create a new session ID for scoping undo history |
-| `list_undo_history` | List recorded undo entries for a session         |
+| `list_undo_history` | List recorded undo entries                       |
 | `undo_operations`   | Undo one or more previous write operations by ID |
 
 ## Resources
 
-### Budget Data
-
-| URI                                          | Description                                       |
-| -------------------------------------------- | ------------------------------------------------- |
-| `ynab://budgets`                             | All budgets (ID, name, last modified, date range) |
-| `ynab://budgets/{budget_id}/settings`        | Budget plan settings                              |
-| `ynab://budgets/{budget_id}/payees`          | Payee directory                                   |
-| `ynab://budgets/{budget_id}/category-groups` | Category group and category hierarchy             |
-| `ynab://budgets/{budget_id}/accounts`        | Accounts with balances                            |
-
-### Knowledge Base
+Knowledge base resources for YNAB methodology. Workflow prompts reference these automatically.
 
 | URI                               | Topic                              |
 | --------------------------------- | ---------------------------------- |
@@ -162,11 +168,13 @@ Both return structured actions that can be passed directly to `update_transactio
 
 ## Prompts
 
-| Prompt              | Description                                      |
-| ------------------- | ------------------------------------------------ |
-| `monthly-review`    | Guided monthly budget review                     |
-| `spending-report`   | Spending report for a date range                 |
-| `triage-unapproved` | Batch review and approve unapproved transactions |
+| Prompt                 | Description                                      |
+| ---------------------- | ------------------------------------------------ |
+| `monthly-review`       | Guided monthly budget review                     |
+| `spending-report`      | Spending report for a date range                 |
+| `triage-unapproved`    | Batch review and approve unapproved transactions |
+| `budget-optimization`  | Analyze budget for optimization opportunities    |
+| `subscription-audit`   | Review recurring charges and manage subscriptions |
 
 ## Key Concepts
 
@@ -174,7 +182,7 @@ Both return structured actions that can be passed directly to `update_transactio
 
 **`budget_id`** — Most tools accept an optional `budget_id`. Omit it or pass `"last-used"` to target the most recently accessed budget.
 
-**Sessions & undo** — Every write operation records an undo entry. By default, all operations share a single session. Call `setup_session` to get an isolated session ID, then pass it as `session_id` on write calls to scope undo history. Set `YNAB_REQUIRE_SESSION=true` to enforce this. Undo entries expire after `YNAB_SESSION_TTL_HOURS` (default 24).
+**Undo** — Every write operation records an undo entry. Use `list_undo_history` and `undo_operations` to review or revert changes.
 
 **Read-only mode** — Set `YNAB_READ_ONLY=true` to block all write operations. Useful for exploring your budget safely or restricting an MCP client to read-only access.
 
