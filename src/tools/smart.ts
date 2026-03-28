@@ -301,7 +301,7 @@ export function registerSmartTools(
         const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(
           input.budget_id,
         );
-        const month = input.month ?? "current";
+        const month = input.month ?? getCurrentMonth();
 
         const [categoryGroups, settings] = await Promise.all([
           context.ynabClient.getCategories(resolvedBudgetId, { month }),
