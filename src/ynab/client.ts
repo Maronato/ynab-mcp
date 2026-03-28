@@ -2,6 +2,7 @@ import * as ynab from "ynab";
 import { extractErrorMessage, isNotFoundError } from "./errors.js";
 import {
   currencyToMilliunits,
+  milliunitsToCurrency,
   snapshotScheduledTransaction,
   snapshotTransaction,
 } from "./format.js";
@@ -11,13 +12,75 @@ import type {
   CreateScheduledTransactionInput,
   CreateTransactionInput,
   NameLookup,
+  ScheduledTransactionSnapshot,
   TransactionSearchQuery,
+  TransactionSnapshot,
   UpdateScheduledTransactionInput,
   UpdateTransactionInput,
 } from "./types.js";
 
 /** Default TTL: 1 hour. External changes are picked up after this period. */
 const CACHE_TTL_MS = 60 * 60 * 1000;
+
+/** Default timeout for individual YNAB API requests. */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Maximum number of retries for transient failures on read operations. */
+const DEFAULT_MAX_RETRIES = 2;
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() =>
+    clearTimeout(timeoutId),
+  );
+}
+
+function isTransientError(error: unknown): boolean {
+  // Timeout errors from our own wrapper
+  if (error instanceof Error && error.message.includes("timed out")) {
+    return true;
+  }
+  // Network errors (fetch failures)
+  if (error instanceof TypeError && error.message.includes("fetch")) {
+    return true;
+  }
+  // 5xx server errors from the YNAB API (SDK throws objects with error.id)
+  if (typeof error === "object" && error !== null && "error" in error) {
+    const shaped = error as { error?: { id?: string } };
+    const id = shaped.error?.id;
+    if (typeof id === "string" && id.startsWith("5")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number,
+  shouldRetry: (error: unknown) => boolean,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxRetries || !shouldRetry(error)) throw error;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(1000 * 2 ** attempt, 5000)),
+      );
+    }
+  }
+  throw lastError;
+}
 
 const KNOWN_SUB_APIS = new Set([
   "plans",
@@ -118,12 +181,18 @@ export class YnabClient {
 
   readonly readOnly: boolean;
 
+  private readonly timeoutMs: number;
+
+  private readonly maxRetries: number;
+
   constructor(
     accessToken: string,
     endpointUrl?: string,
-    options?: { readOnly?: boolean },
+    options?: { readOnly?: boolean; timeoutMs?: number; maxRetries?: number },
   ) {
-    this.api = this.withRateLimit(
+    this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.api = this.withRateLimitAndResilience(
       new ynab.API(accessToken, endpointUrl),
       new RateLimiter(),
     );
@@ -132,9 +201,14 @@ export class YnabClient {
 
   /**
    * Wraps the ynab API so that every SDK method call on known sub-APIs
-   * automatically passes through the rate limiter.
+   * automatically passes through the rate limiter, applies a timeout,
+   * and retries transient failures for read-only (get/list) methods.
    */
-  private withRateLimit(api: ynab.API, rateLimiter: RateLimiter): ynab.API {
+  private withRateLimitAndResilience(
+    api: ynab.API,
+    rateLimiter: RateLimiter,
+  ): ynab.API {
+    const { timeoutMs, maxRetries } = this;
     return new Proxy(api, {
       get(target, prop, receiver) {
         const value = Reflect.get(target, prop, receiver);
@@ -149,12 +223,35 @@ export class YnabClient {
             const method = Reflect.get(subTarget, subProp, subReceiver);
             if (typeof method !== "function") return method;
 
+            const isReadMethod =
+              typeof subProp === "string" &&
+              (subProp.startsWith("get") || subProp.startsWith("list"));
+
             return (...args: unknown[]) => {
-              rateLimiter.trackCall();
-              return (method as (...a: unknown[]) => unknown).apply(
-                subTarget,
-                args,
-              );
+              const invoke = (): unknown => {
+                rateLimiter.trackCall();
+                const result = (method as (...a: unknown[]) => unknown).apply(
+                  subTarget,
+                  args,
+                );
+                if (result instanceof Promise) {
+                  return withTimeout(
+                    result,
+                    timeoutMs,
+                    `YNAB API request timed out after ${timeoutMs / 1000} seconds.`,
+                  );
+                }
+                return result;
+              };
+
+              if (isReadMethod) {
+                return withRetry(
+                  invoke as () => Promise<unknown>,
+                  maxRetries,
+                  isTransientError,
+                );
+              }
+              return invoke();
             };
           },
         });
@@ -269,22 +366,22 @@ export class YnabClient {
       budget_id: resolvedBudgetId,
       month: month.month,
       net_worth_milliunits: netWorthMilliunits,
-      net_worth: netWorthMilliunits / 1000,
+      net_worth: milliunitsToCurrency(netWorthMilliunits),
       income_milliunits: month.income,
-      income: month.income / 1000,
+      income: milliunitsToCurrency(month.income),
       budgeted_milliunits: month.budgeted,
-      budgeted: month.budgeted / 1000,
+      budgeted: milliunitsToCurrency(month.budgeted),
       activity_milliunits: month.activity,
-      activity: month.activity / 1000,
+      activity: milliunitsToCurrency(month.activity),
       to_be_budgeted_milliunits: month.to_be_budgeted,
-      to_be_budgeted: month.to_be_budgeted / 1000,
+      to_be_budgeted: milliunitsToCurrency(month.to_be_budgeted),
       age_of_money: month.age_of_money ?? null,
       overspent_category_count: overspentCategoryCount,
       account_summary_by_type: [...accountsByType.values()].map((entry) => ({
         type: entry.type,
         count: entry.count,
         total_balance_milliunits: entry.total_balance,
-        total_balance: entry.total_balance / 1000,
+        total_balance: milliunitsToCurrency(entry.total_balance),
       })),
     };
   }
@@ -790,8 +887,43 @@ export class YnabClient {
     try {
       created = await this.createTransactions(resolvedBudgetId, [replacement]);
     } catch (error) {
+      // Attempt to restore the original transaction to avoid data loss
+      try {
+        const activeSubs = deleted.subtransactions?.filter((s) => !s.deleted);
+        await this.createTransactions(resolvedBudgetId, [
+          {
+            account_id: deleted.account_id,
+            date: deleted.date,
+            amount: milliunitsToCurrency(deleted.amount),
+            payee_id: deleted.payee_id ?? null,
+            payee_name: deleted.payee_name ?? null,
+            category_id:
+              activeSubs && activeSubs.length > 0
+                ? undefined
+                : (deleted.category_id ?? null),
+            memo: deleted.memo ?? null,
+            cleared: deleted.cleared as "cleared" | "uncleared" | "reconciled",
+            approved: deleted.approved,
+            flag_color: deleted.flag_color ?? null,
+            subtransactions:
+              activeSubs && activeSubs.length > 0
+                ? activeSubs.map((sub) => ({
+                    amount: milliunitsToCurrency(sub.amount),
+                    payee_id: sub.payee_id ?? null,
+                    category_id: sub.category_id ?? null,
+                    memo: sub.memo ?? null,
+                  }))
+                : undefined,
+          },
+        ]);
+      } catch {
+        // Restore failed -- surface the original error with additional context
+        throw new Error(
+          `Failed to create replacement for transaction ${transactionId} after deleting the original, and automatic restore also failed. Manual recovery may be needed. ${extractErrorMessage(error)}`,
+        );
+      }
       throw new Error(
-        `Failed to create replacement for transaction ${transactionId} after deleting the original. ${extractErrorMessage(error)}`,
+        `Failed to create replacement for transaction ${transactionId} after deleting the original. The original transaction was restored. ${extractErrorMessage(error)}`,
       );
     }
 
@@ -1114,13 +1246,13 @@ export class YnabClient {
 
   snapshotTransaction(
     transaction: ynab.TransactionDetail,
-  ): Record<string, unknown> {
+  ): TransactionSnapshot {
     return snapshotTransaction(transaction);
   }
 
   snapshotScheduledTransaction(
     transaction: ynab.ScheduledTransactionDetail,
-  ): Record<string, unknown> {
+  ): ScheduledTransactionSnapshot {
     return snapshotScheduledTransaction(transaction);
   }
 
