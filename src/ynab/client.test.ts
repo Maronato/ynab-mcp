@@ -999,6 +999,274 @@ describe("replaceTransaction", () => {
       }),
     ).rejects.toThrow("read-only mode");
   });
+
+  it("flushes only orphaned categories from old split", async () => {
+    const oldSplit = tx({
+      id: "old-tx",
+      deleted: true,
+      account_id: "acc-1",
+      date: "2024-01-15",
+      subtransactions: [
+        { category_id: "cat-A", amount: -20000, deleted: true },
+        { category_id: "cat-B", amount: -10000, deleted: true },
+      ],
+    });
+    const newSplit = tx({
+      id: "new-tx",
+      amount: -30000,
+      subtransactions: [
+        { category_id: "cat-A", amount: -15000, deleted: false },
+        { category_id: "cat-C", amount: -15000, deleted: false },
+      ],
+    });
+    const flushTx = tx({ id: "flush-B", subtransactions: [] });
+
+    mockApi.transactions.deleteTransaction
+      .mockResolvedValueOnce({ data: { transaction: oldSplit } })
+      .mockResolvedValueOnce({ data: { transaction: flushTx } });
+    mockApi.transactions.createTransactions
+      .mockResolvedValueOnce({ data: { transactions: [newSplit] } })
+      .mockResolvedValueOnce({ data: { transactions: [flushTx] } });
+
+    await client.replaceTransaction("b", "old-tx", {
+      account_id: "acc-1",
+      date: "2024-01-15",
+      amount: -30,
+      subtransactions: [
+        { amount: -15, category_id: "cat-A" },
+        { amount: -15, category_id: "cat-C" },
+      ],
+    });
+
+    expect(mockApi.transactions.deleteTransaction).toHaveBeenCalledTimes(2);
+    expect(mockApi.transactions.createTransactions).toHaveBeenCalledTimes(2);
+
+    const flushCreateCall =
+      mockApi.transactions.createTransactions.mock.calls[1];
+    const flushPayload = flushCreateCall[1] as {
+      transactions: Array<{ category_id: string }>;
+    };
+    expect(flushPayload.transactions).toHaveLength(1);
+    expect(flushPayload.transactions[0].category_id).toBe("cat-B");
+  });
+
+  it("skips flush when all old categories appear in replacement", async () => {
+    const oldSplit = tx({
+      id: "old-tx",
+      deleted: true,
+      account_id: "acc-1",
+      date: "2024-01-15",
+      subtransactions: [
+        { category_id: "cat-A", amount: -20000, deleted: true },
+        { category_id: "cat-B", amount: -10000, deleted: true },
+      ],
+    });
+    const newSplit = tx({
+      id: "new-tx",
+      amount: -30000,
+      subtransactions: [
+        { category_id: "cat-A", amount: -15000, deleted: false },
+        { category_id: "cat-B", amount: -15000, deleted: false },
+      ],
+    });
+
+    mockApi.transactions.deleteTransaction.mockResolvedValueOnce({
+      data: { transaction: oldSplit },
+    });
+    mockApi.transactions.createTransactions.mockResolvedValueOnce({
+      data: { transactions: [newSplit] },
+    });
+
+    await client.replaceTransaction("b", "old-tx", {
+      account_id: "acc-1",
+      date: "2024-01-15",
+      amount: -30,
+      subtransactions: [
+        { amount: -15, category_id: "cat-A" },
+        { amount: -15, category_id: "cat-B" },
+      ],
+    });
+
+    expect(mockApi.transactions.deleteTransaction).toHaveBeenCalledTimes(1);
+    expect(mockApi.transactions.createTransactions).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("deleteTransaction split phantom flush", () => {
+  it("flushes all categories when deleting a split", async () => {
+    const splitTx = tx({
+      id: "split-1",
+      deleted: true,
+      account_id: "acc-1",
+      date: "2024-01-15",
+      subtransactions: [
+        { category_id: "cat-A", amount: -20000, deleted: true },
+        { category_id: "cat-B", amount: -10000, deleted: true },
+      ],
+    });
+    const flushA = tx({ id: "flush-A", subtransactions: [] });
+    const flushB = tx({ id: "flush-B", subtransactions: [] });
+
+    mockApi.transactions.deleteTransaction
+      .mockResolvedValueOnce({ data: { transaction: splitTx } })
+      .mockResolvedValueOnce({ data: { transaction: flushA } })
+      .mockResolvedValueOnce({ data: { transaction: flushB } });
+    mockApi.transactions.createTransactions.mockResolvedValueOnce({
+      data: { transactions: [flushA, flushB] },
+    });
+
+    await client.deleteTransaction("b", "split-1");
+
+    expect(mockApi.transactions.createTransactions).toHaveBeenCalledTimes(1);
+    const createCall = mockApi.transactions.createTransactions.mock.calls[0];
+    const payload = createCall[1] as {
+      transactions: Array<{ category_id: string; amount: number }>;
+    };
+    expect(payload.transactions).toHaveLength(2);
+    const categoryIds = payload.transactions.map((t) => t.category_id).sort();
+    expect(categoryIds).toEqual(["cat-A", "cat-B"]);
+    for (const t of payload.transactions) {
+      expect(t.amount).toBe(-10);
+    }
+
+    expect(mockApi.transactions.deleteTransaction).toHaveBeenCalledTimes(3);
+    expect(mockApi.transactions.deleteTransaction).toHaveBeenCalledWith(
+      "b",
+      "flush-A",
+    );
+    expect(mockApi.transactions.deleteTransaction).toHaveBeenCalledWith(
+      "b",
+      "flush-B",
+    );
+  });
+
+  it("does not flush when deleting a non-split transaction", async () => {
+    const nonSplit = tx({ id: "simple-1", deleted: true, subtransactions: [] });
+
+    mockApi.transactions.deleteTransaction.mockResolvedValueOnce({
+      data: { transaction: nonSplit },
+    });
+
+    await client.deleteTransaction("b", "simple-1");
+
+    expect(mockApi.transactions.deleteTransaction).toHaveBeenCalledTimes(1);
+    expect(mockApi.transactions.createTransactions).not.toHaveBeenCalled();
+  });
+
+  it("does not flush when skipPhantomFlush is true", async () => {
+    const splitTx = tx({
+      id: "split-1",
+      deleted: true,
+      subtransactions: [
+        { category_id: "cat-A", amount: -20000, deleted: true },
+      ],
+    });
+
+    mockApi.transactions.deleteTransaction.mockResolvedValueOnce({
+      data: { transaction: splitTx },
+    });
+
+    await client.deleteTransaction("b", "split-1", {
+      skipPhantomFlush: true,
+    });
+
+    expect(mockApi.transactions.deleteTransaction).toHaveBeenCalledTimes(1);
+    expect(mockApi.transactions.createTransactions).not.toHaveBeenCalled();
+  });
+
+  it("flushes all subs even when marked deleted (YNAB propagates parent deletion)", async () => {
+    const splitTx = tx({
+      id: "split-1",
+      deleted: true,
+      account_id: "acc-1",
+      date: "2024-01-15",
+      subtransactions: [
+        { category_id: "cat-A", amount: -20000, deleted: true },
+        { category_id: "cat-B", amount: -10000, deleted: true },
+      ],
+    });
+    const flushA = tx({ id: "flush-A", subtransactions: [] });
+    const flushB = tx({ id: "flush-B", subtransactions: [] });
+
+    mockApi.transactions.deleteTransaction
+      .mockResolvedValueOnce({ data: { transaction: splitTx } })
+      .mockResolvedValueOnce({ data: { transaction: flushA } })
+      .mockResolvedValueOnce({ data: { transaction: flushB } });
+    mockApi.transactions.createTransactions.mockResolvedValueOnce({
+      data: { transactions: [flushA, flushB] },
+    });
+
+    await client.deleteTransaction("b", "split-1");
+
+    const createCall = mockApi.transactions.createTransactions.mock.calls[0];
+    const payload = createCall[1] as {
+      transactions: Array<{ category_id: string }>;
+    };
+    expect(payload.transactions).toHaveLength(2);
+    const categoryIds = payload.transactions.map((t) => t.category_id).sort();
+    expect(categoryIds).toEqual(["cat-A", "cat-B"]);
+  });
+
+  it("deduplicates categories when multiple subs share one", async () => {
+    const splitTx = tx({
+      id: "split-1",
+      deleted: true,
+      account_id: "acc-1",
+      date: "2024-01-15",
+      subtransactions: [
+        { category_id: "cat-A", amount: -10000, deleted: true },
+        { category_id: "cat-A", amount: -5000, deleted: true },
+        { category_id: "cat-B", amount: -5000, deleted: true },
+      ],
+    });
+    const flushA = tx({ id: "flush-A", subtransactions: [] });
+    const flushB = tx({ id: "flush-B", subtransactions: [] });
+
+    mockApi.transactions.deleteTransaction
+      .mockResolvedValueOnce({ data: { transaction: splitTx } })
+      .mockResolvedValueOnce({ data: { transaction: flushA } })
+      .mockResolvedValueOnce({ data: { transaction: flushB } });
+    mockApi.transactions.createTransactions.mockResolvedValueOnce({
+      data: { transactions: [flushA, flushB] },
+    });
+
+    await client.deleteTransaction("b", "split-1");
+
+    const createCall = mockApi.transactions.createTransactions.mock.calls[0];
+    const payload = createCall[1] as {
+      transactions: Array<{ category_id: string }>;
+    };
+    expect(payload.transactions).toHaveLength(2);
+  });
+
+  it("uses account_id and date from the deleted transaction", async () => {
+    const splitTx = tx({
+      id: "split-1",
+      deleted: true,
+      account_id: "special-acc",
+      date: "2025-06-15",
+      subtransactions: [
+        { category_id: "cat-A", amount: -10000, deleted: true },
+      ],
+    });
+    const flushA = tx({ id: "flush-A", subtransactions: [] });
+
+    mockApi.transactions.deleteTransaction
+      .mockResolvedValueOnce({ data: { transaction: splitTx } })
+      .mockResolvedValueOnce({ data: { transaction: flushA } });
+    mockApi.transactions.createTransactions.mockResolvedValueOnce({
+      data: { transactions: [flushA] },
+    });
+
+    await client.deleteTransaction("b", "split-1");
+
+    const createCall = mockApi.transactions.createTransactions.mock.calls[0];
+    const payload = createCall[1] as {
+      transactions: Array<{ account_id: string; date: string }>;
+    };
+    expect(payload.transactions[0].account_id).toBe("special-acc");
+    expect(payload.transactions[0].date).toBe("2025-06-15");
+  });
 });
 
 describe("syncBudgetData clears simple caches", () => {

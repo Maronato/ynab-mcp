@@ -778,6 +778,7 @@ export class YnabClient {
     const deleted = await this.deleteTransaction(
       resolvedBudgetId,
       transactionId,
+      { skipPhantomFlush: true },
     );
     if (!deleted) {
       throw new Error(
@@ -801,12 +802,20 @@ export class YnabClient {
       );
     }
 
+    // The YNAB API has a bug where deleting a split transaction leaves phantom
+    // budget activity in the affected categories. Creating any transaction in
+    // those categories forces a recalculation that clears the phantom. The
+    // replacement's create already "touches" its own categories, so we only
+    // need to flush categories from the old split that aren't in the new one.
+    await this.flushSplitPhantoms(resolvedBudgetId, deleted, transaction);
+
     return { transaction, previousId: transactionId };
   }
 
   async deleteTransaction(
     budgetId: string | undefined,
     transactionId: string,
+    options?: { skipPhantomFlush?: boolean },
   ): Promise<ynab.TransactionDetail | null> {
     this.assertWriteAllowed();
     try {
@@ -818,11 +827,75 @@ export class YnabClient {
       this.markCollectionsStale(resolvedBudgetId, ["accounts", "categories"]);
       this.invalidateMonthCaches(resolvedBudgetId);
       this.optimisticRemoveTransaction(resolvedBudgetId, transactionId);
-      return response.data.transaction;
+      const deleted = response.data.transaction;
+      if (deleted && !options?.skipPhantomFlush) {
+        await this.flushSplitPhantoms(resolvedBudgetId, deleted);
+      }
+      return deleted;
     } catch (error) {
       if (isNotFoundError(error)) return null;
       throw error;
     }
+  }
+
+  /**
+   * Work around a YNAB API bug: deleting a split transaction does not remove
+   * its subtransactions' budget activity. Creating (then deleting) a small
+   * non-split transaction in each affected category forces a recalculation.
+   *
+   * When {@link replacementTransaction} is provided, categories already present
+   * in the replacement are skipped since the create already flushed them.
+   */
+  private async flushSplitPhantoms(
+    budgetId: string,
+    deleted: ynab.TransactionDetail,
+    replacementTransaction?: ynab.TransactionDetail,
+  ): Promise<void> {
+    // Don't filter by s.deleted here: the YNAB API marks all subtransactions
+    // as deleted when the parent transaction is deleted, so the flag doesn't
+    // distinguish individually-removed subs from parent-level deletion.
+    const subs = deleted.subtransactions ?? [];
+    if (subs.length === 0) return;
+
+    const deletedCategoryIds = new Set(
+      subs.map((s) => s.category_id).filter((id): id is string => !!id),
+    );
+    if (deletedCategoryIds.size === 0) return;
+
+    if (replacementTransaction) {
+      const replacementCategoryIds = new Set<string>();
+      if (replacementTransaction.category_id) {
+        replacementCategoryIds.add(replacementTransaction.category_id);
+      }
+      for (const sub of replacementTransaction.subtransactions ?? []) {
+        if (sub.category_id && !sub.deleted) {
+          replacementCategoryIds.add(sub.category_id);
+        }
+      }
+      for (const id of replacementCategoryIds) {
+        deletedCategoryIds.delete(id);
+      }
+    }
+
+    if (deletedCategoryIds.size === 0) return;
+
+    const categoryIds = [...deletedCategoryIds];
+    const created = await this.createTransactions(
+      budgetId,
+      categoryIds.map((categoryId) => ({
+        account_id: deleted.account_id,
+        date: deleted.date,
+        amount: -0.01,
+        category_id: categoryId,
+        approved: true,
+      })),
+    );
+
+    await Promise.all(
+      created.map((t) =>
+        this.deleteTransaction(budgetId, t.id, { skipPhantomFlush: true }),
+      ),
+    );
   }
 
   async getScheduledTransactionById(
