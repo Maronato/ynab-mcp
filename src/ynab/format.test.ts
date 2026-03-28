@@ -9,6 +9,8 @@ import {
 } from "../test-utils.js";
 
 import {
+  asCurrency,
+  asMilliunits,
   currencyToMilliunits,
   formatCurrency,
   formatScheduledTransactionForOutput,
@@ -20,59 +22,63 @@ import {
 
 describe("currencyToMilliunits", () => {
   it("converts integer amounts", () => {
-    expect(currencyToMilliunits(5)).toBe(5000);
+    expect(currencyToMilliunits(asCurrency(5))).toBe(5000);
   });
 
   it("converts decimal amounts", () => {
-    expect(currencyToMilliunits(5.5)).toBe(5500);
+    expect(currencyToMilliunits(asCurrency(5.5))).toBe(5500);
   });
 
   it("handles negative amounts", () => {
-    expect(currencyToMilliunits(-3.25)).toBe(-3250);
+    expect(currencyToMilliunits(asCurrency(-3.25))).toBe(-3250);
   });
 
   it("rounds floating point edge cases", () => {
-    expect(currencyToMilliunits(1.9999)).toBe(2000);
-    expect(currencyToMilliunits(1.999)).toBe(1999);
+    expect(currencyToMilliunits(asCurrency(1.9999))).toBe(2000);
+    expect(currencyToMilliunits(asCurrency(1.999))).toBe(1999);
   });
 
   it("handles zero", () => {
-    expect(currencyToMilliunits(0)).toBe(0);
+    expect(currencyToMilliunits(asCurrency(0))).toBe(0);
   });
 });
 
 describe("milliunitsToCurrency", () => {
   it("converts round amounts", () => {
-    expect(milliunitsToCurrency(5000)).toBe(5);
-    expect(milliunitsToCurrency(-3250)).toBe(-3.25);
+    expect(milliunitsToCurrency(asMilliunits(5000))).toBe(5);
+    expect(milliunitsToCurrency(asMilliunits(-3250))).toBe(-3.25);
   });
 
   it("handles non-round amounts", () => {
-    expect(milliunitsToCurrency(1)).toBe(0.001);
+    expect(milliunitsToCurrency(asMilliunits(1))).toBe(0.001);
   });
 });
 
 describe("formatCurrency", () => {
   it("formats with defaults", () => {
-    expect(formatCurrency(5500)).toBe("$5.50");
+    expect(formatCurrency(asMilliunits(5500))).toBe("$5.50");
   });
 
   it("formats negative amounts with defaults", () => {
-    expect(formatCurrency(-5500)).toBe("-$5.50");
+    expect(formatCurrency(asMilliunits(-5500))).toBe("-$5.50");
   });
 
   it("uses custom symbol", () => {
-    expect(formatCurrency(1000000, { currency_symbol: "EUR" })).toBe(
-      "EUR1,000.00",
-    );
+    expect(
+      formatCurrency(asMilliunits(1000000), { currency_symbol: "EUR" }),
+    ).toBe("EUR1,000.00");
   });
 
   it("places symbol after value when symbol_first is false", () => {
-    expect(formatCurrency(5500, { symbol_first: false })).toBe("5.50$");
+    expect(formatCurrency(asMilliunits(5500), { symbol_first: false })).toBe(
+      "5.50$",
+    );
   });
 
   it("omits symbol when display_symbol is false", () => {
-    expect(formatCurrency(5500, { display_symbol: false })).toBe("5.50");
+    expect(formatCurrency(asMilliunits(5500), { display_symbol: false })).toBe(
+      "5.50",
+    );
   });
 
   it("formats European style with custom separators", () => {
@@ -80,23 +86,29 @@ describe("formatCurrency", () => {
       decimal_separator: ",",
       group_separator: ".",
     });
-    expect(formatCurrency(1234567, format)).toBe("$1.234,57");
+    expect(formatCurrency(asMilliunits(1234567), format)).toBe("$1.234,57");
   });
 
   it("omits decimals when decimal_digits is 0", () => {
-    expect(formatCurrency(5500, { decimal_digits: 0 })).toBe("$6");
+    expect(formatCurrency(asMilliunits(5500), { decimal_digits: 0 })).toBe(
+      "$6",
+    );
   });
 
   it("shows three decimal places when decimal_digits is 3", () => {
-    expect(formatCurrency(5500, { decimal_digits: 3 })).toBe("$5.500");
+    expect(formatCurrency(asMilliunits(5500), { decimal_digits: 3 })).toBe(
+      "$5.500",
+    );
   });
 
   it("formats negative with symbol_first false", () => {
-    expect(formatCurrency(-5500, { symbol_first: false })).toBe("-5.50$");
+    expect(formatCurrency(asMilliunits(-5500), { symbol_first: false })).toBe(
+      "-5.50$",
+    );
   });
 
   it("formats large amounts with grouping", () => {
-    expect(formatCurrency(1234567890)).toBe("$1,234,567.89");
+    expect(formatCurrency(asMilliunits(1234567890))).toBe("$1,234,567.89");
   });
 });
 

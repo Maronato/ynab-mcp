@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { vi } from "vitest";
 import type { ZodObject, ZodRawShape, ZodType } from "zod";
 import type { UndoEntry } from "./undo/types.js";
-import type { CurrencyFormatLike } from "./ynab/format.js";
+import { asMilliunits, type CurrencyFormatLike } from "./ynab/format.js";
 import type { NameLookup } from "./ynab/types.js";
 
 export function createMockUndoEntry(
@@ -30,7 +30,7 @@ export function createMockUndoEntry(
 }
 
 export function createMockTransaction(overrides: Record<string, unknown> = {}) {
-  return {
+  const raw = {
     id: "tx-1",
     account_id: "acc-1",
     date: "2024-01-15",
@@ -44,12 +44,13 @@ export function createMockTransaction(overrides: Record<string, unknown> = {}) {
     flag_color: null as string | null,
     ...overrides,
   };
+  return { ...raw, amount: asMilliunits(raw.amount as number) };
 }
 
 export function createMockSubtransaction(
   overrides: Record<string, unknown> = {},
 ) {
-  return {
+  const raw = {
     id: "sub-1",
     transaction_id: "tx-1",
     amount: -25000,
@@ -63,6 +64,7 @@ export function createMockSubtransaction(
     deleted: false,
     ...overrides,
   };
+  return { ...raw, amount: asMilliunits(raw.amount as number) };
 }
 
 export function createMockSplitTransaction(
@@ -82,7 +84,7 @@ export function createMockSplitTransaction(
     category_id: "cat-2",
     category_name: "Entertainment",
   });
-  return {
+  const raw = {
     id: "tx-split",
     account_id: "acc-1",
     date: "2024-01-15",
@@ -97,12 +99,13 @@ export function createMockSplitTransaction(
     subtransactions: [sub1, sub2],
     ...overrides,
   };
+  return { ...raw, amount: asMilliunits(raw.amount as number) };
 }
 
 export function createMockScheduledTransaction(
   overrides: Record<string, unknown> = {},
 ) {
-  return {
+  const raw = {
     id: "stx-1",
     account_id: "acc-1",
     date_first: "2024-01-01",
@@ -115,6 +118,7 @@ export function createMockScheduledTransaction(
     flag_color: null as string | null,
     ...overrides,
   };
+  return { ...raw, amount: asMilliunits(raw.amount as number) };
 }
 
 export function createMockNameLookup(
@@ -226,7 +230,11 @@ export function createMockContext(): MockAppContext {
     },
     undoEngine: {
       recordEntries: vi.fn().mockResolvedValue([]),
-      listHistory: vi.fn().mockResolvedValue([]),
+      listHistory: vi
+        .fn()
+        .mockResolvedValue({ entries: [], pendingOperations: [] }),
+      markPending: vi.fn().mockResolvedValue("pending-id"),
+      clearPending: vi.fn().mockResolvedValue(undefined),
       undoOperations: vi.fn().mockResolvedValue({ results: [], summary: {} }),
       updateIdMappings: vi.fn().mockResolvedValue(undefined),
     },

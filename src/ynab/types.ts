@@ -1,3 +1,5 @@
+import type { Milliunits } from "./format.js";
+
 export type TransactionFilterType = "uncategorized" | "unapproved";
 
 export type TransactionSort = "date_asc" | "date_desc";
@@ -117,7 +119,7 @@ export interface NameLookup {
 
 export interface SubtransactionSnapshot {
   [key: string]: unknown;
-  amount: number;
+  amount: Milliunits;
   payee_id: string | null;
   category_id: string | null;
   memo: string | null;
@@ -128,7 +130,7 @@ export interface TransactionSnapshot {
   id: string;
   account_id: string;
   date: string;
-  amount: number;
+  amount: Milliunits;
   payee_id: string | null;
   payee_name: string | null;
   category_id: string | null;
@@ -144,7 +146,7 @@ export interface ScheduledTransactionSnapshot {
   id: string;
   account_id: string;
   date: string;
-  amount: number;
+  amount: Milliunits;
   payee_id: string | null;
   payee_name: string | null;
   category_id: string | null;

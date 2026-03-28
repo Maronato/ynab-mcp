@@ -4,6 +4,12 @@ import type {
   TransactionSnapshot,
 } from "./types.js";
 
+/** Branded numeric type representing amounts in milliunits (1/1000 of a currency unit). */
+export type Milliunits = number & { readonly __brand: "milliunits" };
+
+/** Branded numeric type representing amounts in currency units (e.g. dollars). */
+export type CurrencyUnits = number & { readonly __brand: "currency" };
+
 export interface CurrencyFormatLike {
   currency_symbol?: string;
   decimal_digits?: number;
@@ -13,16 +19,26 @@ export interface CurrencyFormatLike {
   display_symbol?: boolean;
 }
 
-export function currencyToMilliunits(amount: number): number {
-  return Math.round(amount * 1000);
+/** Cast a raw number (from YNAB API) to Milliunits. Use at API boundaries only. */
+export function asMilliunits(value: number): Milliunits {
+  return value as Milliunits;
 }
 
-export function milliunitsToCurrency(amount: number): number {
-  return Math.round(amount) / 1000;
+/** Cast a raw number (from user input) to CurrencyUnits. Use at API boundaries only. */
+export function asCurrency(value: number): CurrencyUnits {
+  return value as CurrencyUnits;
+}
+
+export function currencyToMilliunits(amount: CurrencyUnits): Milliunits {
+  return Math.round((amount as number) * 1000) as Milliunits;
+}
+
+export function milliunitsToCurrency(amount: Milliunits): CurrencyUnits {
+  return (Math.round(amount as number) / 1000) as CurrencyUnits;
 }
 
 export function formatCurrency(
-  amountMilliunits: number,
+  amountMilliunits: Milliunits,
   currencyFormat?: CurrencyFormatLike,
 ): string {
   const amount = milliunitsToCurrency(amountMilliunits);
@@ -74,7 +90,7 @@ export function snapshotTransaction(transaction: {
     id: transaction.id,
     account_id: transaction.account_id,
     date: transaction.date,
-    amount: transaction.amount,
+    amount: asMilliunits(transaction.amount),
     payee_id: transaction.payee_id ?? null,
     payee_name: transaction.payee_name ?? null,
     category_id: transaction.category_id ?? null,
@@ -86,7 +102,7 @@ export function snapshotTransaction(transaction: {
       activeSubs.length > 0 && {
         subtransactions: activeSubs
           .map((sub) => ({
-            amount: sub.amount,
+            amount: asMilliunits(sub.amount),
             payee_id: sub.payee_id ?? null,
             category_id: sub.category_id ?? null,
             memo: sub.memo ?? null,
@@ -122,7 +138,7 @@ export function snapshotScheduledTransaction(transaction: {
     id: transaction.id,
     account_id: transaction.account_id,
     date: transaction.date_first,
-    amount: transaction.amount,
+    amount: asMilliunits(transaction.amount),
     payee_id: transaction.payee_id ?? null,
     payee_name: transaction.payee_name ?? null,
     category_id: transaction.category_id ?? null,
@@ -134,7 +150,7 @@ export function snapshotScheduledTransaction(transaction: {
 
 export interface SubtransactionLike {
   id: string;
-  amount: number;
+  amount: Milliunits;
   memo?: string | null;
   payee_id?: string | null;
   payee_name?: string | null;
@@ -147,7 +163,7 @@ export function formatTransactionForOutput(
   transaction: {
     id: string;
     date: string;
-    amount: number;
+    amount: Milliunits;
     memo?: string | null;
     cleared: string;
     approved: boolean;
@@ -221,7 +237,7 @@ export function formatScheduledTransactionForOutput(
     date_first: string;
     date_next: string;
     frequency: string;
-    amount: number;
+    amount: Milliunits;
     memo?: string | null;
     account_id: string;
     payee_id?: string | null;
