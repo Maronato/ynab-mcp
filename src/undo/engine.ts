@@ -49,7 +49,6 @@ export class UndoEngine {
   async recordEntries(
     budgetId: string,
     entries: RecordUndoEntryInput[],
-    sessionId: string,
     idMappings: RecordIdMappingInput[] = [],
   ): Promise<UndoEntry[]> {
     if (entries.length === 0) {
@@ -59,7 +58,6 @@ export class UndoEngine {
     const timestamp = new Date().toISOString();
     const createdEntries: UndoEntry[] = entries.map((entry) => ({
       id: `${budgetId}::${Date.now()}::${randomUUID().slice(0, 8)}`,
-      session_id: sessionId,
       budget_id: budgetId,
       timestamp,
       operation: entry.operation,
@@ -74,22 +72,17 @@ export class UndoEngine {
 
   async listHistory(
     budgetId: string,
-    sessionId: string,
     limit: number,
     includeUndone = false,
-    includeAllSessions = false,
   ): Promise<UndoEntry[]> {
     return this.store.listEntries(budgetId, {
-      sessionId,
       limit,
       includeUndone,
-      includeAllSessions,
     });
   }
 
   async undoOperations(
     entryIds: string[],
-    sessionId: string,
     force: boolean,
   ): Promise<UndoResult> {
     const groupedByBudget = new Map<
@@ -156,22 +149,7 @@ export class UndoEngine {
           continue;
         }
 
-        const fromDifferentSession = entry.session_id !== sessionId;
-        if (fromDifferentSession && !force) {
-          indexedResults.push({
-            index: originalIndex,
-            result: {
-              entry_id: entry.id,
-              status: "conflict",
-              message:
-                `Undo entry belongs to session "${entry.session_id}" ` +
-                `but current session is "${sessionId}". Use force=true to override.`,
-            },
-          });
-          continue;
-        }
-
-        const execution = await this.undoSingleEntry(entry, sessionId, force);
+        const execution = await this.undoSingleEntry(entry, force);
         indexedResults.push({
           index: originalIndex,
           result: execution,
@@ -224,12 +202,8 @@ export class UndoEngine {
 
   private async undoSingleEntry(
     entry: UndoEntry,
-    currentSessionId: string,
     force: boolean,
   ): Promise<UndoExecutionResult> {
-    const fromDifferentSession = entry.session_id !== currentSessionId;
-    const sessionPrefix = fromDifferentSession ? "[cross-session] " : "";
-
     try {
       const resolvedEntityId = await this.store.resolveMappedId(
         entry.budget_id,
@@ -242,23 +216,41 @@ export class UndoEngine {
       // Both the current state snapshot and the expected state may contain
       // the replaced ID rather than the original entity_id.
       // Normalize both sides so conflict detection compares content, not IDs.
+      // Clone objects to avoid mutating the stored entry.
+      let normalizedCurrentState = currentState;
+      let normalizedEntry = entry;
       if (resolvedEntityId !== entry.undo_action.entity_id) {
         if (currentState && "id" in currentState) {
-          currentState.id = entry.undo_action.entity_id;
+          normalizedCurrentState = {
+            ...currentState,
+            id: entry.undo_action.entity_id,
+          };
         }
         const expectedState = entry.undo_action.expected_state;
         if ("id" in expectedState) {
-          expectedState.id = entry.undo_action.entity_id;
+          normalizedEntry = {
+            ...entry,
+            undo_action: {
+              ...entry.undo_action,
+              expected_state: {
+                ...expectedState,
+                id: entry.undo_action.entity_id,
+              },
+            },
+          };
         }
       }
 
-      const conflict = this.detectConflict(entry, currentState);
+      const conflict = this.detectConflict(
+        normalizedEntry,
+        normalizedCurrentState,
+      );
 
       if (conflict && !force) {
         return {
           entry_id: entry.id,
           status: "conflict",
-          message: `${sessionPrefix}${conflict.reason}`,
+          message: conflict.reason,
           conflict,
         };
       }
@@ -267,13 +259,13 @@ export class UndoEngine {
       return {
         entry_id: entry.id,
         status: "undone",
-        message: `${sessionPrefix}${message}`,
+        message,
       };
     } catch (error) {
       return {
         entry_id: entry.id,
         status: "error",
-        message: `${sessionPrefix}${extractErrorMessage(error, "Failed to apply undo operation.")}`,
+        message: extractErrorMessage(error, "Failed to apply undo operation."),
       };
     }
   }
