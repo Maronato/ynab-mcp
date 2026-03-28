@@ -7,9 +7,9 @@ export type UndoOperationType =
   | "delete_scheduled_transaction"
   | "set_category_budget";
 
-export type UndoActionType = "delete" | "update" | "create";
+type UndoActionType = "delete" | "update" | "create";
 
-export type UndoEntityType =
+type UndoEntityType =
   | "transaction"
   | "scheduled_transaction"
   | "category_budget";
@@ -24,7 +24,6 @@ export interface UndoAction {
 
 export interface UndoEntry {
   id: string;
-  session_id: string;
   budget_id: string;
   timestamp: string;
   operation: UndoOperationType;

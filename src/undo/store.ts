@@ -1,31 +1,16 @@
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 
-import { DEFAULT_SESSION_ID } from "../shared/session.js";
 import type { UndoEntry, UndoHistoryFile } from "./types.js";
 
 const DEFAULT_HISTORY: UndoHistoryFile = {
   entries: [],
   id_mappings: {},
 };
-const LOCK_RETRY_MS = 25;
-const LOCK_TIMEOUT_MS = 5_000;
-const LOCK_STALE_MS = 30_000;
-const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 interface ListHistoryOptions {
-  sessionId: string;
   limit: number;
   includeUndone: boolean;
-  includeAllSessions?: boolean;
-}
-
-interface UndoStoreOptions {
-  sessionTtlMs?: number;
-  cleanupIntervalMs?: number;
-  now?: () => number;
 }
 
 interface IdMappingUpdate {
@@ -38,27 +23,11 @@ export class UndoStore {
 
   private readonly maxEntriesPerBudget: number;
 
-  private readonly sessionTtlMs: number;
-
-  private readonly cleanupIntervalMs: number;
-
-  private readonly now: () => number;
-
-  private lastCleanupMs = 0;
-
   private readonly budgetLocks = new Map<string, Promise<void>>();
 
-  constructor(
-    dataDirectory: string,
-    maxEntriesPerBudget = 200,
-    options: UndoStoreOptions = {},
-  ) {
+  constructor(dataDirectory: string, maxEntriesPerBudget = 200) {
     this.historyDirectory = join(dataDirectory, "history");
     this.maxEntriesPerBudget = maxEntriesPerBudget;
-    this.sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
-    this.cleanupIntervalMs =
-      options.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
-    this.now = options.now ?? (() => Date.now());
   }
 
   async appendEntries(
@@ -82,12 +51,6 @@ export class UndoStore {
       }
       this.pruneIdMappings(current);
 
-      const currentTime = this.now();
-      if (this.shouldRunCleanup(currentTime)) {
-        this.purgeExpiredSessions(current, currentTime);
-        this.lastCleanupMs = currentTime;
-      }
-
       await this.writeBudgetHistoryUnsafe(budgetId, current);
     });
   }
@@ -102,11 +65,7 @@ export class UndoStore {
         return false;
       }
 
-      if (options.includeAllSessions) {
-        return true;
-      }
-
-      return entry.session_id === options.sessionId;
+      return true;
     });
 
     return filtered.slice(0, options.limit);
@@ -262,60 +221,12 @@ export class UndoStore {
     }
   }
 
-  private shouldRunCleanup(currentTime: number): boolean {
-    return currentTime - this.lastCleanupMs >= this.cleanupIntervalMs;
-  }
-
-  private purgeExpiredSessions(
-    history: UndoHistoryFile,
-    currentTime: number,
-  ): void {
-    const expiryCutoff = currentTime - this.sessionTtlMs;
-    const newestBySession = new Map<string, number>();
-
-    for (const entry of history.entries) {
-      if (entry.session_id === DEFAULT_SESSION_ID) {
-        continue;
-      }
-
-      const timestamp = Date.parse(entry.timestamp);
-      if (Number.isNaN(timestamp)) {
-        continue;
-      }
-
-      const currentNewest = newestBySession.get(entry.session_id);
-      if (currentNewest === undefined || timestamp > currentNewest) {
-        newestBySession.set(entry.session_id, timestamp);
-      }
-    }
-
-    const expiredSessions = new Set<string>();
-    for (const [sessionId, newestTimestamp] of newestBySession.entries()) {
-      if (newestTimestamp < expiryCutoff) {
-        expiredSessions.add(sessionId);
-      }
-    }
-
-    if (expiredSessions.size === 0) {
-      return;
-    }
-
-    history.entries = history.entries.filter(
-      (entry) => !expiredSessions.has(entry.session_id),
-    );
-    this.pruneIdMappings(history);
-  }
-
   private async ensureHistoryDirectory(): Promise<void> {
     await mkdir(this.historyDirectory, { recursive: true });
   }
 
   private getBudgetHistoryPath(budgetId: string): string {
     return join(this.historyDirectory, `${encodeURIComponent(budgetId)}.json`);
-  }
-
-  private getBudgetLockPath(budgetId: string): string {
-    return join(this.historyDirectory, `${encodeURIComponent(budgetId)}.lock`);
   }
 
   private async quarantineCorruptHistoryFile(filePath: string): Promise<void> {
@@ -327,54 +238,6 @@ export class UndoStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
-    }
-  }
-
-  private async acquireBudgetFileLock(
-    budgetId: string,
-  ): Promise<() => Promise<void>> {
-    await this.ensureHistoryDirectory();
-    const lockPath = this.getBudgetLockPath(budgetId);
-    const deadline = Date.now() + LOCK_TIMEOUT_MS;
-
-    while (true) {
-      try {
-        await mkdir(lockPath);
-        return async () => {
-          await rm(lockPath, { recursive: true, force: true });
-        };
-      } catch (error) {
-        const nodeError = error as NodeJS.ErrnoException;
-        if (nodeError.code !== "EEXIST") {
-          throw error;
-        }
-
-        if (await this.isBudgetLockStale(lockPath)) {
-          await rm(lockPath, { recursive: true, force: true });
-          continue;
-        }
-
-        if (Date.now() >= deadline) {
-          throw new Error(
-            `Timed out waiting for undo history lock for budget "${budgetId}".`,
-          );
-        }
-
-        await sleep(LOCK_RETRY_MS);
-      }
-    }
-  }
-
-  private async isBudgetLockStale(lockPath: string): Promise<boolean> {
-    try {
-      const lockStats = await stat(lockPath);
-      return Date.now() - lockStats.mtimeMs > LOCK_STALE_MS;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return true;
-      }
-
-      throw error;
     }
   }
 
@@ -395,15 +258,10 @@ export class UndoStore {
     );
 
     await previous;
-    let releaseFileLock: (() => Promise<void>) | undefined;
 
     try {
-      // Combine a per-process queue with an on-disk lock so separate MCP
-      // server processes do not race on the same history file.
-      releaseFileLock = await this.acquireBudgetFileLock(budgetId);
       return await callback();
     } finally {
-      await releaseFileLock?.();
       releaseLock?.();
       if (this.budgetLocks.get(budgetId) === current) {
         this.budgetLocks.delete(budgetId);

@@ -1,11 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 
 import { PayeeProfileAnalyzer } from "./analysis/payee-profiles.js";
 import type { AppContext } from "./context.js";
 import { registerPrompts } from "./prompts/index.js";
 import { registerResources } from "./resources/index.js";
-import { SamplingClient } from "./sampling/client.js";
 import { registerTools } from "./tools/index.js";
 import { UndoEngine } from "./undo/engine.js";
 import { UndoStore } from "./undo/store.js";
@@ -17,8 +15,6 @@ export interface CreateServerOptions {
   endpointUrl?: string;
   version?: string;
   readOnly?: boolean;
-  requireSession?: boolean;
-  sessionTtlMs?: number;
 }
 
 export function createYnabMcpServer(options: CreateServerOptions): {
@@ -28,9 +24,7 @@ export function createYnabMcpServer(options: CreateServerOptions): {
   const ynabClient = new YnabClient(options.accessToken, options.endpointUrl, {
     readOnly: options.readOnly,
   });
-  const undoStore = new UndoStore(options.dataDirectory, 200, {
-    sessionTtlMs: options.sessionTtlMs,
-  });
+  const undoStore = new UndoStore(options.dataDirectory);
   const undoEngine = new UndoEngine(ynabClient, undoStore);
 
   const server = new McpServer({
@@ -38,19 +32,12 @@ export function createYnabMcpServer(options: CreateServerOptions): {
     version: options.version ?? "0.0.0",
   });
 
-  server.server.registerCapabilities({
-    sampling: {},
-  } as ServerCapabilities);
-
-  const samplingClient = new SamplingClient(server.server);
   const payeeProfileAnalyzer = new PayeeProfileAnalyzer(ynabClient);
 
   const context: AppContext = {
     ynabClient,
     undoEngine,
-    samplingClient,
     payeeProfileAnalyzer,
-    requireSession: options.requireSession ?? false,
   };
 
   registerTools(server, context);

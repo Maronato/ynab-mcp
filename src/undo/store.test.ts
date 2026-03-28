@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_SESSION_ID } from "../shared/session.js";
 import { createMockUndoEntry } from "../test-utils.js";
 import { UndoStore } from "./store.js";
 
@@ -30,18 +29,12 @@ function entry(id: string, overrides: Record<string, unknown> = {}) {
   });
 }
 
-function isoTimestamp(ms: number): string {
-  return new Date(ms).toISOString();
-}
-
 describe("appendEntries and persistence", () => {
   it("creates history file and entries can be read back", async () => {
     const e = entry("budget-1::1::aaa");
     await store.appendEntries(BUDGET_ID, [e]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: false,
     });
@@ -68,8 +61,6 @@ describe("appendEntries and persistence", () => {
     );
 
     const entries = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: true,
     });
@@ -87,8 +78,6 @@ describe("appendEntries and persistence", () => {
     await store.appendEntries(BUDGET_ID, [e2]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: false,
     });
@@ -105,8 +94,6 @@ describe("appendEntries and persistence", () => {
     }
 
     const result = await smallStore.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: true,
     });
@@ -117,38 +104,6 @@ describe("appendEntries and persistence", () => {
 });
 
 describe("listEntries", () => {
-  it("returns all active entries when includeAllSessions is true", async () => {
-    await store.appendEntries(BUDGET_ID, [
-      entry("budget-1::1::a", { session_id: "s1" }),
-      entry("budget-1::2::b", { session_id: "s2" }),
-    ]);
-
-    const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "s1",
-      limit: 100,
-      includeUndone: false,
-    });
-
-    expect(result).toHaveLength(2);
-  });
-
-  it("filters to matching sessionId by default", async () => {
-    await store.appendEntries(BUDGET_ID, [
-      entry("budget-1::1::a", { session_id: "s1" }),
-      entry("budget-1::2::b", { session_id: "s2" }),
-    ]);
-
-    const result = await store.listEntries(BUDGET_ID, {
-      sessionId: "s1",
-      limit: 100,
-      includeUndone: false,
-    });
-
-    expect(result).toHaveLength(1);
-    expect(result[0].session_id).toBe("s1");
-  });
-
   it("excludes undone entries when includeUndone is false", async () => {
     await store.appendEntries(BUDGET_ID, [
       entry("budget-1::1::a"),
@@ -157,8 +112,6 @@ describe("listEntries", () => {
     await store.markEntriesUndone(BUDGET_ID, ["budget-1::1::a"]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: false,
     });
@@ -172,8 +125,6 @@ describe("listEntries", () => {
     await store.markEntriesUndone(BUDGET_ID, ["budget-1::1::a"]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: true,
     });
@@ -190,8 +141,6 @@ describe("listEntries", () => {
     ]);
 
     const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 2,
       includeUndone: false,
     });
@@ -201,13 +150,19 @@ describe("listEntries", () => {
 
   it("returns empty array for a budget with no history", async () => {
     const result = await store.listEntries("nonexistent", {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: false,
     });
 
     expect(result).toEqual([]);
+  });
+
+  it("returns early for empty append without writing history files", async () => {
+    const cleanupStore = new UndoStore(dataDir);
+    await cleanupStore.appendEntries(BUDGET_ID, []);
+
+    const historyDir = join(dataDir, "history");
+    await expect(readdir(historyDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
@@ -252,8 +207,6 @@ describe("markEntriesUndone", () => {
     await store.markEntriesUndone(BUDGET_ID, ["budget-1::1::a"]);
 
     const all = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: true,
     });
@@ -270,8 +223,6 @@ describe("markEntriesUndone", () => {
     await store.markEntriesUndone(BUDGET_ID, []);
 
     const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: false,
     });
@@ -338,191 +289,6 @@ describe("updateIdMappings", () => {
   });
 });
 
-describe("session cleanup", () => {
-  it("purges sessions older than TTL but keeps shared and recent sessions", async () => {
-    const nowMs = Date.parse("2024-01-03T00:00:00.000Z");
-    const cleanupStore = new UndoStore(dataDir, 200, {
-      sessionTtlMs: 24 * 60 * 60 * 1000,
-      cleanupIntervalMs: 60 * 60 * 1000,
-      now: () => nowMs,
-    });
-
-    await cleanupStore.appendEntries(BUDGET_ID, [
-      entry("budget-1::1::old", {
-        session_id: "session-old",
-        timestamp: isoTimestamp(nowMs - 2 * 24 * 60 * 60 * 1000),
-      }),
-      entry("budget-1::2::shared-old", {
-        session_id: DEFAULT_SESSION_ID,
-        timestamp: isoTimestamp(nowMs - 3 * 24 * 60 * 60 * 1000),
-      }),
-      entry("budget-1::3::fresh", {
-        session_id: "session-fresh",
-        timestamp: isoTimestamp(nowMs - 60 * 60 * 1000),
-      }),
-    ]);
-
-    const entries = await cleanupStore.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
-      limit: 100,
-      includeUndone: true,
-    });
-
-    expect(entries.find((e) => e.session_id === "session-old")).toBeUndefined();
-    expect(
-      entries.find((e) => e.session_id === DEFAULT_SESSION_ID),
-    ).toBeDefined();
-    expect(entries.find((e) => e.session_id === "session-fresh")).toBeDefined();
-  });
-
-  it("does not purge within cleanup interval, then purges after interval", async () => {
-    let nowMs = 10_000;
-    const cleanupStore = new UndoStore(dataDir, 200, {
-      sessionTtlMs: 1_000,
-      cleanupIntervalMs: 10_000,
-      now: () => nowMs,
-    });
-
-    await cleanupStore.appendEntries(BUDGET_ID, [
-      entry("budget-1::1::s1", {
-        session_id: "session-one",
-        timestamp: isoTimestamp(nowMs),
-      }),
-    ]);
-
-    nowMs = 15_000;
-    await cleanupStore.appendEntries(BUDGET_ID, [
-      entry("budget-1::2::s2", {
-        session_id: "session-two",
-        timestamp: isoTimestamp(nowMs),
-      }),
-    ]);
-
-    const beforeCleanup = await cleanupStore.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
-      limit: 100,
-      includeUndone: true,
-    });
-    expect(
-      beforeCleanup.find((e) => e.session_id === "session-one"),
-    ).toBeDefined();
-
-    nowMs = 21_000;
-    await cleanupStore.appendEntries(BUDGET_ID, [
-      entry("budget-1::3::s3", {
-        session_id: "session-three",
-        timestamp: isoTimestamp(nowMs),
-      }),
-    ]);
-
-    const afterCleanup = await cleanupStore.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
-      limit: 100,
-      includeUndone: true,
-    });
-    expect(
-      afterCleanup.find((e) => e.session_id === "session-one"),
-    ).toBeUndefined();
-    expect(
-      afterCleanup.find((e) => e.session_id === "session-three"),
-    ).toBeDefined();
-  });
-
-  it("does not purge a session with only undone entries when it is still within TTL", async () => {
-    let nowMs = Date.parse("2024-01-03T00:00:00.000Z");
-    const cleanupStore = new UndoStore(dataDir, 200, {
-      sessionTtlMs: 24 * 60 * 60 * 1000,
-      cleanupIntervalMs: 60 * 60 * 1000,
-      now: () => nowMs,
-    });
-
-    await cleanupStore.appendEntries(BUDGET_ID, [
-      entry("budget-1::1::undone", {
-        session_id: "session-undone",
-        status: "undone",
-        timestamp: isoTimestamp(nowMs - 30 * 60 * 1000),
-      }),
-    ]);
-
-    nowMs += 2 * 60 * 60 * 1000;
-    await cleanupStore.appendEntries(BUDGET_ID, [
-      entry("budget-1::2::trigger", {
-        session_id: "session-trigger",
-        timestamp: isoTimestamp(nowMs),
-      }),
-    ]);
-
-    const entries = await cleanupStore.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
-      limit: 100,
-      includeUndone: true,
-    });
-    expect(
-      entries.find((e) => e.session_id === "session-undone"),
-    ).toBeDefined();
-  });
-
-  it("returns early for empty append without writing history files", async () => {
-    const cleanupStore = new UndoStore(dataDir);
-    await cleanupStore.appendEntries(BUDGET_ID, []);
-
-    const historyDir = join(dataDir, "history");
-    await expect(readdir(historyDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("removes orphaned id mappings when expired sessions are purged", async () => {
-    let nowMs = Date.parse("2024-01-03T00:00:00.000Z");
-    const cleanupStore = new UndoStore(dataDir, 200, {
-      sessionTtlMs: 24 * 60 * 60 * 1000,
-      cleanupIntervalMs: 60 * 60 * 1000,
-      now: () => nowMs,
-    });
-
-    await cleanupStore.appendEntries(BUDGET_ID, [
-      entry("budget-1::1::old", {
-        session_id: "session-old",
-        timestamp: isoTimestamp(nowMs - 2 * 24 * 60 * 60 * 1000),
-        undo_action: {
-          entity_id: "old-entity",
-        },
-      }),
-      entry("budget-1::2::fresh", {
-        session_id: "session-fresh",
-        timestamp: isoTimestamp(nowMs - 60 * 60 * 1000),
-        undo_action: {
-          entity_id: "fresh-entity",
-        },
-      }),
-    ]);
-
-    await cleanupStore.updateIdMappings(BUDGET_ID, "old-entity", "old-target");
-    await cleanupStore.updateIdMappings(
-      BUDGET_ID,
-      "fresh-entity",
-      "fresh-target",
-    );
-
-    nowMs += 2 * 60 * 60 * 1000;
-    await cleanupStore.appendEntries(BUDGET_ID, [
-      entry("budget-1::3::trigger", {
-        session_id: "session-trigger",
-        timestamp: isoTimestamp(nowMs),
-      }),
-    ]);
-
-    expect(await cleanupStore.resolveMappedId(BUDGET_ID, "old-entity")).toBe(
-      "old-entity",
-    );
-    expect(await cleanupStore.resolveMappedId(BUDGET_ID, "fresh-entity")).toBe(
-      "fresh-target",
-    );
-  });
-});
-
 describe("concurrency", () => {
   it("serializes concurrent operations on the same budget", async () => {
     const entries = Array.from({ length: 10 }, (_, i) =>
@@ -533,8 +299,6 @@ describe("concurrency", () => {
     await Promise.all(entries.map((e) => store.appendEntries(BUDGET_ID, [e])));
 
     const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: true,
     });
@@ -542,38 +306,11 @@ describe("concurrency", () => {
     // All 10 entries should be present (no data loss from races)
     expect(result).toHaveLength(10);
   });
-
-  it("serializes concurrent operations across separate store instances", async () => {
-    const storeA = new UndoStore(dataDir);
-    const storeB = new UndoStore(dataDir);
-    const entries = Array.from({ length: 12 }, (_, i) =>
-      entry(`budget-1::cross-${i}::e`),
-    );
-
-    await Promise.all(
-      entries.map((undoEntry, index) =>
-        (index % 2 === 0 ? storeA : storeB).appendEntries(BUDGET_ID, [
-          undoEntry,
-        ]),
-      ),
-    );
-
-    const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
-      limit: 100,
-      includeUndone: true,
-    });
-
-    expect(result).toHaveLength(12);
-  });
 });
 
 describe("error handling", () => {
   it("returns default empty history for missing file", async () => {
     const result = await store.listEntries("no-such-budget", {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: true,
     });
@@ -589,8 +326,6 @@ describe("error handling", () => {
     await writeFile(filePath, "not valid json{{{");
 
     const result = await store.listEntries(BUDGET_ID, {
-      includeAllSessions: true,
-      sessionId: "any",
       limit: 100,
       includeUndone: true,
     });
