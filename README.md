@@ -1,6 +1,9 @@
 # YNAB MCP Server
 
-An [MCP](https://modelcontextprotocol.io/) server for [YNAB](https://www.ynab.com/) with batch operations, robust undo support, and LLM-assisted smart tools.
+An MCP server for YNAB with batch operations, robust undo support, and LLM-assisted smart tools.
+
+> [!NOTE]  
+> **AI Disclosure:** This project was built with Claude Code and Cursor. It works and is tested, but the code is largely clanker-made.
 
 ## Highlights
 
