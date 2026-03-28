@@ -611,6 +611,113 @@ describe("transaction cache local filtering", () => {
     });
     expect(unapproved.map((t) => t.id)).toEqual(["t2"]);
   });
+
+  it("category_id filter matches split subtransactions", async () => {
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: {
+        transactions: [
+          tx({
+            id: "t-split",
+            category_id: "split-cat",
+            subtransactions: [
+              {
+                id: "s1",
+                category_id: "cat-1",
+                amount: -30000,
+                deleted: false,
+              },
+              {
+                id: "s2",
+                category_id: "cat-2",
+                amount: -20000,
+                deleted: false,
+              },
+            ],
+          }),
+          tx({ id: "t-normal", category_id: "cat-3" }),
+        ],
+        server_knowledge: 1,
+      },
+    });
+
+    const result = await client.searchTransactions("b", {
+      category_id: "cat-1",
+      limit: 500,
+    });
+    expect(result.map((t) => t.id)).toEqual(["t-split"]);
+  });
+
+  it("category_name_contains filter matches split subtransaction names", async () => {
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: {
+        transactions: [
+          tx({
+            id: "t-split",
+            category_id: "split-cat",
+            category_name: "Split",
+            subtransactions: [
+              {
+                id: "s1",
+                category_id: "cat-1",
+                category_name: "Groceries",
+                amount: -30000,
+                deleted: false,
+              },
+            ],
+          }),
+        ],
+        server_knowledge: 1,
+      },
+    });
+
+    const result = await client.searchTransactions("b", {
+      category_name_contains: "grocer",
+      limit: 500,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("t-split");
+  });
+
+  it("type uncategorized catches splits with uncategorized subtransactions", async () => {
+    mockApi.transactions.getTransactions.mockResolvedValue({
+      data: {
+        transactions: [
+          tx({
+            id: "t-split-partial",
+            category_id: "split-cat",
+            subtransactions: [
+              {
+                id: "s1",
+                category_id: "cat-1",
+                amount: -30000,
+                deleted: false,
+              },
+              { id: "s2", category_id: null, amount: -20000, deleted: false },
+            ],
+          }),
+          tx({
+            id: "t-split-full",
+            category_id: "split-cat",
+            subtransactions: [
+              {
+                id: "s3",
+                category_id: "cat-1",
+                amount: -50000,
+                deleted: false,
+              },
+            ],
+          }),
+        ],
+        server_knowledge: 1,
+      },
+    });
+
+    const result = await client.searchTransactions("b", {
+      type: "uncategorized",
+      limit: 500,
+    });
+    expect(result.map((t) => t.id)).toEqual(["t-split-partial"]);
+  });
 });
 
 describe("delta-aware caching", () => {
@@ -796,6 +903,101 @@ describe("syncBudgetData — structured deltas", () => {
     expect(deltas.accounts.updated).toBe(1);
     expect(deltas.accounts.added).toBe(0);
     expect(deltas.accounts.deleted).toBe(0);
+  });
+});
+
+describe("replaceTransaction", () => {
+  it("deletes the old transaction and creates a new one", async () => {
+    mockApi.transactions.deleteTransaction.mockResolvedValue({
+      data: { transaction: tx({ id: "old-tx", deleted: true }) },
+    });
+    mockApi.transactions.createTransactions.mockResolvedValue({
+      data: {
+        transactions: [tx({ id: "new-tx", amount: -30000 })],
+      },
+    });
+
+    const result = await client.replaceTransaction("b", "old-tx", {
+      account_id: "acc-1",
+      date: "2024-01-15",
+      amount: -30,
+      category_id: "cat-1",
+    });
+
+    expect(result.previousId).toBe("old-tx");
+    expect(result.transaction.id).toBe("new-tx");
+    expect(mockApi.transactions.deleteTransaction).toHaveBeenCalledWith(
+      "b",
+      "old-tx",
+    );
+    expect(mockApi.transactions.createTransactions).toHaveBeenCalled();
+  });
+
+  it("throws and does not create when delete returns null", async () => {
+    mockApi.transactions.deleteTransaction.mockResolvedValue({
+      data: { transaction: null },
+    });
+
+    await expect(
+      client.replaceTransaction("b", "missing-tx", {
+        account_id: "acc-1",
+        date: "2024-01-15",
+        amount: -30,
+        category_id: "cat-1",
+      }),
+    ).rejects.toThrow("missing-tx");
+
+    expect(mockApi.transactions.createTransactions).not.toHaveBeenCalled();
+  });
+
+  it("throws when replacement creation returns no transaction", async () => {
+    mockApi.transactions.deleteTransaction.mockResolvedValue({
+      data: { transaction: tx({ id: "old-tx", deleted: true }) },
+    });
+    mockApi.transactions.createTransactions.mockResolvedValue({
+      data: { transactions: [] },
+    });
+
+    await expect(
+      client.replaceTransaction("b", "old-tx", {
+        account_id: "acc-1",
+        date: "2024-01-15",
+        amount: -30,
+        category_id: "cat-1",
+      }),
+    ).rejects.toThrow("did not return a replacement transaction");
+  });
+
+  it("surfaces create failure with delete context", async () => {
+    mockApi.transactions.deleteTransaction.mockResolvedValue({
+      data: { transaction: tx({ id: "old-tx", deleted: true }) },
+    });
+    mockApi.transactions.createTransactions.mockRejectedValue(
+      new Error("Create exploded"),
+    );
+
+    await expect(
+      client.replaceTransaction("b", "old-tx", {
+        account_id: "acc-1",
+        date: "2024-01-15",
+        amount: -30,
+        category_id: "cat-1",
+      }),
+    ).rejects.toThrow("after deleting");
+  });
+
+  it("throws in read-only mode", async () => {
+    const readOnlyClient = new YnabClient("fake-token", undefined, {
+      readOnly: true,
+    });
+
+    await expect(
+      readOnlyClient.replaceTransaction("b", "tx-1", {
+        account_id: "a",
+        date: "2024-01-01",
+        amount: -10,
+      }),
+    ).rejects.toThrow("read-only mode");
   });
 });
 

@@ -1,5 +1,5 @@
 import * as ynab from "ynab";
-import { isNotFoundError } from "./errors.js";
+import { extractErrorMessage, isNotFoundError } from "./errors.js";
 import {
   currencyToMilliunits,
   snapshotScheduledTransaction,
@@ -521,7 +521,10 @@ export class YnabClient {
       }
 
       if (query.category_id && transaction.category_id !== query.category_id) {
-        return false;
+        const subMatch = transaction.subtransactions?.some(
+          (sub) => !sub.deleted && sub.category_id === query.category_id,
+        );
+        if (!subMatch) return false;
       }
 
       if (query.payee_id && transaction.payee_id !== query.payee_id) {
@@ -558,7 +561,14 @@ export class YnabClient {
           .toLowerCase()
           .includes(categoryNameContains)
       ) {
-        return false;
+        const subNameMatch = transaction.subtransactions?.some(
+          (sub) =>
+            !sub.deleted &&
+            (sub.category_name ?? "")
+              .toLowerCase()
+              .includes(categoryNameContains),
+        );
+        if (!subNameMatch) return false;
       }
 
       if (
@@ -587,7 +597,10 @@ export class YnabClient {
       }
 
       if (query.type === "uncategorized" && transaction.category_id != null) {
-        return false;
+        const hasUncategorizedSub = transaction.subtransactions?.some(
+          (sub) => !sub.deleted && sub.category_id == null,
+        );
+        if (!hasUncategorizedSub) return false;
       }
       if (query.type === "unapproved" && transaction.approved) {
         return false;
@@ -753,6 +766,42 @@ export class YnabClient {
     this.invalidateMonthCaches(resolvedBudgetId);
     this.optimisticUpdateTransactions(resolvedBudgetId, updated);
     return updated;
+  }
+
+  async replaceTransaction(
+    budgetId: string | undefined,
+    transactionId: string,
+    replacement: CreateTransactionInput,
+  ): Promise<{ transaction: ynab.TransactionDetail; previousId: string }> {
+    this.assertWriteAllowed();
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    const deleted = await this.deleteTransaction(
+      resolvedBudgetId,
+      transactionId,
+    );
+    if (!deleted) {
+      throw new Error(
+        `Transaction not found for replacement: ${transactionId}`,
+      );
+    }
+
+    let created: ynab.TransactionDetail[];
+    try {
+      created = await this.createTransactions(resolvedBudgetId, [replacement]);
+    } catch (error) {
+      throw new Error(
+        `Failed to create replacement for transaction ${transactionId} after deleting the original. ${extractErrorMessage(error)}`,
+      );
+    }
+
+    const transaction = created[0];
+    if (!transaction) {
+      throw new Error(
+        `Replacement for transaction ${transactionId} did not return a replacement transaction.`,
+      );
+    }
+
+    return { transaction, previousId: transactionId };
   }
 
   async deleteTransaction(
