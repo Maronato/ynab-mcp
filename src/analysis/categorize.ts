@@ -50,7 +50,7 @@ export interface CategorizationSignals {
   }> | null;
 }
 
-export type ConfidenceTier = "definitive" | "high" | "medium" | "low";
+type ConfidenceTier = "definitive" | "high" | "medium" | "low";
 
 export interface CategorizationSuggestion {
   transaction_id: string;
@@ -65,7 +65,6 @@ export interface CategorizationSuggestion {
   confidence: ConfidenceTier;
   method: string;
   reasoning: string;
-  needs_llm_review: boolean;
   signals: CategorizationSignals;
 }
 
@@ -249,7 +248,6 @@ function scoreAndAssign(
       confidence: "definitive",
       method: "payee_history",
       reasoning: `Payee categorized as ${categoryNameById.get(histDom) ?? histDom} ${Math.round(histConf * 100)}% of the time (${histTotal} transactions)`,
-      needs_llm_review: false,
     };
   }
 
@@ -265,7 +263,6 @@ function scoreAndAssign(
         confidence: "definitive",
         method: "scheduled_match+payee_history",
         reasoning: `Matches scheduled ${sm.frequency} transaction and payee history (${Math.round(histConf * 100)}%)`,
-        needs_llm_review: false,
       };
     }
     return {
@@ -275,7 +272,6 @@ function scoreAndAssign(
       confidence: "high",
       method: "scheduled_match",
       reasoning: `Matches scheduled ${sm.frequency} transaction (${sm.category_name ?? sm.category_id})`,
-      needs_llm_review: false,
     };
   }
 
@@ -288,7 +284,6 @@ function scoreAndAssign(
       confidence: "high",
       method: "payee_history",
       reasoning: `Payee categorized as ${categoryNameById.get(histDom) ?? histDom} ${Math.round(histConf * 100)}% of the time (${histTotal} transactions)`,
-      needs_llm_review: false,
     };
   }
 
@@ -306,7 +301,6 @@ function scoreAndAssign(
       confidence: "medium",
       method: "amount_pattern",
       reasoning: `Amount matches pattern for ${signals.amount_pattern.typical_category_name ?? amtCat} (payee history disagrees)`,
-      needs_llm_review: true,
     };
   }
 
@@ -323,7 +317,6 @@ function scoreAndAssign(
         confidence: "medium",
         method: "ynab_auto+payee_history",
         reasoning: `YNAB auto-assigned ${ye.category_name ?? ye.category_id}, weak payee history agrees`,
-        needs_llm_review: true,
       };
     }
     // YNAB disagrees with payee history → flag for review
@@ -335,7 +328,6 @@ function scoreAndAssign(
         confidence: "medium",
         method: "payee_history_vs_ynab",
         reasoning: `YNAB auto-assigned ${ye.category_name ?? ye.category_id} but payee history suggests ${categoryNameById.get(histDom) ?? histDom} (${Math.round((histConf ?? 0) * 100)}%)`,
-        needs_llm_review: true,
       };
     }
     // No payee history at all, just YNAB
@@ -346,7 +338,6 @@ function scoreAndAssign(
       confidence: "medium",
       method: "ynab_auto",
       reasoning: `YNAB auto-assigned ${ye.category_name ?? ye.category_id}, no payee history to verify`,
-      needs_llm_review: true,
     };
   }
 
@@ -359,7 +350,6 @@ function scoreAndAssign(
       confidence: "medium",
       method: "payee_history",
       reasoning: `Payee categorized as ${categoryNameById.get(histDom) ?? histDom} ${Math.round(histConf * 100)}% of the time (${histTotal} transactions, ambiguous)`,
-      needs_llm_review: true,
     };
   }
 
@@ -374,7 +364,6 @@ function scoreAndAssign(
         confidence: "medium",
         method: "similar_payee",
         reasoning: `Similar to "${best.payee_name}" which is typically ${best.dominant_category_name ?? best.dominant_category}`,
-        needs_llm_review: true,
       };
     }
   }
@@ -389,8 +378,7 @@ function scoreAndAssign(
       suggested_category_name: categoryNameById.get(fallbackCat) ?? null,
       confidence: "low",
       method: "weak_signal",
-      reasoning: "Weak signals only — LLM review recommended",
-      needs_llm_review: true,
+      reasoning: "Weak signals only — manual review recommended",
     };
   }
 
@@ -402,8 +390,7 @@ function scoreAndAssign(
     suggested_category_name: null,
     confidence: "low",
     method: "no_signal",
-    reasoning: "No categorization signals available — LLM review required",
-    needs_llm_review: true,
+    reasoning: "No categorization signals available — manual review required",
   };
 }
 

@@ -123,7 +123,6 @@ describe("analyzeTransactions", () => {
 
       expect(result.confidence).toBe("definitive");
       expect(result.suggested_category_id).toBe("cat-groceries");
-      expect(result.needs_llm_review).toBe(false);
       expect(result.method).toBe("payee_history");
     });
 
@@ -242,7 +241,6 @@ describe("analyzeTransactions", () => {
       const [result] = analyze([makeTarget()], profiles);
 
       expect(result.confidence).toBe("medium");
-      expect(result.needs_llm_review).toBe(true);
     });
 
     it("flags YNAB auto-categorization that disagrees with history", () => {
@@ -306,7 +304,6 @@ describe("analyzeTransactions", () => {
       );
 
       expect(result.confidence).toBe("low");
-      expect(result.needs_llm_review).toBe(true);
     });
   });
 

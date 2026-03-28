@@ -10,7 +10,7 @@ An MCP server for YNAB with batch operations, robust undo support, and LLM-assis
 - **22 tools** covering budgets, accounts, transactions, categories, targets, scheduled transactions, and spending analysis
 - **Batch operations** — create, update, and delete multiple transactions or category assignments in a single call
 - **Undo support** — every write operation is recorded and reversible, scoped to sessions with configurable TTL
-- **Smart tools** — LLM-assisted transaction categorization and overspending coverage suggestions via [MCP sampling](https://modelcontextprotocol.io/docs/concepts/sampling)
+- **Smart tools** — transaction categorization and overspending coverage suggestions using payee history, amount patterns, and scheduled transaction matching
 - **Built-in knowledge base** — YNAB methodology docs (credit cards, targets, overspending, reconciliation) served as MCP resources
 - **Workflow prompts** — pre-built prompts for monthly reviews, spending reports, and unapproved transaction triage
 - **Read-only mode** — disable all write operations for safe exploration
@@ -122,8 +122,6 @@ All configuration is done through environment variables.
 
 ### Smart Tools
 
-These use [MCP sampling](https://modelcontextprotocol.io/docs/concepts/sampling) to ask the host LLM for help when available, falling back to heuristics otherwise.
-
 | Tool                             | Description                                                                           |
 | -------------------------------- | ------------------------------------------------------------------------------------- |
 | `suggest_transaction_categories` | Suggest categories for uncategorized transactions based on payee history and patterns |
@@ -179,8 +177,6 @@ Both return structured actions that can be passed directly to `update_transactio
 **Sessions & undo** — Every write operation records an undo entry. By default, all operations share a single session. Call `setup_session` to get an isolated session ID, then pass it as `session_id` on write calls to scope undo history. Set `YNAB_REQUIRE_SESSION=true` to enforce this. Undo entries expire after `YNAB_SESSION_TTL_HOURS` (default 24).
 
 **Read-only mode** — Set `YNAB_READ_ONLY=true` to block all write operations. Useful for exploring your budget safely or restricting an MCP client to read-only access.
-
-**Smart tools & sampling** — `suggest_transaction_categories` and `suggest_overspending_coverage` use MCP's sampling capability to ask the host LLM for help with ambiguous decisions. If the MCP client doesn't support sampling, the tools fall back to deterministic heuristics.
 
 ## Development
 
