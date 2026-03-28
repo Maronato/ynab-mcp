@@ -3,34 +3,45 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
-import { DEFAULT_SESSION_ID, sessionIdSchema } from "../shared/session.js";
+import { recordUndoAndGetIds } from "../shared/undo-helpers.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
 const listCategoriesSchema = z.object({
-  budget_id: z.string().optional(),
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
   group_id: z.string().optional(),
   include_hidden: z.boolean().optional(),
 });
 
 const getTargetsSchema = z.object({
-  budget_id: z.string().optional(),
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
   month: z
     .string()
     .optional()
     .describe(
-      "Month in YYYY-MM-DD format. Scopes target percentage_complete calculation. Defaults to current month.",
+      "Month in YYYY-MM-DD format (use first day of month). Scopes target percentage_complete calculation. Defaults to current month.",
     ),
   group_id: z.string().optional(),
   include_hidden: z.boolean().optional(),
 });
 
 const getMonthlyBudgetSchema = z.object({
-  budget_id: z.string().optional(),
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
   month: z
     .string()
     .optional()
-    .describe("Month in YYYY-MM-DD format. Defaults to current month."),
+    .describe(
+      "Month in YYYY-MM-DD format (use first day of month). Defaults to current month.",
+    ),
   include_hidden: z
     .boolean()
     .optional()
@@ -39,34 +50,33 @@ const getMonthlyBudgetSchema = z.object({
     ),
 });
 
-function buildSetCategoryBudgetsSchema(requireSession: boolean) {
-  return z.object({
-    budget_id: z.string().optional(),
-    session_id: sessionIdSchema(requireSession),
-    assignments: z
-      .array(
-        z.object({
-          category_id: z.string(),
-          month: z.string(),
-          budgeted: z
-            .number()
-            .describe(
-              "Budgeted amount in currency units (e.g., 150.00 for one hundred fifty dollars). Do NOT use milliunits.",
-            ),
-        }),
-      )
-      .min(1),
-  });
-}
+const setCategoryBudgetsSchema = z.object({
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
+  assignments: z
+    .array(
+      z.object({
+        category_id: z.string(),
+        month: z
+          .string()
+          .describe("Month in YYYY-MM-DD format (use first day of month)."),
+        budgeted: z
+          .number()
+          .describe(
+            "Budgeted amount in currency units (e.g., 150.00 for one hundred fifty dollars). Do NOT use milliunits.",
+          ),
+      }),
+    )
+    .min(1)
+    .max(200),
+});
 
 export function registerCategoryTools(
   server: McpServer,
   context: AppContext,
 ): void {
-  const setCategoryBudgetsSchema = buildSetCategoryBudgetsSchema(
-    context.requireSession,
-  );
-
   server.registerTool(
     "list_categories",
     {
@@ -77,6 +87,7 @@ export function registerCategoryTools(
         "Use this to resolve category names to IDs before write operations.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },
@@ -123,6 +134,7 @@ export function registerCategoryTools(
         "Categories without targets return null target fields rather than being omitted.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },
@@ -218,6 +230,7 @@ export function registerCategoryTools(
         "set include_hidden=true to include hidden ones. Categories with no activity show zeroes. No target data.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },
@@ -323,7 +336,6 @@ export function registerCategoryTools(
         const budgetId = await context.ynabClient.resolveRealBudgetId(
           input.budget_id,
         );
-        const sessionId = input.session_id ?? DEFAULT_SESSION_ID;
         const prefetchResults = await Promise.all(
           input.assignments.map(async (assignment) => ({
             assignment,
@@ -402,19 +414,14 @@ export function registerCategoryTools(
           .map((r) => r.undoEntry)
           .filter((e): e is NonNullable<typeof e> => e !== null);
 
-        let undoHistoryIds: string[] = [];
-        if (undoEntries.length > 0) {
-          const created = await context.undoEngine.recordEntries(
-            budgetId,
-            undoEntries,
-            sessionId,
-          );
-          undoHistoryIds = created.map((entry) => entry.id);
-        }
+        const undoHistoryIds = await recordUndoAndGetIds(
+          context.undoEngine,
+          budgetId,
+          undoEntries,
+        );
 
         return jsonToolResult({
           budget_id: budgetId,
-          session_id: sessionId,
           results,
           undo_history_ids: undoHistoryIds,
         });

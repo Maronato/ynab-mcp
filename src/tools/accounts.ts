@@ -7,8 +7,28 @@ import { extractErrorMessage } from "../ynab/errors.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
 
 const getAccountsSchema = z.object({
-  budget_id: z.string().optional(),
-  type: z.string().optional(),
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
+  type: z
+    .enum([
+      "checking",
+      "savings",
+      "cash",
+      "creditCard",
+      "lineOfCredit",
+      "otherAsset",
+      "otherLiability",
+      "mortgage",
+      "autoLoan",
+      "studentLoan",
+      "personalLoan",
+      "medicalDebt",
+      "otherDebt",
+    ])
+    .optional()
+    .describe("Filter by account type."),
   on_budget: z.boolean().optional(),
   include_closed: z.boolean().optional(),
 });
@@ -25,6 +45,7 @@ export function registerAccountTools(
         "Get accounts with optional filtering by type, on-budget flag, and closed state.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },

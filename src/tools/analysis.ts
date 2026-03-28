@@ -11,9 +11,12 @@ import {
 } from "../ynab/format.js";
 
 const spendingAnalysisSchema = z.object({
-  budget_id: z.string().optional(),
-  since_date: z.string(),
-  until_date: z.string().optional(),
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
+  since_date: z.string().describe("Date in YYYY-MM-DD format."),
+  until_date: z.string().optional().describe("Date in YYYY-MM-DD format."),
   group_by: z.enum(["category", "payee", "both"]).default("category"),
   top_n: z.number().int().min(1).max(100).default(10),
   category_ids: z.array(z.string()).optional(),
@@ -45,6 +48,7 @@ export function registerAnalysisTools(
         "Aggregate spending over a date range and rank by category/payee for quick insights.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },

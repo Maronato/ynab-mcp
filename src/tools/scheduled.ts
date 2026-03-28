@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
-import { DEFAULT_SESSION_ID, sessionIdSchema } from "../shared/session.js";
+import { recordUndoAndGetIds } from "../shared/undo-helpers.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
   formatCurrency,
@@ -31,7 +31,10 @@ const flagColors = [
 ] as const;
 
 const getScheduledTransactionsSchema = z.object({
-  budget_id: z.string().optional(),
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
   account_id: z.string().optional(),
   category_id: z.string().optional(),
   due_after: z
@@ -48,80 +51,74 @@ const getScheduledTransactionsSchema = z.object({
     ),
 });
 
-function buildCreateScheduledTransactionsSchema(requireSession: boolean) {
-  return z.object({
-    budget_id: z.string().optional(),
-    session_id: sessionIdSchema(requireSession),
-    transactions: z
-      .array(
-        z.object({
-          account_id: z.string(),
-          date: z.string(),
-          amount: z
-            .number()
-            .optional()
-            .describe(
-              "Amount in currency units (e.g., -5.55 for negative five dollars and fifty-five cents). Do NOT use milliunits.",
-            ),
-          payee_name: z.string().nullable().optional(),
-          payee_id: z.string().nullable().optional(),
-          category_id: z.string().nullable().optional(),
-          memo: z.string().nullable().optional(),
-          frequency: z.enum(frequencies),
-          flag_color: z.union([z.enum(flagColors), z.null()]).optional(),
-        }),
-      )
-      .min(1),
-  });
-}
+const createScheduledTransactionsSchema = z.object({
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
+  transactions: z
+    .array(
+      z.object({
+        account_id: z.string(),
+        date: z.string().describe("Date in YYYY-MM-DD format."),
+        amount: z
+          .number()
+          .describe(
+            "Amount in currency units (e.g., -5.55 for negative five dollars and fifty-five cents). Do NOT use milliunits.",
+          ),
+        payee_name: z.string().nullable().optional(),
+        payee_id: z.string().nullable().optional(),
+        category_id: z.string().nullable().optional(),
+        memo: z.string().nullable().optional(),
+        frequency: z.enum(frequencies),
+        flag_color: z.union([z.enum(flagColors), z.null()]).optional(),
+      }),
+    )
+    .min(1)
+    .max(50),
+});
 
-function buildUpdateScheduledTransactionsSchema(requireSession: boolean) {
-  return z.object({
-    budget_id: z.string().optional(),
-    session_id: sessionIdSchema(requireSession),
-    transactions: z
-      .array(
-        z.object({
-          scheduled_transaction_id: z.string(),
-          account_id: z.string().optional(),
-          date: z.string().optional(),
-          amount: z
-            .number()
-            .optional()
-            .describe(
-              "Amount in currency units (e.g., -5.55 for negative five dollars and fifty-five cents). Do NOT use milliunits.",
-            ),
-          payee_name: z.string().nullable().optional(),
-          payee_id: z.string().nullable().optional(),
-          category_id: z.string().nullable().optional(),
-          memo: z.string().nullable().optional(),
-          frequency: z.enum(frequencies).optional(),
-          flag_color: z.union([z.enum(flagColors), z.null()]).optional(),
-        }),
-      )
-      .min(1),
-  });
-}
+const updateScheduledTransactionsSchema = z.object({
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
+  transactions: z
+    .array(
+      z.object({
+        scheduled_transaction_id: z.string(),
+        account_id: z.string().optional(),
+        date: z.string().optional().describe("Date in YYYY-MM-DD format."),
+        amount: z
+          .number()
+          .optional()
+          .describe(
+            "Amount in currency units (e.g., -5.55 for negative five dollars and fifty-five cents). Do NOT use milliunits.",
+          ),
+        payee_name: z.string().nullable().optional(),
+        payee_id: z.string().nullable().optional(),
+        category_id: z.string().nullable().optional(),
+        memo: z.string().nullable().optional(),
+        frequency: z.enum(frequencies).optional(),
+        flag_color: z.union([z.enum(flagColors), z.null()]).optional(),
+      }),
+    )
+    .min(1)
+    .max(50),
+});
 
-function buildDeleteScheduledTransactionsSchema(requireSession: boolean) {
-  return z.object({
-    budget_id: z.string().optional(),
-    session_id: sessionIdSchema(requireSession),
-    scheduled_transaction_ids: z.array(z.string()).min(1),
-  });
-}
+const deleteScheduledTransactionsSchema = z.object({
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
+  scheduled_transaction_ids: z.array(z.string()).min(1).max(50),
+});
 
 export function registerScheduledTransactionTools(
   server: McpServer,
   context: AppContext,
 ): void {
-  const createScheduledTransactionsSchema =
-    buildCreateScheduledTransactionsSchema(context.requireSession);
-  const updateScheduledTransactionsSchema =
-    buildUpdateScheduledTransactionsSchema(context.requireSession);
-  const deleteScheduledTransactionsSchema =
-    buildDeleteScheduledTransactionsSchema(context.requireSession);
-
   server.registerTool(
     "get_scheduled_transactions",
     {
@@ -130,6 +127,7 @@ export function registerScheduledTransactionTools(
         "Get scheduled transactions with optional account/category filtering.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },
@@ -181,11 +179,7 @@ export function registerScheduledTransactionTools(
       },
       inputSchema: createScheduledTransactionsSchema,
     },
-    async ({
-      budget_id: budgetId,
-      transactions,
-      session_id: sessionId = DEFAULT_SESSION_ID,
-    }) => {
+    async ({ budget_id: budgetId, transactions }) => {
       try {
         const resolvedBudgetId =
           await context.ynabClient.resolveRealBudgetId(budgetId);
@@ -255,20 +249,14 @@ export function registerScheduledTransactionTools(
           }
         }
 
-        const undoHistoryIds =
-          undoEntries.length > 0
-            ? (
-                await context.undoEngine.recordEntries(
-                  resolvedBudgetId,
-                  undoEntries,
-                  sessionId,
-                )
-              ).map((entry) => entry.id)
-            : [];
+        const undoHistoryIds = await recordUndoAndGetIds(
+          context.undoEngine,
+          resolvedBudgetId,
+          undoEntries,
+        );
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
-          session_id: sessionId,
           created_count: createdTransactions.length,
           results,
           transactions: createdTransactions,
@@ -299,11 +287,7 @@ export function registerScheduledTransactionTools(
       },
       inputSchema: updateScheduledTransactionsSchema,
     },
-    async ({
-      budget_id: budgetId,
-      transactions,
-      session_id: sessionId = DEFAULT_SESSION_ID,
-    }) => {
+    async ({ budget_id: budgetId, transactions }) => {
       try {
         const resolvedBudgetId =
           await context.ynabClient.resolveRealBudgetId(budgetId);
@@ -384,20 +368,14 @@ export function registerScheduledTransactionTools(
           }
         }
 
-        const undoHistoryIds =
-          undoEntries.length > 0
-            ? (
-                await context.undoEngine.recordEntries(
-                  resolvedBudgetId,
-                  undoEntries,
-                  sessionId,
-                )
-              ).map((entry) => entry.id)
-            : [];
+        const undoHistoryIds = await recordUndoAndGetIds(
+          context.undoEngine,
+          resolvedBudgetId,
+          undoEntries,
+        );
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
-          session_id: sessionId,
           results,
           undo_history_ids: undoHistoryIds,
         });
@@ -429,7 +407,6 @@ export function registerScheduledTransactionTools(
     async ({
       budget_id: budgetId,
       scheduled_transaction_ids: scheduledIds,
-      session_id: sessionId = DEFAULT_SESSION_ID,
     }) => {
       try {
         const resolvedBudgetId =
@@ -510,20 +487,14 @@ export function registerScheduledTransactionTools(
           }
         }
 
-        const undoHistoryIds =
-          undoEntries.length > 0
-            ? (
-                await context.undoEngine.recordEntries(
-                  resolvedBudgetId,
-                  undoEntries,
-                  sessionId,
-                )
-              ).map((entry) => entry.id)
-            : [];
+        const undoHistoryIds = await recordUndoAndGetIds(
+          context.undoEngine,
+          resolvedBudgetId,
+          undoEntries,
+        );
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
-          session_id: sessionId,
           results,
           undo_history_ids: undoHistoryIds,
         });

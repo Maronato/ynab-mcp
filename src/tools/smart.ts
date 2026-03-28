@@ -3,12 +3,10 @@ import { z } from "zod";
 
 import {
   analyzeTransactions,
-  type CategorizationSuggestion,
   type FlatCategory,
   type TargetTransaction,
 } from "../analysis/categorize.js";
 import type { AppContext } from "../context.js";
-import { SamplingNotAvailableError } from "../sampling/client.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import { formatCurrency, milliunitsToCurrency } from "../ynab/format.js";
@@ -19,23 +17,12 @@ const INTERNAL_GROUP_NAMES = new Set([
   "Credit Card Payments",
 ]);
 
-interface LlmCategorizationResult {
-  transaction_id: string;
-  category_id: string;
-  confidence: string;
-  reasoning: string;
-}
-
-interface RebalanceSuggestion {
-  from_category_id: string;
-  to_category_id: string;
-  amount: number;
-  reasoning: string;
-}
-
 const autoCategorizeSchema = z.object({
-  budget_id: z.string().optional(),
-  since_date: z.string().optional(),
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
+  since_date: z.string().optional().describe("Date in YYYY-MM-DD format."),
   include_unapproved: z.boolean().optional(),
   include_transfers: z
     .boolean()
@@ -55,13 +42,27 @@ const autoCategorizeSchema = z.object({
     .describe(
       "When true, update_actions will include approved: true so categorization and approval happen in one pass. Defaults to true.",
     ),
-  limit: z.number().int().min(1).max(200).optional(),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe("Maximum transactions to analyze. Defaults to 50."),
   history_months: z.number().int().min(1).max(36).optional(),
 });
 
 const coverOverspendingSchema = z.object({
-  budget_id: z.string().optional(),
-  month: z.string().optional(),
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
+  month: z
+    .string()
+    .optional()
+    .describe(
+      "Month in YYYY-MM-DD format (use first day of month). Defaults to current month.",
+    ),
 });
 
 export function registerSmartTools(
@@ -74,11 +75,12 @@ export function registerSmartTools(
       title: "Suggest Transaction Categories",
       description:
         "Analyze uncategorized (and optionally unapproved) transactions using payee history, " +
-        "amount patterns, scheduled transaction matching, and LLM sampling for ambiguous cases. " +
+        "amount patterns, and scheduled transaction matching. " +
         "Returns categorization suggestions with confidence levels — does NOT apply changes. " +
         "Use the returned update_actions with update_transactions to apply.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },
@@ -226,25 +228,13 @@ export function registerSmartTools(
           frequency: stx.frequency,
         }));
 
-        let suggestions = analyzeTransactions(
+        const suggestions = analyzeTransactions(
           targets,
           profiles,
           scheduledForAnalysis,
           flatCategories,
           allPayeeNames,
         );
-
-        // LLM sampling for medium/low confidence items
-        const needsLlm = suggestions.filter((s) => s.needs_llm_review);
-        if (needsLlm.length > 0 && context.samplingClient.isAvailable()) {
-          suggestions = await enhanceWithSampling(
-            context,
-            suggestions,
-            needsLlm,
-            flatCategories,
-            settings.currency_format,
-          );
-        }
 
         // Build output
         const confidenceSummary = {
@@ -329,11 +319,11 @@ export function registerSmartTools(
       title: "Suggest Overspending Coverage",
       description:
         "Analyze budget categories to identify overspending and suggest rebalancing moves. " +
-        "Uses LLM sampling to suggest which surplus categories to pull from. " +
         "Returns suggestions — does NOT apply changes. " +
         "Use the returned set_budget_actions with set_category_budgets to apply.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },
@@ -425,182 +415,15 @@ export function registerSmartTools(
           });
         }
 
-        if (!context.samplingClient.isAvailable()) {
-          const deterministicResult = await buildDeterministicRebalance(
-            context,
-            resolvedBudgetId,
-            month,
-            overspent,
-            surplus,
-            settings,
-          );
-          return jsonToolResult(deterministicResult);
-        }
-
-        let suggestions: RebalanceSuggestion[];
-        try {
-          suggestions = await context.samplingClient.createJsonMessage<
-            RebalanceSuggestion[]
-          >({
-            messages: [
-              {
-                role: "user",
-                content: {
-                  type: "text",
-                  text: buildRebalancePrompt(overspent, surplus),
-                },
-              },
-            ],
-            systemPrompt: REBALANCE_SYSTEM_PROMPT,
-            maxTokens: 4096,
-            temperature: 0.2,
-            includeContext: "none",
-          });
-        } catch (error) {
-          if (error instanceof SamplingNotAvailableError) {
-            throw error;
-          }
-          return errorToolResult(
-            `Failed to get rebalancing suggestions from LLM: ${extractErrorMessage(error)}`,
-          );
-        }
-
-        if (!Array.isArray(suggestions)) {
-          return errorToolResult(
-            "LLM returned an invalid response format. Expected a JSON array.",
-          );
-        }
-
-        // Validate suggestions
-        const surplusById = new Map(surplus.map((s) => [s.id, s]));
-        const overspentIds = new Set(overspent.map((o) => o.id));
-        const remainingBalance = new Map(surplus.map((s) => [s.id, s.balance]));
-
-        const validSuggestions: RebalanceSuggestion[] = [];
-        const skippedSuggestions: Array<{
-          suggestion: RebalanceSuggestion;
-          reason: string;
-        }> = [];
-
-        for (const suggestion of suggestions) {
-          if (!surplusById.has(suggestion.from_category_id)) {
-            skippedSuggestions.push({
-              suggestion,
-              reason: "Source category not found or has no surplus.",
-            });
-            continue;
-          }
-
-          if (!overspentIds.has(suggestion.to_category_id)) {
-            skippedSuggestions.push({
-              suggestion,
-              reason: "Destination category is not overspent.",
-            });
-            continue;
-          }
-
-          if (suggestion.amount <= 0) {
-            skippedSuggestions.push({
-              suggestion,
-              reason: "Amount must be positive.",
-            });
-            continue;
-          }
-
-          const available =
-            remainingBalance.get(suggestion.from_category_id) ?? 0;
-          if (suggestion.amount > available) {
-            skippedSuggestions.push({
-              suggestion,
-              reason: `Amount ${suggestion.amount} exceeds available balance ${available}.`,
-            });
-            continue;
-          }
-
-          remainingBalance.set(
-            suggestion.from_category_id,
-            available - suggestion.amount,
-          );
-          validSuggestions.push(suggestion);
-        }
-
-        const formattedSuggestions = validSuggestions.map((s) => {
-          const from = surplusById.get(s.from_category_id);
-          const to = overspent.find((o) => o.id === s.to_category_id);
-          return {
-            ...s,
-            from_category_name: from?.name ?? null,
-            from_category_group_name: from?.group_name ?? null,
-            to_category_name: to?.name ?? null,
-            to_category_group_name: to?.group_name ?? null,
-            amount_display: formatCurrency(
-              Math.round(s.amount * 1000),
-              settings.currency_format,
-            ),
-          };
-        });
-
-        // Pre-build set_budget_actions for the client LLM
-        // Each move requires adjusting both source and destination budgets
-        const resolvedMonth = month === "current" ? getCurrentMonth() : month;
-
-        // Fetch current budgeted values for involved categories
-        const involvedCategoryIds = new Set<string>();
-        for (const s of validSuggestions) {
-          involvedCategoryIds.add(s.from_category_id);
-          involvedCategoryIds.add(s.to_category_id);
-        }
-
-        const currentBudgets = await Promise.all(
-          [...involvedCategoryIds].map(async (catId) => ({
-            id: catId,
-            category: await context.ynabClient.getMonthCategoryById(
-              resolvedBudgetId,
-              resolvedMonth,
-              catId,
-            ),
-          })),
+        const deterministicResult = await buildDeterministicRebalance(
+          context,
+          resolvedBudgetId,
+          month,
+          overspent,
+          surplus,
+          settings,
         );
-
-        const budgetAdjustments = new Map<
-          string,
-          { currentBudgeted: number; delta: number }
-        >();
-
-        for (const { id, category } of currentBudgets) {
-          if (category) {
-            budgetAdjustments.set(id, {
-              currentBudgeted: category.budgeted,
-              delta: 0,
-            });
-          }
-        }
-
-        for (const suggestion of validSuggestions) {
-          const amountMilliunits = Math.round(suggestion.amount * 1000);
-          const from = budgetAdjustments.get(suggestion.from_category_id);
-          const to = budgetAdjustments.get(suggestion.to_category_id);
-          if (from) from.delta -= amountMilliunits;
-          if (to) to.delta += amountMilliunits;
-        }
-
-        const setBudgetActions = [...budgetAdjustments.entries()]
-          .filter(([, adj]) => adj.delta !== 0)
-          .map(([catId, adj]) => ({
-            category_id: catId,
-            month: resolvedMonth,
-            budgeted: milliunitsToCurrency(adj.currentBudgeted + adj.delta),
-          }));
-
-        return jsonToolResult({
-          budget_id: resolvedBudgetId,
-          month: resolvedMonth,
-          suggestion_count: validSuggestions.length,
-          skipped_count: skippedSuggestions.length,
-          suggestions: formattedSuggestions,
-          skipped: skippedSuggestions,
-          set_budget_actions: setBudgetActions,
-        });
+        return jsonToolResult(deterministicResult);
       } catch (error) {
         return errorToolResult(
           extractErrorMessage(error, "Failed to analyze overspending."),
@@ -777,217 +600,8 @@ async function buildDeterministicRebalance(
   return {
     budget_id: budgetId,
     month: resolvedMonth,
-    sampling_available: false,
     suggestion_count: suggestions.length,
     suggestions,
     set_budget_actions: setBudgetActions,
   };
 }
-
-async function enhanceWithSampling(
-  context: AppContext,
-  allSuggestions: CategorizationSuggestion[],
-  needsLlm: CategorizationSuggestion[],
-  categories: FlatCategory[],
-  currencyFormat: unknown,
-): Promise<CategorizationSuggestion[]> {
-  try {
-    const transactionsForLlm = needsLlm.map((s) => ({
-      transaction_id: s.transaction_id,
-      date: s.date,
-      payee_name: s.payee_name,
-      amount_display: formatCurrency(
-        s.amount,
-        currencyFormat as Parameters<typeof formatCurrency>[1],
-      ),
-      memo: s.memo,
-      current_suggestion: s.suggested_category_name ?? "none",
-      current_confidence: s.confidence,
-      signals_summary: buildSignalsSummary(s),
-    }));
-
-    const llmResults = await context.samplingClient.createJsonMessage<
-      LlmCategorizationResult[]
-    >({
-      messages: [
-        {
-          role: "user",
-          content: {
-            type: "text",
-            text: buildSamplingPrompt(categories, transactionsForLlm),
-          },
-        },
-      ],
-      systemPrompt: CATEGORIZATION_SYSTEM_PROMPT,
-      maxTokens: 4096,
-      temperature: 0.1,
-      includeContext: "none",
-    });
-
-    if (!Array.isArray(llmResults)) return allSuggestions;
-
-    const validCategoryIds = new Set(categories.map((c) => c.id));
-    const llmById = new Map<string, LlmCategorizationResult>();
-    for (const r of llmResults) {
-      if (validCategoryIds.has(r.category_id)) {
-        llmById.set(r.transaction_id, r);
-      }
-    }
-
-    return allSuggestions.map((s) => {
-      const llm = llmById.get(s.transaction_id);
-      if (!llm || !s.needs_llm_review) return s;
-
-      const categoryName =
-        categories.find((c) => c.id === llm.category_id)?.name ?? null;
-
-      return {
-        ...s,
-        suggested_category_id: llm.category_id,
-        suggested_category_name: categoryName,
-        confidence: llm.confidence === "high" ? "high" : s.confidence,
-        method: `${s.method}+llm`,
-        reasoning: llm.reasoning,
-        needs_llm_review: false,
-      };
-    });
-  } catch (error) {
-    if (error instanceof SamplingNotAvailableError) throw error;
-    // If sampling fails, return original suggestions unchanged
-    return allSuggestions;
-  }
-}
-
-function buildSignalsSummary(s: CategorizationSuggestion): string {
-  const parts: string[] = [];
-
-  if (s.signals.payee_history) {
-    const entries = Object.entries(s.signals.payee_history)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 3)
-      .map(([cat, count]) => `${cat}: ${count}x`);
-    parts.push(`Payee history: ${entries.join(", ")}`);
-  }
-
-  if (s.signals.amount_pattern) {
-    parts.push(
-      `Amount pattern: typical=${s.signals.amount_pattern.typical_category_name ?? "unknown"}`,
-    );
-  }
-
-  if (s.signals.scheduled_match) {
-    parts.push(
-      `Scheduled match: ${s.signals.scheduled_match.category_name ?? s.signals.scheduled_match.category_id} (${s.signals.scheduled_match.frequency})`,
-    );
-  }
-
-  if (s.signals.ynab_existing) {
-    parts.push(
-      `YNAB auto-assigned: ${s.signals.ynab_existing.category_name ?? s.signals.ynab_existing.category_id}`,
-    );
-  }
-
-  if (s.signals.similar_payees) {
-    const sim = s.signals.similar_payees[0];
-    parts.push(
-      `Similar payee: "${sim.payee_name}" → ${sim.dominant_category_name ?? "unknown"}`,
-    );
-  }
-
-  return parts.join(" | ") || "No signals";
-}
-
-function buildSamplingPrompt(
-  categories: FlatCategory[],
-  transactions: Array<{
-    transaction_id: string;
-    date: string;
-    payee_name: string | null;
-    amount_display: string;
-    memo: string | null;
-    current_suggestion: string;
-    current_confidence: string;
-    signals_summary: string;
-  }>,
-): string {
-  return [
-    "## Available Categories",
-    JSON.stringify(
-      categories.map((c) => ({ id: c.id, name: c.name, group: c.group_name })),
-      null,
-      2,
-    ),
-    "",
-    "## Transactions Needing Review",
-    "Each transaction includes pre-computed analysis signals. Use these signals to make your decision.",
-    JSON.stringify(transactions, null, 2),
-    "",
-    "Categorize each transaction, considering the provided signals.",
-  ].join("\n");
-}
-
-function buildRebalancePrompt(
-  overspent: Array<{
-    id: string;
-    name: string;
-    group_name: string;
-    balance: number;
-    balance_display: string;
-    target_type: string | null;
-  }>,
-  surplus: Array<{
-    id: string;
-    name: string;
-    group_name: string;
-    balance: number;
-    balance_display: string;
-    target_type: string | null;
-    target_amount: number | null;
-    target_percentage_complete: number | null;
-  }>,
-): string {
-  return [
-    "## Overspent Categories",
-    JSON.stringify(overspent, null, 2),
-    "",
-    "## Surplus Categories",
-    JSON.stringify(surplus, null, 2),
-    "",
-    "Suggest budget moves to cover overspending.",
-  ].join("\n");
-}
-
-const CATEGORIZATION_SYSTEM_PROMPT = `You are a YNAB transaction categorizer. You are given transactions that need review, along with pre-computed analysis signals (payee history, amount patterns, scheduled matches, etc.).
-
-Use the signals to make informed decisions. When signals conflict, weigh them:
-1. Scheduled transaction matches are very strong signals
-2. Payee history frequency is strong (higher % = more reliable)
-3. Amount patterns help disambiguate when a payee has multiple categories
-4. YNAB auto-assignments are a moderate signal but can be wrong
-5. Similar payee matches are weak but useful for new payees
-
-Respond ONLY with a JSON array. Each element must have:
-- "transaction_id": the transaction's ID
-- "category_id": the chosen category ID (must be from the provided list)
-- "confidence": "high", "medium", or "low"
-- "reasoning": brief explanation (max 30 words) referencing which signals you relied on
-
-Rules:
-- Never invent category IDs; only use IDs from the provided list.
-- Return valid JSON only, no markdown fences or extra text.`;
-
-const REBALANCE_SYSTEM_PROMPT = `You are a YNAB budget advisor. Given overspent and surplus categories for a month, suggest budget moves to cover overspending.
-
-Respond ONLY with a JSON array. Each element must have:
-- "from_category_id": source category ID (must have surplus)
-- "to_category_id": destination category ID (must be overspent)
-- "amount": amount to move (positive number in the budget's currency units, NOT milliunits)
-- "reasoning": brief explanation (max 20 words)
-
-Rules:
-- Never move more than a category's available balance.
-- Prioritize covering essential categories (rent, utilities, groceries) first.
-- Prefer taking from categories with the largest surplus relative to their target.
-- Minimize the number of moves.
-- Only move exactly enough to cover each overspent category's deficit.
-- Return valid JSON only, no markdown fences or extra text.`;

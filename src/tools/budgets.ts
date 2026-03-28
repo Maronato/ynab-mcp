@@ -7,7 +7,10 @@ import { extractErrorMessage } from "../ynab/errors.js";
 import { formatCurrency } from "../ynab/format.js";
 
 const budgetIdSchema = z.object({
-  budget_id: z.string().optional(),
+  budget_id: z
+    .string()
+    .optional()
+    .describe("Budget ID. Omit to use the last-used budget."),
 });
 
 export function registerBudgetTools(
@@ -21,6 +24,7 @@ export function registerBudgetTools(
       description: "List available YNAB budgets with key metadata.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },
@@ -115,6 +119,7 @@ export function registerBudgetTools(
         "that may not be reflected yet. Costs up to 5 API requests against the 200/hour rate limit.",
       annotations: {
         readOnlyHint: true,
+        idempotentHint: true,
         destructiveHint: false,
         openWorldHint: true,
       },
