@@ -1213,6 +1213,44 @@ export class YnabClient {
     return response.data.category;
   }
 
+  async updateCategory(
+    budgetId: string,
+    categoryId: string,
+    updates: { goal_target?: number | null; goal_target_date?: string | null },
+  ): Promise<ynab.Category> {
+    this.assertWriteAllowed();
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    // The SDK's ExistingCategory type doesn't allow null for goal_target /
+    // goal_target_date, but the YNAB API accepts null to clear fields.
+    // We cast to work around this SDK codegen limitation.
+    const response = await this.api.categories.updateCategory(
+      resolvedBudgetId,
+      categoryId,
+      { category: updates } as ynab.PatchCategoryWrapper,
+    );
+
+    this.markCollectionsStale(resolvedBudgetId, ["categories"]);
+    this.invalidateMonthCaches(resolvedBudgetId);
+    return response.data.category;
+  }
+
+  async getCategoryById(
+    budgetId: string,
+    categoryId: string,
+  ): Promise<ynab.Category | null> {
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    try {
+      const response = await this.api.categories.getCategoryById(
+        resolvedBudgetId,
+        categoryId,
+      );
+      return response.data.category;
+    } catch (error) {
+      if (isNotFoundError(error)) return null;
+      throw error;
+    }
+  }
+
   async getMonthCategoryById(
     budgetId: string | undefined,
     month: string,

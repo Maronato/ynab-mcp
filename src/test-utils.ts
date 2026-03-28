@@ -217,6 +217,8 @@ export function createMockContext(): MockAppContext {
       updateScheduledTransaction: vi.fn().mockResolvedValue({}),
       deleteScheduledTransaction: vi.fn().mockResolvedValue(null),
       setCategoryBudget: vi.fn().mockResolvedValue({}),
+      updateCategory: vi.fn().mockResolvedValue({}),
+      getCategoryById: vi.fn().mockResolvedValue(null),
       getMonthCategoryById: vi.fn().mockResolvedValue(null),
       getTransactionsInRange: vi.fn().mockResolvedValue([]),
       snapshotTransaction: vi.fn((tx: Record<string, unknown>) => tx),

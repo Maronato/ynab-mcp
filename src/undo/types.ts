@@ -5,14 +5,16 @@ export type UndoOperationType =
   | "create_scheduled_transaction"
   | "update_scheduled_transaction"
   | "delete_scheduled_transaction"
-  | "set_category_budget";
+  | "set_category_budget"
+  | "set_category_target";
 
 type UndoActionType = "delete" | "update" | "create";
 
 type UndoEntityType =
   | "transaction"
   | "scheduled_transaction"
-  | "category_budget";
+  | "category_budget"
+  | "category_target";
 
 export interface UndoAction {
   type: UndoActionType;

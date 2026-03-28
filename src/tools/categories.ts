@@ -209,6 +209,22 @@ export function registerCategoryTools(
                   : null,
               target_percentage_complete:
                 category.goal_percentage_complete ?? null,
+              target_overall_left:
+                category.goal_overall_left !== null &&
+                category.goal_overall_left !== undefined
+                  ? milliunitsToCurrency(category.goal_overall_left)
+                  : null,
+              target_overall_left_display:
+                category.goal_overall_left !== null &&
+                category.goal_overall_left !== undefined
+                  ? formatCurrency(
+                      category.goal_overall_left,
+                      settings.currency_format,
+                    )
+                  : null,
+              target_day: category.goal_day ?? null,
+              target_cadence: category.goal_cadence ?? null,
+              target_creation_month: category.goal_creation_month ?? null,
             })),
           })),
         });
