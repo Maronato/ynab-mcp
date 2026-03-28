@@ -52,6 +52,11 @@ interface TransactionCache {
   lastDeltas?: SyncDeltas;
 }
 
+interface SimpleCache<T> {
+  data: T;
+  lastRefreshedAt: number;
+}
+
 type StaleableCollectionKey =
   | "accounts"
   | "categories"
@@ -66,7 +71,9 @@ interface BudgetCache {
   scheduledTransactions: CollectionCache<ynab.ScheduledTransactionDetail>;
   transactions: TransactionCache;
   categoryGroups: Map<string, ynab.CategoryGroupWithCategories>;
-  settings?: ynab.PlanSettings;
+  settings?: SimpleCache<ynab.PlanSettings>;
+  monthSummaries: Map<string, SimpleCache<ynab.MonthDetail>>;
+  monthCategories: Map<string, SimpleCache<ynab.Category>>;
 }
 
 interface GetAccountsOptions {
@@ -104,6 +111,8 @@ export class YnabClient {
   private readonly api: ynab.API;
 
   private readonly budgetCaches = new Map<string, BudgetCache>();
+
+  private plansCache: SimpleCache<ynab.PlanSummary[]> | undefined;
 
   private resolvedLastUsedId: string | null = null;
 
@@ -196,21 +205,30 @@ export class YnabClient {
   }
 
   async listBudgets(): Promise<ynab.PlanSummary[]> {
+    if (this.isSimpleCacheValid(this.plansCache)) {
+      return this.plansCache.data;
+    }
+
     const response = await this.api.plans.getPlans();
-    return response.data.plans;
+    const plans = response.data.plans;
+    this.plansCache = { data: plans, lastRefreshedAt: Date.now() };
+    return plans;
   }
 
   async getBudgetSettings(budgetId?: string): Promise<ynab.PlanSettings> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const budgetCache = this.getBudgetCache(resolvedBudgetId);
 
-    if (budgetCache.settings) {
-      return budgetCache.settings;
+    if (this.isSimpleCacheValid(budgetCache.settings)) {
+      return budgetCache.settings.data;
     }
 
     const response = await this.api.plans.getPlanSettingsById(resolvedBudgetId);
-    budgetCache.settings = response.data.settings;
-    return response.data.settings;
+    budgetCache.settings = {
+      data: response.data.settings,
+      lastRefreshedAt: Date.now(),
+    };
+    return budgetCache.settings.data;
   }
 
   async getBudgetSummary(budgetId?: string) {
@@ -371,11 +389,22 @@ export class YnabClient {
     month = "current",
   ): Promise<ynab.MonthDetail> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    const budgetCache = this.getBudgetCache(resolvedBudgetId);
+    const cached = budgetCache.monthSummaries.get(month);
+    if (this.isSimpleCacheValid(cached)) {
+      return cached.data;
+    }
+
     const response = await this.api.months.getPlanMonth(
       resolvedBudgetId,
       month,
     );
-    return response.data.month;
+    const monthSummary = response.data.month;
+    budgetCache.monthSummaries.set(month, {
+      data: monthSummary,
+      lastRefreshedAt: Date.now(),
+    });
+    return monthSummary;
   }
 
   async getScheduledTransactions(
@@ -655,6 +684,7 @@ export class YnabClient {
       "payees",
       "categories",
     ]);
+    this.invalidateMonthCaches(resolvedBudgetId);
     this.optimisticUpdateTransactions(resolvedBudgetId, created);
     return created;
   }
@@ -720,6 +750,7 @@ export class YnabClient {
       "payees",
       "categories",
     ]);
+    this.invalidateMonthCaches(resolvedBudgetId);
     this.optimisticUpdateTransactions(resolvedBudgetId, updated);
     return updated;
   }
@@ -736,6 +767,7 @@ export class YnabClient {
         transactionId,
       );
       this.markCollectionsStale(resolvedBudgetId, ["accounts", "categories"]);
+      this.invalidateMonthCaches(resolvedBudgetId);
       this.optimisticRemoveTransaction(resolvedBudgetId, transactionId);
       return response.data.transaction;
     } catch (error) {
@@ -748,8 +780,21 @@ export class YnabClient {
     budgetId: string | undefined,
     scheduledTransactionId: string,
   ): Promise<ynab.ScheduledTransactionDetail | null> {
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    const cache = this.getBudgetCache(resolvedBudgetId);
+    const scheduledCache = cache.scheduledTransactions;
+
+    if (
+      scheduledCache.serverKnowledge != null &&
+      this.needsRefresh(scheduledCache)
+    ) {
+      await this.refreshScheduledTransactions(resolvedBudgetId);
+    }
+
+    const cached = scheduledCache.byId.get(scheduledTransactionId);
+    if (cached) return cached;
+
     try {
-      const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
       const response =
         await this.api.scheduledTransactions.getScheduledTransactionById(
           resolvedBudgetId,
@@ -910,6 +955,7 @@ export class YnabClient {
     );
 
     this.markCollectionsStale(resolvedBudgetId, ["categories"]);
+    this.invalidateMonthCaches(resolvedBudgetId);
     return response.data.category;
   }
 
@@ -918,14 +964,26 @@ export class YnabClient {
     month: string,
     categoryId: string,
   ): Promise<ynab.Category | null> {
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    const budgetCache = this.getBudgetCache(resolvedBudgetId);
+    const cacheKey = `${month}:${categoryId}`;
+    const cached = budgetCache.monthCategories.get(cacheKey);
+    if (this.isSimpleCacheValid(cached)) {
+      return cached.data;
+    }
+
     try {
-      const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
       const response = await this.api.categories.getMonthCategoryById(
         resolvedBudgetId,
         month,
         categoryId,
       );
-      return response.data.category;
+      const category = response.data.category;
+      budgetCache.monthCategories.set(cacheKey, {
+        data: category,
+        lastRefreshedAt: Date.now(),
+      });
+      return category;
     } catch (error) {
       if (isNotFoundError(error)) return null;
       throw error;
@@ -984,6 +1042,8 @@ export class YnabClient {
         lastRefreshedAt: 0,
       },
       categoryGroups: new Map(),
+      monthSummaries: new Map(),
+      monthCategories: new Map(),
       settings: undefined,
     };
 
@@ -999,6 +1059,18 @@ export class YnabClient {
     for (const key of keys) {
       cache[key].stale = true;
     }
+  }
+
+  private invalidateMonthCaches(budgetId: string): void {
+    const cache = this.getBudgetCache(budgetId);
+    cache.monthSummaries.clear();
+    cache.monthCategories.clear();
+  }
+
+  private isSimpleCacheValid<T>(
+    cache: SimpleCache<T> | undefined,
+  ): cache is SimpleCache<T> {
+    return cache != null && Date.now() - cache.lastRefreshedAt <= CACHE_TTL_MS;
   }
 
   private needsRefresh(cache: {
@@ -1024,6 +1096,11 @@ export class YnabClient {
   }> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const cache = this.getBudgetCache(resolvedBudgetId);
+
+    this.plansCache = undefined;
+    cache.settings = undefined;
+    cache.monthSummaries.clear();
+    cache.monthCategories.clear();
 
     cache.accounts.stale = true;
     cache.categories.stale = true;
