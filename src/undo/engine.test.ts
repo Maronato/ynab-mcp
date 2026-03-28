@@ -45,8 +45,6 @@ function createMockClient() {
 let mockStore: ReturnType<typeof createMockStore>;
 let mockClient: ReturnType<typeof createMockClient>;
 let engine: UndoEngine;
-const CURRENT_SESSION_ID = "session-1";
-const OTHER_SESSION_ID = "other-session";
 
 beforeEach(() => {
   mockStore = createMockStore();
@@ -56,38 +54,29 @@ beforeEach(() => {
 
 describe("recordEntries", () => {
   it("creates entries with correct format and calls store.appendEntries", async () => {
-    const result = await engine.recordEntries(
-      "budget-1",
-      [
-        {
-          operation: "update_transaction",
-          description: "Updated tx.",
-          undo_action: {
-            type: "update",
-            entity_type: "transaction",
-            entity_id: "tx-1",
-            expected_state: {},
-            restore_state: {},
-          },
+    const result = await engine.recordEntries("budget-1", [
+      {
+        operation: "update_transaction",
+        description: "Updated tx.",
+        undo_action: {
+          type: "update",
+          entity_type: "transaction",
+          entity_id: "tx-1",
+          expected_state: {},
+          restore_state: {},
         },
-      ],
-      CURRENT_SESSION_ID,
-    );
+      },
+    ]);
 
     expect(result).toHaveLength(1);
     expect(result[0].id).toMatch(/^budget-1::\d+::.+$/);
-    expect(result[0].session_id).toBe(CURRENT_SESSION_ID);
     expect(result[0].status).toBe("active");
     expect(result[0].budget_id).toBe("budget-1");
     expect(mockStore.appendEntries).toHaveBeenCalledOnce();
   });
 
   it("returns early when no entries are provided", async () => {
-    const result = await engine.recordEntries(
-      "budget-1",
-      [],
-      CURRENT_SESSION_ID,
-    );
+    const result = await engine.recordEntries("budget-1", []);
 
     expect(result).toEqual([]);
     expect(mockStore.appendEntries).not.toHaveBeenCalled();
@@ -96,35 +85,18 @@ describe("recordEntries", () => {
 
 describe("listHistory", () => {
   it("delegates to store.listEntries with correct params", async () => {
-    await engine.listHistory("budget-1", CURRENT_SESSION_ID, 10, true);
+    await engine.listHistory("budget-1", 10, true);
 
     expect(mockStore.listEntries).toHaveBeenCalledWith("budget-1", {
-      sessionId: CURRENT_SESSION_ID,
       limit: 10,
       includeUndone: true,
-      includeAllSessions: false,
-    });
-  });
-
-  it("can include entries from all sessions", async () => {
-    await engine.listHistory("budget-1", CURRENT_SESSION_ID, 10, true, true);
-
-    expect(mockStore.listEntries).toHaveBeenCalledWith("budget-1", {
-      sessionId: CURRENT_SESSION_ID,
-      limit: 10,
-      includeUndone: true,
-      includeAllSessions: true,
     });
   });
 });
 
 describe("undoOperations — entry resolution", () => {
   it("returns an error for entry IDs that cannot be parsed", async () => {
-    const result = await engine.undoOperations(
-      ["invalid-id"],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations(["invalid-id"], false);
 
     expect(result.results).toHaveLength(1);
     expect(result.results[0]).toMatchObject({
@@ -138,11 +110,7 @@ describe("undoOperations — entry resolution", () => {
   it("returns error status for entries not found in store", async () => {
     mockStore.getEntriesByIds.mockResolvedValue([undefined]);
 
-    const result = await engine.undoOperations(
-      ["budget-1::123::abc"],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations(["budget-1::123::abc"], false);
 
     expect(result.results[0].status).toBe("error");
     expect(result.results[0].message).toContain("not found");
@@ -152,11 +120,7 @@ describe("undoOperations — entry resolution", () => {
     const undoneEntry = createMockUndoEntry({ status: "undone" });
     mockStore.getEntriesByIds.mockResolvedValue([undoneEntry]);
 
-    const result = await engine.undoOperations(
-      [undoneEntry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([undoneEntry.id], false);
 
     expect(result.results[0].status).toBe("skipped");
     expect(result.results[0].message).toContain("already undone");
@@ -185,11 +149,7 @@ describe("undoOperations — conflict detection for 'create' undo type", () => {
       amount: 5000,
     });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("conflict");
     expect(result.results[0].message).toContain("currently exists");
@@ -212,11 +172,7 @@ describe("undoOperations — conflict detection for 'create' undo type", () => {
     mockStore.getEntriesByIds.mockResolvedValue([entry]);
     mockClient.getTransactionById.mockResolvedValue(null);
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("undone");
   });
@@ -236,11 +192,7 @@ describe("undoOperations — conflict detection for update/delete undo types", (
     mockStore.getEntriesByIds.mockResolvedValue([entry]);
     mockClient.getTransactionById.mockResolvedValue(null);
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("conflict");
     expect(result.results[0].message).toContain("no longer exists");
@@ -266,11 +218,7 @@ describe("undoOperations — conflict detection for update/delete undo types", (
       amount: 9999,
     });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("conflict");
     expect(result.results[0].message).toContain("force=true");
@@ -301,11 +249,7 @@ describe("undoOperations — conflict detection for update/delete undo types", (
       amount: 5000,
     });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("undone");
   });
@@ -337,11 +281,7 @@ describe("undoOperations — force mode", () => {
       amount: 9999,
     });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      true,
-    );
+    const result = await engine.undoOperations([entry.id], true);
 
     expect(result.results[0].status).toBe("undone");
     expect(mockClient.updateTransactions).toHaveBeenCalled();
@@ -369,7 +309,7 @@ describe("undoOperations — transaction undo application", () => {
       amount: 5000,
     });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.deleteTransaction).toHaveBeenCalledWith(
       "budget-1",
@@ -407,7 +347,7 @@ describe("undoOperations — transaction undo application", () => {
       amount: 5000,
     });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.updateTransactions).toHaveBeenCalledWith("budget-1", [
       expect.objectContaining({
@@ -443,7 +383,7 @@ describe("undoOperations — transaction undo application", () => {
     mockClient.getTransactionById.mockResolvedValue(null);
     mockClient.createTransactions.mockResolvedValue([{ id: "tx-new" }]);
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.createTransactions).toHaveBeenCalledWith("budget-1", [
       expect.objectContaining({ account_id: "acc-1", amount: 5 }),
@@ -490,7 +430,7 @@ describe("undoOperations — split transaction undo", () => {
     mockClient.getTransactionById.mockResolvedValue(null);
     mockClient.createTransactions.mockResolvedValue([{ id: "tx-new" }]);
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.createTransactions).toHaveBeenCalledWith("budget-1", [
       expect.objectContaining({
@@ -511,13 +451,6 @@ describe("undoOperations — split transaction undo", () => {
   });
 
   it("reverts a split back to non-split via replaceTransaction", async () => {
-    // Faithfully models the production replace flow:
-    // - entity_id is the ORIGINAL transaction ID ("tx-original")
-    // - expected_state.id is the REPLACED transaction ID ("tx-replaced")
-    //   because snapshotTransaction(after) captures the new ID
-    // - ID mapping: "tx-original" -> "tx-replaced"
-    // The undo engine must handle the ID mismatch between
-    // expected_state.id and entity_id during conflict detection.
     const entry = createMockUndoEntry({
       undo_action: {
         type: "update",
@@ -570,11 +503,7 @@ describe("undoOperations — split transaction undo", () => {
       previousId: "tx-replaced",
     });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("undone");
     expect(result.results[0].message).toContain("replace");
@@ -658,11 +587,7 @@ describe("undoOperations — split transaction undo", () => {
       previousId: "tx-after-replace",
     });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("undone");
     expect(mockClient.replaceTransaction).toHaveBeenCalled();
@@ -672,11 +597,6 @@ describe("undoOperations — split transaction undo", () => {
   });
 
   it("does not false-conflict when API returns subtransactions in different order", async () => {
-    // Simulate real production flow: the expected_state was created by
-    // snapshotTransaction at record time (order: cat-a, cat-b from the API).
-    // At undo time, the API returns the same subtransactions in a different
-    // order (cat-b, cat-a). The real snapshotTransaction sorts them, so
-    // both snapshots should be identical despite the API ordering difference.
     const apiResponseAtRecordTime = {
       id: "tx-split",
       account_id: "acc-1",
@@ -752,11 +672,7 @@ describe("undoOperations — split transaction undo", () => {
       previousId: "tx-split",
     });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("undone");
     expect(result.summary.conflicts).toBe(0);
@@ -809,7 +725,7 @@ describe("undoOperations — split transaction undo", () => {
       previousId: "tx-split",
     });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.replaceTransaction).toHaveBeenCalled();
     expect(mockClient.updateTransactions).not.toHaveBeenCalled();
@@ -840,18 +756,13 @@ describe("undoOperations — split transaction undo", () => {
       amount: 5000,
     });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.updateTransactions).toHaveBeenCalled();
     expect(mockClient.replaceTransaction).not.toHaveBeenCalled();
   });
 
   it("includes subtransactions when restoring a non-split to split via regular update", async () => {
-    // After an un-split (split -> non-split), undoing should restore the split.
-    // The current transaction is non-split (expected_state has no subtransactions),
-    // so the undo takes the regular update path. The restore_state has
-    // subtransactions, which must be passed through to the API so it converts
-    // the non-split back into a split.
     const entry = createMockUndoEntry({
       undo_action: {
         type: "update",
@@ -898,7 +809,7 @@ describe("undoOperations — split transaction undo", () => {
       category_id: "cat-groceries",
     });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.updateTransactions).toHaveBeenCalled();
     expect(mockClient.replaceTransaction).not.toHaveBeenCalled();
@@ -933,7 +844,7 @@ describe("undoOperations — split transaction undo", () => {
     mockClient.getTransactionById.mockResolvedValue(null);
     mockClient.createTransactions.mockResolvedValue([{ id: "tx-new" }]);
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     const createCall = mockClient.createTransactions.mock.calls[0][1][0];
     expect(createCall.subtransactions).toBeUndefined();
@@ -956,7 +867,7 @@ describe("undoOperations — scheduled transaction undo", () => {
     mockClient.getScheduledTransactionById.mockResolvedValue({ id: "stx-1" });
     mockClient.snapshotScheduledTransaction.mockReturnValue({ id: "stx-1" });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.deleteScheduledTransaction).toHaveBeenCalledWith(
       "budget-1",
@@ -989,7 +900,7 @@ describe("undoOperations — scheduled transaction undo", () => {
       amount: 5000,
     });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.updateScheduledTransaction).toHaveBeenCalledWith(
       "budget-1",
@@ -1020,11 +931,126 @@ describe("undoOperations — scheduled transaction undo", () => {
     mockClient.getScheduledTransactionById.mockResolvedValue(null);
     mockClient.createScheduledTransaction.mockResolvedValue({ id: "stx-new" });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.createScheduledTransaction).toHaveBeenCalledWith(
       "budget-1",
       expect.objectContaining({ account_id: "acc-1", frequency: "weekly" }),
+    );
+    expect(mockStore.updateIdMappings).toHaveBeenCalledWith(
+      "budget-1",
+      "stx-deleted",
+      "stx-new",
+    );
+  });
+
+  it("omits frequency from update when it has not changed", async () => {
+    const entry = createMockUndoEntry({
+      undo_action: {
+        type: "update",
+        entity_type: "scheduled_transaction",
+        entity_id: "stx-1",
+        expected_state: { id: "stx-1", amount: 5000, frequency: "monthly" },
+        restore_state: {
+          account_id: "acc-1",
+          date: "2024-02-01",
+          amount: 3000,
+          frequency: "monthly",
+        },
+      },
+    });
+    mockStore.getEntriesByIds.mockResolvedValue([entry]);
+    mockClient.getScheduledTransactionById.mockResolvedValue({
+      id: "stx-1",
+      amount: 5000,
+      frequency: "monthly",
+    });
+    mockClient.snapshotScheduledTransaction.mockReturnValue({
+      id: "stx-1",
+      amount: 5000,
+      frequency: "monthly",
+    });
+
+    await engine.undoOperations([entry.id], false);
+
+    const updateArg = mockClient.updateScheduledTransaction.mock.calls[0][1];
+    expect(updateArg.frequency).toBeUndefined();
+    expect(updateArg.amount).toBe(3);
+  });
+
+  it("includes frequency in update when it has changed", async () => {
+    const entry = createMockUndoEntry({
+      undo_action: {
+        type: "update",
+        entity_type: "scheduled_transaction",
+        entity_id: "stx-1",
+        expected_state: { id: "stx-1", amount: 5000, frequency: "weekly" },
+        restore_state: {
+          account_id: "acc-1",
+          date: "2024-02-01",
+          amount: 3000,
+          frequency: "monthly",
+        },
+      },
+    });
+    mockStore.getEntriesByIds.mockResolvedValue([entry]);
+    mockClient.getScheduledTransactionById.mockResolvedValue({
+      id: "stx-1",
+      amount: 5000,
+      frequency: "weekly",
+    });
+    mockClient.snapshotScheduledTransaction.mockReturnValue({
+      id: "stx-1",
+      amount: 5000,
+      frequency: "weekly",
+    });
+
+    await engine.undoOperations([entry.id], false);
+
+    const updateArg = mockClient.updateScheduledTransaction.mock.calls[0][1];
+    expect(updateArg.frequency).toBe("monthly");
+  });
+
+  it("converts milliunits to currency and passes nullable fields in create", async () => {
+    const entry = createMockUndoEntry({
+      undo_action: {
+        type: "create",
+        entity_type: "scheduled_transaction",
+        entity_id: "stx-deleted",
+        expected_state: {},
+        restore_state: {
+          account_id: "acc-1",
+          date: "2024-03-15",
+          amount: 75000,
+          frequency: "monthly",
+          payee_id: "payee-1",
+          category_id: "cat-1",
+          memo: "Rent payment",
+          flag_color: null,
+        },
+      },
+    });
+    mockStore.getEntriesByIds.mockResolvedValue([entry]);
+    mockClient.getScheduledTransactionById.mockResolvedValue(null);
+    mockClient.createScheduledTransaction.mockResolvedValue({
+      id: "stx-new",
+    });
+
+    const result = await engine.undoOperations([entry.id], false);
+
+    expect(result.results[0].status).toBe("undone");
+    expect(mockClient.createScheduledTransaction).toHaveBeenCalledWith(
+      "budget-1",
+      expect.objectContaining({
+        account_id: "acc-1",
+        date: "2024-03-15",
+        amount: 75,
+        frequency: "monthly",
+        payee_id: "payee-1",
+        category_id: "cat-1",
+        memo: "Rent payment",
+        flag_color: null,
+      }),
     );
     expect(mockStore.updateIdMappings).toHaveBeenCalledWith(
       "budget-1",
@@ -1059,7 +1085,7 @@ describe("undoOperations — category budget undo", () => {
       budgeted: 100000,
     });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockClient.setCategoryBudget).toHaveBeenCalledWith("budget-1", {
       category_id: "cat-1",
@@ -1067,85 +1093,103 @@ describe("undoOperations — category budget undo", () => {
       budgeted: 50, // 50000 / 1000
     });
   });
-});
 
-describe("undoOperations — cross-session behavior", () => {
-  it("returns conflict for a different session when force is false", async () => {
+  it("restores budget to zero when original was unbudgeted", async () => {
     const entry = createMockUndoEntry({
-      session_id: OTHER_SESSION_ID,
       undo_action: {
-        type: "delete",
-        entity_type: "transaction",
-        entity_id: "tx-1",
-        expected_state: { id: "tx-1" },
-        restore_state: {},
+        type: "update",
+        entity_type: "category_budget",
+        entity_id: "cat-1",
+        expected_state: {
+          category_id: "cat-1",
+          month: "2024-06-01",
+          budgeted: 200000,
+        },
+        restore_state: {
+          category_id: "cat-1",
+          month: "2024-06-01",
+          budgeted: 0,
+        },
       },
     });
     mockStore.getEntriesByIds.mockResolvedValue([entry]);
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    mockClient.getMonthCategoryById.mockResolvedValue({
+      id: "cat-1",
+      budgeted: 200000,
+    });
+
+    const result = await engine.undoOperations([entry.id], false);
+
+    expect(result.results[0].status).toBe("undone");
+    expect(mockClient.setCategoryBudget).toHaveBeenCalledWith("budget-1", {
+      category_id: "cat-1",
+      month: "2024-06-01",
+      budgeted: 0,
+    });
+  });
+
+  it("detects conflict when current budgeted amount differs from expected", async () => {
+    const entry = createMockUndoEntry({
+      undo_action: {
+        type: "update",
+        entity_type: "category_budget",
+        entity_id: "cat-1",
+        expected_state: {
+          category_id: "cat-1",
+          month: "2024-01-01",
+          budgeted: 100000,
+        },
+        restore_state: {
+          category_id: "cat-1",
+          month: "2024-01-01",
+          budgeted: 50000,
+        },
+      },
+    });
+    mockStore.getEntriesByIds.mockResolvedValue([entry]);
+    // Current state has a different budgeted value than expected
+    mockClient.getMonthCategoryById.mockResolvedValue({
+      id: "cat-1",
+      budgeted: 75000,
+    });
+
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("conflict");
-    expect(result.results[0].message).toContain("belongs to session");
-    expect(mockClient.deleteTransaction).not.toHaveBeenCalled();
+    expect(result.results[0].message).toContain("force=true");
   });
 
-  it("no prefix for same session", async () => {
+  it("returns conflict when category no longer exists", async () => {
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
-        type: "delete",
-        entity_type: "transaction",
-        entity_id: "tx-1",
-        expected_state: { id: "tx-1" },
-        restore_state: {},
+        type: "update",
+        entity_type: "category_budget",
+        entity_id: "cat-1",
+        expected_state: {
+          category_id: "cat-1",
+          month: "2024-01-01",
+          budgeted: 100000,
+        },
+        restore_state: {
+          category_id: "cat-1",
+          month: "2024-01-01",
+          budgeted: 50000,
+        },
       },
     });
     mockStore.getEntriesByIds.mockResolvedValue([entry]);
-    mockClient.getTransactionById.mockResolvedValue({ id: "tx-1" });
-    mockClient.snapshotTransaction.mockReturnValue({ id: "tx-1" });
+    mockClient.getMonthCategoryById.mockResolvedValue(null);
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
-    expect(result.results[0].message).not.toMatch(/^\[cross-session\]/);
-  });
-
-  it("prefixes message with [cross-session] when force=true", async () => {
-    const entry = createMockUndoEntry({
-      session_id: OTHER_SESSION_ID,
-      undo_action: {
-        type: "delete",
-        entity_type: "transaction",
-        entity_id: "tx-1",
-        expected_state: { id: "tx-1" },
-        restore_state: {},
-      },
-    });
-    mockStore.getEntriesByIds.mockResolvedValue([entry]);
-    mockClient.getTransactionById.mockResolvedValue({ id: "tx-1" });
-    mockClient.snapshotTransaction.mockReturnValue({ id: "tx-1" });
-
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      true,
-    );
-
-    expect(result.results[0].message).toMatch(/^\[cross-session\] /);
+    expect(result.results[0].status).toBe("conflict");
+    expect(result.results[0].message).toContain("no longer exists");
   });
 });
 
 describe("undoOperations — error handling", () => {
   it("returns error status when applyUndo throws an Error", async () => {
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "delete",
         entity_type: "transaction",
@@ -1159,11 +1203,7 @@ describe("undoOperations — error handling", () => {
     mockClient.snapshotTransaction.mockReturnValue({ id: "tx-1" });
     mockClient.deleteTransaction.mockRejectedValue(new Error("API down"));
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("error");
     expect(result.results[0].message).toContain("API down");
@@ -1171,7 +1211,6 @@ describe("undoOperations — error handling", () => {
 
   it("extracts message from non-Error thrown values", async () => {
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "delete",
         entity_type: "transaction",
@@ -1185,11 +1224,7 @@ describe("undoOperations — error handling", () => {
     mockClient.snapshotTransaction.mockReturnValue({ id: "tx-1" });
     mockClient.deleteTransaction.mockRejectedValue("string error");
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("error");
     expect(result.results[0].message).toContain("string error");
@@ -1197,7 +1232,6 @@ describe("undoOperations — error handling", () => {
 
   it("extracts detail from YNAB-style error objects", async () => {
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "delete",
         entity_type: "transaction",
@@ -1213,47 +1247,31 @@ describe("undoOperations — error handling", () => {
       error: { id: "409", name: "conflict", detail: "Resource conflict" },
     });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("error");
     expect(result.results[0].message).toContain("Resource conflict");
   });
 
   it("returns error status when resolveMappedId throws", async () => {
-    const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
-    });
+    const entry = createMockUndoEntry();
     mockStore.getEntriesByIds.mockResolvedValue([entry]);
     mockStore.resolveMappedId.mockRejectedValue(new Error("Store read failed"));
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("error");
     expect(result.results[0].message).toContain("Store read failed");
   });
 
   it("returns error status when getCurrentState throws", async () => {
-    const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
-    });
+    const entry = createMockUndoEntry();
     mockStore.getEntriesByIds.mockResolvedValue([entry]);
     mockClient.getTransactionById.mockRejectedValue(
       new Error("API unreachable"),
     );
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("error");
     expect(result.results[0].message).toContain("API unreachable");
@@ -1263,7 +1281,6 @@ describe("undoOperations — error handling", () => {
 describe("undoOperations — ID normalization after re-creation", () => {
   it("does not conflict when entity ID changed via mapping", async () => {
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "update",
         entity_type: "transaction",
@@ -1288,11 +1305,7 @@ describe("undoOperations — ID normalization after re-creation", () => {
       amount: 5000,
     });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("undone");
     expect(mockClient.updateTransactions).toHaveBeenCalledWith(
@@ -1308,7 +1321,6 @@ describe("undoOperations — summary and markEntriesUndone", () => {
   it("produces correct summary with mixed results", async () => {
     const undoneEntry = createMockUndoEntry({
       id: "budget-1::1::undone",
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "delete",
         entity_type: "transaction",
@@ -1319,7 +1331,6 @@ describe("undoOperations — summary and markEntriesUndone", () => {
     });
     const conflictEntry = createMockUndoEntry({
       id: "budget-1::2::conflict",
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "update",
         entity_type: "transaction",
@@ -1344,7 +1355,7 @@ describe("undoOperations — summary and markEntriesUndone", () => {
       skippedEntry,
     ]);
 
-    // tx-1: exists, matches → undone
+    // tx-1: exists, matches -> undone
     mockClient.getTransactionById
       .mockResolvedValueOnce({ id: "tx-1" })
       .mockResolvedValueOnce({ id: "tx-2", amount: 9999 });
@@ -1354,7 +1365,6 @@ describe("undoOperations — summary and markEntriesUndone", () => {
 
     const result = await engine.undoOperations(
       ["budget-1::1::undone", "budget-1::2::conflict", "budget-1::3::skipped"],
-      CURRENT_SESSION_ID,
       false,
     );
 
@@ -1368,7 +1378,6 @@ describe("undoOperations — summary and markEntriesUndone", () => {
 
   it("only passes undone IDs to markEntriesUndone", async () => {
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "delete",
         entity_type: "transaction",
@@ -1381,7 +1390,7 @@ describe("undoOperations — summary and markEntriesUndone", () => {
     mockClient.getTransactionById.mockResolvedValue({ id: "tx-1" });
     mockClient.snapshotTransaction.mockReturnValue({ id: "tx-1" });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockStore.markEntriesUndone).toHaveBeenCalledWith("budget-1", [
       entry.id,
@@ -1391,11 +1400,7 @@ describe("undoOperations — summary and markEntriesUndone", () => {
   it("does not call markEntriesUndone when nothing was undone", async () => {
     mockStore.getEntriesByIds.mockResolvedValue([undefined]);
 
-    await engine.undoOperations(
-      ["budget-1::1::notfound"],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    await engine.undoOperations(["budget-1::1::notfound"], false);
 
     expect(mockStore.markEntriesUndone).not.toHaveBeenCalled();
   });
@@ -1406,7 +1411,6 @@ describe("undoOperations — ID resolution", () => {
     mockStore.resolveMappedId.mockResolvedValue("resolved-tx-id");
 
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "delete",
         entity_type: "transaction",
@@ -1419,7 +1423,7 @@ describe("undoOperations — ID resolution", () => {
     mockClient.getTransactionById.mockResolvedValue({ id: "resolved-tx-id" });
     mockClient.snapshotTransaction.mockReturnValue({ id: "original-tx-id" });
 
-    await engine.undoOperations([entry.id], CURRENT_SESSION_ID, false);
+    await engine.undoOperations([entry.id], false);
 
     expect(mockStore.resolveMappedId).toHaveBeenCalledWith(
       "budget-1",
@@ -1439,7 +1443,6 @@ describe("undoOperations — ID resolution", () => {
 describe("type coercion (tested indirectly)", () => {
   it("asRequiredString throws for null restore_state field", async () => {
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "create",
         entity_type: "transaction",
@@ -1455,11 +1458,7 @@ describe("type coercion (tested indirectly)", () => {
     mockStore.getEntriesByIds.mockResolvedValue([entry]);
     mockClient.getTransactionById.mockResolvedValue(null);
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("error");
     expect(result.results[0].message).toContain("string value");
@@ -1467,7 +1466,6 @@ describe("type coercion (tested indirectly)", () => {
 
   it("asNumber throws for non-numeric strings", async () => {
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "update",
         entity_type: "transaction",
@@ -1484,11 +1482,7 @@ describe("type coercion (tested indirectly)", () => {
     mockClient.getTransactionById.mockResolvedValue({ id: "tx-1" });
     mockClient.snapshotTransaction.mockReturnValue({ id: "tx-1" });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("error");
     expect(result.results[0].message).toContain("numeric");
@@ -1496,7 +1490,6 @@ describe("type coercion (tested indirectly)", () => {
 
   it("asNumber accepts numeric strings", async () => {
     const entry = createMockUndoEntry({
-      session_id: CURRENT_SESSION_ID,
       undo_action: {
         type: "update",
         entity_type: "transaction",
@@ -1513,11 +1506,7 @@ describe("type coercion (tested indirectly)", () => {
     mockClient.getTransactionById.mockResolvedValue({ id: "tx-1" });
     mockClient.snapshotTransaction.mockReturnValue({ id: "tx-1" });
 
-    const result = await engine.undoOperations(
-      [entry.id],
-      CURRENT_SESSION_ID,
-      false,
-    );
+    const result = await engine.undoOperations([entry.id], false);
 
     expect(result.results[0].status).toBe("undone");
     expect(mockClient.updateTransactions).toHaveBeenCalledWith("budget-1", [

@@ -42,6 +42,61 @@ beforeEach(() => {
   });
 });
 
+describe("search_transactions", () => {
+  it("returns budget_id and result_sets with formatted transactions", async () => {
+    const tx = createMockTransaction({ id: "tx-1", amount: -50000 });
+    ctx.ynabClient.searchTransactions.mockResolvedValue([tx]);
+
+    const handler = tools.search_transactions;
+    const result = parseResult(
+      await handler({
+        queries: [{ since_date: "2024-01-01" }],
+      }),
+    );
+
+    expect(result.budget_id).toBeDefined();
+    expect(result.result_sets).toHaveLength(1);
+    expect(result.result_sets[0].query_index).toBe(0);
+    expect(result.result_sets[0].count).toBe(1);
+    expect(result.result_sets[0].transactions).toHaveLength(1);
+  });
+
+  it("passes query filters through to searchTransactions", async () => {
+    ctx.ynabClient.searchTransactions.mockResolvedValue([]);
+
+    const handler = tools.search_transactions;
+    await handler({
+      queries: [
+        {
+          since_date: "2024-01-01",
+          until_date: "2024-01-31",
+          payee_name_contains: "store",
+        },
+      ],
+    });
+
+    expect(ctx.ynabClient.searchTransactions).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        since_date: "2024-01-01",
+        until_date: "2024-01-31",
+        payee_name_contains: "store",
+      }),
+    );
+  });
+
+  it("returns error result on API failure", async () => {
+    ctx.ynabClient.searchTransactions.mockRejectedValue(new Error("API error"));
+
+    const handler = tools.search_transactions;
+    const result = await handler({
+      queries: [{ since_date: "2024-01-01" }],
+    });
+
+    expect(result.isError).toBe(true);
+  });
+});
+
 describe("create_transactions", () => {
   it("returns created transactions and undo_history_ids", async () => {
     const created = [createMockTransaction({ id: "new-1", amount: -50000 })];
@@ -115,43 +170,6 @@ describe("create_transactions", () => {
     });
 
     expect(result.isError).toBe(true);
-  });
-
-  it("passes session_id through to undo recording", async () => {
-    const created = [createMockTransaction({ id: "new-1", amount: -50000 })];
-    ctx.ynabClient.createTransactions.mockResolvedValue(created);
-    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "undo-1" }]);
-
-    const handler = tools.create_transactions;
-    const result = parseResult(
-      await handler({
-        session_id: "session-abc",
-        transactions: [
-          { account_id: "acc-1", date: "2024-01-15", amount: -50 },
-        ],
-      }),
-    );
-
-    expect(ctx.undoEngine.recordEntries.mock.calls[0][2]).toBe("session-abc");
-    expect(result.session_id).toBe("session-abc");
-  });
-
-  it("defaults session_id to shared when omitted", async () => {
-    const created = [createMockTransaction({ id: "new-1", amount: -50000 })];
-    ctx.ynabClient.createTransactions.mockResolvedValue(created);
-    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "undo-1" }]);
-
-    const handler = tools.create_transactions;
-    const result = parseResult(
-      await handler({
-        transactions: [
-          { account_id: "acc-1", date: "2024-01-15", amount: -50 },
-        ],
-      }),
-    );
-
-    expect(ctx.undoEngine.recordEntries.mock.calls[0][2]).toBe("shared");
-    expect(result.session_id).toBe("shared");
   });
 });
 
@@ -371,7 +389,7 @@ describe("update_transactions", () => {
     expect(entries[0].undo_action.type).toBe("update");
 
     expect(ctx.undoEngine.updateIdMappings).not.toHaveBeenCalled();
-    expect(ctx.undoEngine.recordEntries.mock.calls[0][3]).toEqual([
+    expect(ctx.undoEngine.recordEntries.mock.calls[0][2]).toEqual([
       {
         sourceEntityId: "tx-split",
         targetEntityId: "tx-new",

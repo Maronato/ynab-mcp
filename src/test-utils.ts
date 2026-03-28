@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { vi } from "vitest";
+import type { ZodObject, ZodRawShape, ZodType } from "zod";
 import type { UndoEntry } from "./undo/types.js";
 import type { CurrencyFormatLike } from "./ynab/format.js";
 import type { NameLookup } from "./ynab/types.js";
@@ -11,7 +12,6 @@ export function createMockUndoEntry(
 ): UndoEntry {
   return {
     id: "budget-1::1700000000000::abcd1234",
-    session_id: "session-1",
     budget_id: "budget-1",
     timestamp: "2024-01-15T10:00:00.000Z",
     operation: "update_transaction",
@@ -36,6 +36,7 @@ export function createMockTransaction(overrides: Record<string, unknown> = {}) {
     date: "2024-01-15",
     amount: -50000,
     payee_id: "payee-1",
+    payee_name: null as string | null,
     category_id: "cat-1",
     memo: "Groceries",
     cleared: "cleared" as const,
@@ -155,9 +156,7 @@ type Mock = ReturnType<typeof vi.fn>;
 export interface MockAppContext {
   ynabClient: Record<string, Mock>;
   undoEngine: Record<string, Mock>;
-  samplingClient: Record<string, Mock>;
   payeeProfileAnalyzer: Record<string, Mock>;
-  requireSession: boolean;
 }
 
 export function captureToolHandlers(
@@ -167,8 +166,19 @@ export function captureToolHandlers(
 ): Record<string, ToolHandler> {
   const handlers: Record<string, ToolHandler> = {};
   const mockServer = {
-    registerTool(name: string, _config: unknown, cb: ToolHandler) {
-      handlers[name] = cb;
+    registerTool(
+      name: string,
+      config: { inputSchema?: ZodType | ZodObject<ZodRawShape> } | undefined,
+      cb: ToolHandler,
+    ) {
+      handlers[name] = async (input: unknown) => {
+        if (config?.inputSchema) {
+          // Validate input through the Zod schema before calling the handler.
+          // This catches schema bugs that would otherwise be invisible to tests.
+          config.inputSchema.parse(input);
+        }
+        return cb(input as never);
+      };
     },
   } as unknown as McpServer;
 
@@ -218,15 +228,9 @@ export function createMockContext(): MockAppContext {
       undoOperations: vi.fn().mockResolvedValue({ results: [], summary: {} }),
       updateIdMappings: vi.fn().mockResolvedValue(undefined),
     },
-    samplingClient: {
-      isAvailable: vi.fn(() => false),
-      createMessage: vi.fn(),
-      createJsonMessage: vi.fn(),
-    },
     payeeProfileAnalyzer: {
       getProfiles: vi.fn().mockResolvedValue(new Map()),
       invalidate: vi.fn(),
     },
-    requireSession: false,
   };
 }

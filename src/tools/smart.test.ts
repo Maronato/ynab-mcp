@@ -233,7 +233,7 @@ describe("suggest_transaction_categories", () => {
     expect(context.undoEngine.recordEntries).not.toHaveBeenCalled();
   });
 
-  it("enhances medium/low suggestions with LLM when sampling available", async () => {
+  it("returns heuristic suggestions directly for unknown payees", async () => {
     const { context, handlers } = setup();
     const tx = createMockTransaction({
       id: "tx-1",
@@ -245,24 +245,14 @@ describe("suggest_transaction_categories", () => {
       .mockResolvedValueOnce([]);
     setupDefaultMocks(context);
     context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(new Map());
-    context.samplingClient.isAvailable.mockReturnValue(true);
-    context.samplingClient.createJsonMessage.mockResolvedValue([
-      {
-        transaction_id: "tx-1",
-        category_id: "cat-groceries",
-        confidence: "high",
-        reasoning: "Payee name suggests grocery store",
-      },
-    ]);
 
     const result = await handlers.suggest_transaction_categories({
       budget_id: "budget-1",
     });
     const content = JSON.parse(result.content[0].text);
 
-    expect(content.suggestions[0].suggested_category_id).toBe("cat-groceries");
-    expect(content.suggestions[0].method).toContain("llm");
-    expect(context.samplingClient.createJsonMessage).toHaveBeenCalled();
+    expect(content.suggestion_count).toBe(1);
+    expect(content.suggestions[0].confidence).toBe("low");
   });
 
   it("excludes transfers by default", async () => {
@@ -446,7 +436,7 @@ describe("suggest_transaction_categories", () => {
     expect(content.skipped_splits).toHaveLength(1);
   });
 
-  it("returns suggestions without LLM when sampling unavailable", async () => {
+  it("returns heuristic suggestions for unknown payees without enhancement", async () => {
     const { context, handlers } = setup();
     const tx = createMockTransaction({
       id: "tx-1",
@@ -458,16 +448,13 @@ describe("suggest_transaction_categories", () => {
       .mockResolvedValueOnce([]);
     setupDefaultMocks(context);
     context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(new Map());
-    context.samplingClient.isAvailable.mockReturnValue(false);
 
     const result = await handlers.suggest_transaction_categories({
       budget_id: "budget-1",
     });
     const content = JSON.parse(result.content[0].text);
 
-    // Should still return suggestions (server-side analysis), just without LLM enhancement
     expect(content.suggestion_count).toBe(1);
-    expect(context.samplingClient.createJsonMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -490,13 +477,12 @@ describe("suggest_overspending_coverage", () => {
     expect(content.message).toContain("No overspent");
   });
 
-  it("returns deterministic suggestions when sampling unavailable", async () => {
+  it("returns deterministic suggestions for overspent categories", async () => {
     const { context, handlers } = setup();
     context.ynabClient.getCategories.mockResolvedValue(makeCategoryGroups());
     context.ynabClient.getBudgetSettings.mockResolvedValue({
       currency_format: createMockCurrencyFormat(),
     });
-    context.samplingClient.isAvailable.mockReturnValue(false);
     context.ynabClient.getMonthCategoryById.mockImplementation(
       async (_budgetId: string, _month: string, catId: string) => {
         const cats: Record<string, { id: string; budgeted: number }> = {
@@ -512,7 +498,6 @@ describe("suggest_overspending_coverage", () => {
     });
     const content = JSON.parse(result.content[0].text);
 
-    expect(content.sampling_available).toBe(false);
     expect(content.suggestion_count).toBeGreaterThan(0);
     expect(content.suggestions[0].from_category_id).toBe("cat-groceries");
     expect(content.suggestions[0].to_category_id).toBe("cat-electric");
@@ -527,15 +512,6 @@ describe("suggest_overspending_coverage", () => {
     context.ynabClient.getBudgetSettings.mockResolvedValue({
       currency_format: createMockCurrencyFormat(),
     });
-    context.samplingClient.isAvailable.mockReturnValue(true);
-    context.samplingClient.createJsonMessage.mockResolvedValue([
-      {
-        from_category_id: "cat-groceries",
-        to_category_id: "cat-electric",
-        amount: 50,
-        reasoning: "Cover electric bill",
-      },
-    ]);
     context.ynabClient.getMonthCategoryById.mockImplementation(
       async (_budgetId: string, _month: string, catId: string) => {
         const cats: Record<string, { id: string; budgeted: number }> = {
@@ -560,49 +536,5 @@ describe("suggest_overspending_coverage", () => {
     // Should NOT have mutated anything
     expect(context.ynabClient.setCategoryBudget).not.toHaveBeenCalled();
     expect(context.undoEngine.recordEntries).not.toHaveBeenCalled();
-  });
-
-  it("skips suggestions that exceed source balance", async () => {
-    const { context, handlers } = setup();
-    context.ynabClient.getCategories.mockResolvedValue(makeCategoryGroups());
-    context.ynabClient.getBudgetSettings.mockResolvedValue({
-      currency_format: createMockCurrencyFormat(),
-    });
-    context.samplingClient.isAvailable.mockReturnValue(true);
-    context.samplingClient.createJsonMessage.mockResolvedValue([
-      {
-        from_category_id: "cat-groceries",
-        to_category_id: "cat-electric",
-        amount: 9999,
-        reasoning: "Way too much",
-      },
-    ]);
-
-    const result = await handlers.suggest_overspending_coverage({
-      budget_id: "budget-1",
-    });
-    const content = JSON.parse(result.content[0].text);
-
-    expect(content.suggestion_count).toBe(0);
-    expect(content.skipped_count).toBe(1);
-  });
-
-  it("returns error when sampling fails", async () => {
-    const { context, handlers } = setup();
-    context.ynabClient.getCategories.mockResolvedValue(makeCategoryGroups());
-    context.ynabClient.getBudgetSettings.mockResolvedValue({
-      currency_format: createMockCurrencyFormat(),
-    });
-    context.samplingClient.isAvailable.mockReturnValue(true);
-    context.samplingClient.createJsonMessage.mockRejectedValue(
-      new Error("Parse error"),
-    );
-
-    const result = await handlers.suggest_overspending_coverage({
-      budget_id: "budget-1",
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Parse error");
   });
 });

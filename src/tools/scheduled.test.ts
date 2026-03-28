@@ -182,59 +182,6 @@ describe("create_scheduled_transactions", () => {
     expect(result.results[1].status).toBe("error");
     expect(result.results[1].message).toContain("API down");
   });
-
-  it("passes session_id through to undo recording", async () => {
-    const created = createMockScheduledTransaction({
-      id: "stx-new",
-      amount: -50000,
-    });
-    ctx.ynabClient.createScheduledTransaction.mockResolvedValue(created);
-    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
-
-    const handler = tools.create_scheduled_transactions;
-    const result = parseResult(
-      await handler({
-        session_id: "session-abc",
-        transactions: [
-          {
-            account_id: "acc-1",
-            date: "2024-01-01",
-            amount: -50,
-            frequency: "monthly",
-          },
-        ],
-      }),
-    );
-
-    expect(ctx.undoEngine.recordEntries.mock.calls[0][2]).toBe("session-abc");
-    expect(result.session_id).toBe("session-abc");
-  });
-
-  it("defaults session_id to shared when omitted", async () => {
-    const created = createMockScheduledTransaction({
-      id: "stx-new",
-      amount: -50000,
-    });
-    ctx.ynabClient.createScheduledTransaction.mockResolvedValue(created);
-    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
-
-    const handler = tools.create_scheduled_transactions;
-    const result = parseResult(
-      await handler({
-        transactions: [
-          {
-            account_id: "acc-1",
-            date: "2024-01-01",
-            amount: -50,
-            frequency: "monthly",
-          },
-        ],
-      }),
-    );
-
-    expect(ctx.undoEngine.recordEntries.mock.calls[0][2]).toBe("shared");
-    expect(result.session_id).toBe("shared");
-  });
 });
 
 describe("update_scheduled_transactions", () => {
@@ -302,7 +249,7 @@ describe("update_scheduled_transactions", () => {
     const entries = ctx.undoEngine.recordEntries.mock.calls[0][1];
     expect(entries[0].undo_action.type).toBe("update");
     expect(entries[0].undo_action.entity_type).toBe("scheduled_transaction");
-    // snapshotScheduledTransaction maps date_first → date and drops date_next
+    // snapshotScheduledTransaction maps date_first -> date and drops date_next
     expect(entries[0].undo_action.expected_state.date).toBe("2024-01-01");
     expect(entries[0].undo_action.expected_state.date_first).toBeUndefined();
     expect(entries[0].undo_action.restore_state.date).toBe("2024-01-01");
@@ -358,7 +305,7 @@ describe("delete_scheduled_transactions", () => {
 
     const entries = ctx.undoEngine.recordEntries.mock.calls[0][1];
     expect(entries[0].undo_action.type).toBe("create");
-    // snapshotScheduledTransaction maps date_first → date
+    // snapshotScheduledTransaction maps date_first -> date
     expect(entries[0].undo_action.restore_state.date).toBe("2024-01-01");
     expect(entries[0].undo_action.restore_state.id).toBe("stx-1");
   });
