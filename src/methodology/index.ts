@@ -52,6 +52,13 @@ const topics: ReadonlyArray<{
       "Transaction status lifecycle (uncleared/cleared/reconciled), the reconciliation process, frequency recommendations, and API relevance.",
     file: "reconciliation.md",
   },
+  {
+    name: "api-quirks",
+    title: "YNAB API Quirks and Limitations",
+    description:
+      "Known YNAB API limitations: supported scheduled transaction frequencies, compound frequency handling, date validation on updates.",
+    file: "api-quirks.md",
+  },
 ];
 
 function loadTopic(topic: (typeof topics)[number]): KnowledgeTopic {
