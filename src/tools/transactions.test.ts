@@ -3,6 +3,7 @@ import type { MockAppContext } from "../test-utils.js";
 import {
   captureToolHandlers,
   createMockContext,
+  createMockSplitTransaction,
   createMockTransaction,
 } from "../test-utils.js";
 import { registerTransactionTools } from "./transactions.js";
@@ -179,6 +180,7 @@ describe("update_transactions", () => {
     );
 
     expect(result.results[0].status).toBe("updated");
+    expect(result.results[0].current_transaction_id).toBe("tx-1");
 
     const undoEntries = ctx.undoEngine.recordEntries.mock.calls[0][1];
     expect(undoEntries[0].undo_action.type).toBe("update");
@@ -228,6 +230,216 @@ describe("update_transactions", () => {
     });
 
     expect(ctx.undoEngine.recordEntries).not.toHaveBeenCalled();
+  });
+
+  it("replaces split when category_id is changed (un-split)", async () => {
+    const split = createMockSplitTransaction({ id: "tx-split" });
+    const replaced = createMockTransaction({
+      id: "tx-new",
+      amount: -50000,
+      category_id: "new-cat",
+    });
+    ctx.ynabClient.getTransactionById.mockResolvedValue(split);
+    ctx.ynabClient.replaceTransaction.mockResolvedValue({
+      transaction: replaced,
+      previousId: "tx-split",
+    });
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.update_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [{ transaction_id: "tx-split", category_id: "new-cat" }],
+      }),
+    );
+
+    const splitResult = result.results.find(
+      (r: { transaction_id: string }) => r.transaction_id === "tx-split",
+    );
+    expect(splitResult.status).toBe("updated");
+    expect(splitResult.current_transaction_id).toBe("tx-new");
+    expect(ctx.ynabClient.replaceTransaction).toHaveBeenCalled();
+    expect(ctx.ynabClient.updateTransactions).not.toHaveBeenCalled();
+
+    const replacement = ctx.ynabClient.replaceTransaction.mock.calls[0][2];
+    expect(replacement.category_id).toBe("new-cat");
+    expect(replacement.subtransactions).toBeUndefined();
+  });
+
+  it("replaces split when subtransactions are changed", async () => {
+    const split = createMockSplitTransaction({ id: "tx-split" });
+    const replaced = createMockSplitTransaction({ id: "tx-new" });
+    ctx.ynabClient.getTransactionById.mockResolvedValue(split);
+    ctx.ynabClient.replaceTransaction.mockResolvedValue({
+      transaction: replaced,
+      previousId: "tx-split",
+    });
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const newSubs = [{ amount: -25, category_id: "cat-a" }];
+    const handler = tools.update_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [
+          { transaction_id: "tx-split", subtransactions: newSubs },
+        ],
+      }),
+    );
+
+    expect(result.results[0].status).toBe("updated");
+    const replacement = ctx.ynabClient.replaceTransaction.mock.calls[0][2];
+    expect(replacement.subtransactions).toEqual(newSubs);
+    expect(replacement.category_id).toBeUndefined();
+  });
+
+  it("replaces split: subtransactions take precedence over category_id", async () => {
+    const split = createMockSplitTransaction({ id: "tx-split" });
+    const replaced = createMockSplitTransaction({ id: "tx-new" });
+    ctx.ynabClient.getTransactionById.mockResolvedValue(split);
+    ctx.ynabClient.replaceTransaction.mockResolvedValue({
+      transaction: replaced,
+      previousId: "tx-split",
+    });
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.update_transactions;
+    await handler({
+      transactions: [
+        {
+          transaction_id: "tx-split",
+          category_id: "ignored-cat",
+          subtransactions: [{ amount: -50, category_id: "cat-a" }],
+        },
+      ],
+    });
+
+    const replacement = ctx.ynabClient.replaceTransaction.mock.calls[0][2];
+    expect(replacement.subtransactions).toBeDefined();
+    expect(replacement.category_id).toBeUndefined();
+  });
+
+  it("preserves existing fields during replace when not in update payload", async () => {
+    const split = createMockSplitTransaction({
+      id: "tx-split",
+      amount: -50000,
+      memo: "Keep me",
+      flag_color: "red",
+      approved: true,
+      cleared: "cleared",
+      payee_id: "payee-1",
+      payee_name: "Store",
+    });
+    const replaced = createMockTransaction({ id: "tx-new" });
+    ctx.ynabClient.getTransactionById.mockResolvedValue(split);
+    ctx.ynabClient.replaceTransaction.mockResolvedValue({
+      transaction: replaced,
+      previousId: "tx-split",
+    });
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.update_transactions;
+    await handler({
+      transactions: [{ transaction_id: "tx-split", category_id: "new-cat" }],
+    });
+
+    const replacement = ctx.ynabClient.replaceTransaction.mock.calls[0][2];
+    expect(replacement.amount).toBe(-50);
+    expect(replacement.memo).toBe("Keep me");
+    expect(replacement.flag_color).toBe("red");
+    expect(replacement.approved).toBe(true);
+    expect(replacement.cleared).toBe("cleared");
+    expect(replacement.payee_id).toBe("payee-1");
+  });
+
+  it("records undo entry and persists ID mapping atomically after replace", async () => {
+    const split = createMockSplitTransaction({ id: "tx-split" });
+    const replaced = createMockTransaction({ id: "tx-new" });
+    ctx.ynabClient.getTransactionById.mockResolvedValue(split);
+    ctx.ynabClient.replaceTransaction.mockResolvedValue({
+      transaction: replaced,
+      previousId: "tx-split",
+    });
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.update_transactions;
+    await handler({
+      transactions: [{ transaction_id: "tx-split", category_id: "new-cat" }],
+    });
+
+    const entries = ctx.undoEngine.recordEntries.mock.calls[0][1];
+    expect(entries[0].undo_action.entity_id).toBe("tx-split");
+    expect(entries[0].undo_action.type).toBe("update");
+
+    expect(ctx.undoEngine.updateIdMappings).not.toHaveBeenCalled();
+    expect(ctx.undoEngine.recordEntries.mock.calls[0][3]).toEqual([
+      {
+        sourceEntityId: "tx-split",
+        targetEntityId: "tx-new",
+      },
+    ]);
+  });
+
+  it("allows non-frozen-field updates on splits via regular PATCH path", async () => {
+    const split = createMockSplitTransaction({ id: "tx-split" });
+    const updated = { ...split, memo: "Updated memo" };
+    ctx.ynabClient.getTransactionById.mockResolvedValue(split);
+    ctx.ynabClient.updateTransactions.mockResolvedValue([updated]);
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const handler = tools.update_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [{ transaction_id: "tx-split", memo: "Updated memo" }],
+      }),
+    );
+
+    expect(result.results[0].status).toBe("updated");
+    expect(ctx.ynabClient.updateTransactions).toHaveBeenCalled();
+    expect(ctx.ynabClient.replaceTransaction).not.toHaveBeenCalled();
+  });
+
+  it("handles mixed batch: regular updates and split replacements", async () => {
+    const normal = createMockTransaction({ id: "tx-normal", amount: -10000 });
+    const split = createMockSplitTransaction({ id: "tx-split" });
+    const normalUpdated = { ...normal, memo: "Updated" };
+    const splitReplaced = createMockTransaction({
+      id: "tx-new",
+      category_id: "new-cat",
+    });
+
+    ctx.ynabClient.getTransactionById
+      .mockResolvedValueOnce(normal)
+      .mockResolvedValueOnce(split);
+    ctx.ynabClient.updateTransactions.mockResolvedValue([normalUpdated]);
+    ctx.ynabClient.replaceTransaction.mockResolvedValue({
+      transaction: splitReplaced,
+      previousId: "tx-split",
+    });
+    ctx.undoEngine.recordEntries.mockResolvedValue([
+      { id: "u1" },
+      { id: "u2" },
+    ]);
+
+    const handler = tools.update_transactions;
+    const result = parseResult(
+      await handler({
+        transactions: [
+          { transaction_id: "tx-normal", memo: "Updated" },
+          { transaction_id: "tx-split", category_id: "new-cat" },
+        ],
+      }),
+    );
+
+    const normalResult = result.results.find(
+      (r: { transaction_id: string }) => r.transaction_id === "tx-normal",
+    );
+    const splitResult = result.results.find(
+      (r: { transaction_id: string }) => r.transaction_id === "tx-split",
+    );
+    expect(normalResult.status).toBe("updated");
+    expect(splitResult.status).toBe("updated");
+    expect(ctx.ynabClient.updateTransactions).toHaveBeenCalled();
+    expect(ctx.ynabClient.replaceTransaction).toHaveBeenCalled();
   });
 });
 

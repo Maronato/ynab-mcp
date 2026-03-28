@@ -8,10 +8,12 @@ import { extractErrorMessage } from "../ynab/errors.js";
 import {
   formatCurrency,
   formatTransactionForOutput,
+  milliunitsToCurrency,
   snapshotTransaction,
 } from "../ynab/format.js";
 import type {
   CreateTransactionInput,
+  TransactionClearedStatus,
   TransactionSearchQuery,
   UpdateTransactionInput,
 } from "../ynab/types.js";
@@ -359,27 +361,48 @@ export function registerTransactionTools(
           })),
         );
 
+        const prefetchedTransactions = new Map<
+          string,
+          NonNullable<(typeof prefetchResults)[number]["transaction"]>
+        >();
+
         for (const result of prefetchResults) {
           if (!result.transaction) {
             missingIds.add(result.id);
           } else {
             beforeById.set(result.id, snapshotTransaction(result.transaction));
+            prefetchedTransactions.set(result.id, result.transaction);
           }
         }
 
-        const updatesToApply = transactions.filter(
-          (update) => !missingIds.has(update.transaction_id),
-        );
+        const regularUpdates: (typeof transactions)[number][] = [];
+        const replaceUpdates: (typeof transactions)[number][] = [];
 
-        const updated = updatesToApply.length
+        for (const update of transactions) {
+          if (missingIds.has(update.transaction_id)) continue;
+          const existing = prefetchedTransactions.get(update.transaction_id);
+          if (!existing) continue;
+
+          const isSplit =
+            (existing.subtransactions?.filter((s) => !s.deleted)?.length ?? 0) >
+            0;
+          const touchesFrozenFields =
+            update.category_id !== undefined ||
+            update.subtransactions !== undefined;
+
+          if (isSplit && touchesFrozenFields) {
+            replaceUpdates.push(update);
+          } else {
+            regularUpdates.push(update);
+          }
+        }
+
+        const updated = regularUpdates.length
           ? await context.ynabClient.updateTransactions(
               resolvedBudgetId,
-              updatesToApply as UpdateTransactionInput[],
+              regularUpdates as UpdateTransactionInput[],
             )
           : [];
-        if (updated.length > 0) {
-          context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
-        }
 
         const [lookups, settings] = await Promise.all([
           context.ynabClient.getNameLookup(resolvedBudgetId),
@@ -400,10 +423,15 @@ export function registerTransactionTools(
             restore_state: Record<string, unknown>;
           };
         }> = [];
+        const idMappings: Array<{
+          sourceEntityId: string;
+          targetEntityId: string;
+        }> = [];
 
         const results: Array<Record<string, unknown>> = [];
+        let anyMutated = false;
 
-        for (const update of updatesToApply) {
+        for (const update of regularUpdates) {
           const after = afterById.get(update.transaction_id);
           const before = beforeById.get(update.transaction_id);
 
@@ -416,8 +444,10 @@ export function registerTransactionTools(
             continue;
           }
 
+          anyMutated = true;
           results.push({
             transaction_id: update.transaction_id,
+            current_transaction_id: after.id,
             status: "updated",
             transaction: formatTransactionForOutput(
               after,
@@ -439,6 +469,66 @@ export function registerTransactionTools(
           });
         }
 
+        for (const update of replaceUpdates) {
+          const existing = prefetchedTransactions.get(update.transaction_id);
+          const before = beforeById.get(update.transaction_id);
+          if (!existing || !before) continue;
+
+          try {
+            const replacement = buildReplacementFromUpdate(
+              existing,
+              update as UpdateTransactionInput,
+            );
+            const { transaction: after, previousId } =
+              await context.ynabClient.replaceTransaction(
+                resolvedBudgetId,
+                update.transaction_id,
+                replacement,
+              );
+
+            anyMutated = true;
+            results.push({
+              transaction_id: update.transaction_id,
+              current_transaction_id: after.id,
+              status: "updated",
+              transaction: formatTransactionForOutput(
+                after,
+                lookups,
+                settings.currency_format,
+              ),
+            });
+
+            undoEntries.push({
+              operation: "update_transaction",
+              description: `Updated transaction ${update.transaction_id} (replaced split).`,
+              undo_action: {
+                type: "update",
+                entity_type: "transaction",
+                entity_id: previousId,
+                expected_state: snapshotTransaction(after),
+                restore_state: before,
+              },
+            });
+            idMappings.push({
+              sourceEntityId: previousId,
+              targetEntityId: after.id,
+            });
+          } catch (error) {
+            results.push({
+              transaction_id: update.transaction_id,
+              status: "error",
+              message: extractErrorMessage(
+                error,
+                "Failed to replace split transaction.",
+              ),
+            });
+          }
+        }
+
+        if (anyMutated) {
+          context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
+        }
+
         for (const missingId of missingIds.values()) {
           results.push({
             transaction_id: missingId,
@@ -454,6 +544,7 @@ export function registerTransactionTools(
                   resolvedBudgetId,
                   undoEntries,
                   sessionId,
+                  idMappings,
                 )
               ).map((entry) => entry.id)
             : [];
@@ -601,4 +692,49 @@ export function registerTransactionTools(
       }
     },
   );
+}
+
+function buildReplacementFromUpdate(
+  existing: {
+    account_id: string;
+    date: string;
+    amount: number;
+    payee_id?: string | null;
+    payee_name?: string | null;
+    category_id?: string | null;
+    memo?: string | null;
+    cleared: string;
+    approved: boolean;
+    flag_color?: string | null;
+  },
+  update: UpdateTransactionInput,
+): CreateTransactionInput {
+  const amount = update.amount ?? milliunitsToCurrency(existing.amount);
+  const hasSubs = update.subtransactions !== undefined;
+  return {
+    account_id: update.account_id ?? existing.account_id,
+    date: update.date ?? existing.date,
+    amount,
+    payee_id:
+      update.payee_id !== undefined
+        ? update.payee_id
+        : (existing.payee_id ?? null),
+    payee_name:
+      update.payee_name !== undefined
+        ? update.payee_name
+        : (existing.payee_name ?? null),
+    category_id: hasSubs
+      ? undefined
+      : update.category_id !== undefined
+        ? update.category_id
+        : (existing.category_id ?? null),
+    memo: update.memo !== undefined ? update.memo : (existing.memo ?? null),
+    cleared: update.cleared ?? (existing.cleared as TransactionClearedStatus),
+    approved: update.approved ?? existing.approved,
+    flag_color:
+      update.flag_color !== undefined
+        ? update.flag_color
+        : (existing.flag_color ?? null),
+    subtransactions: update.subtransactions,
+  };
 }
