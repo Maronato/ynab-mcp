@@ -103,11 +103,6 @@ export interface UpdateScheduledTransactionInput {
   flag_color?: string | null;
 }
 
-export interface FormattedMoney {
-  amount: number;
-  display: string;
-}
-
 export interface CategoryLookupEntry {
   name: string;
   group_id: string;
@@ -121,34 +116,39 @@ export interface NameLookup {
 }
 
 export interface SubtransactionSnapshot {
+  [key: string]: unknown;
   amount: number;
-  payee_id?: string | null;
-  category_id?: string | null;
-  memo?: string | null;
+  payee_id: string | null;
+  category_id: string | null;
+  memo: string | null;
 }
 
 export interface TransactionSnapshot {
+  [key: string]: unknown;
   id: string;
   account_id: string;
   date: string;
   amount: number;
-  payee_id?: string | null;
-  category_id?: string | null;
-  memo?: string | null;
+  payee_id: string | null;
+  payee_name: string | null;
+  category_id: string | null;
+  memo: string | null;
   cleared: string;
   approved: boolean;
-  flag_color?: string | null;
+  flag_color: string | null;
   subtransactions?: SubtransactionSnapshot[];
 }
 
 export interface ScheduledTransactionSnapshot {
+  [key: string]: unknown;
   id: string;
   account_id: string;
   date: string;
   amount: number;
-  payee_id?: string | null;
-  category_id?: string | null;
-  memo?: string | null;
+  payee_id: string | null;
+  payee_name: string | null;
+  category_id: string | null;
+  memo: string | null;
   frequency?: string;
-  flag_color?: string | null;
+  flag_color: string | null;
 }
