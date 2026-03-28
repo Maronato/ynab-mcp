@@ -28,6 +28,11 @@ interface UndoStoreOptions {
   now?: () => number;
 }
 
+interface IdMappingUpdate {
+  sourceEntityId: string;
+  targetEntityId: string;
+}
+
 export class UndoStore {
   private readonly historyDirectory: string;
 
@@ -56,8 +61,12 @@ export class UndoStore {
     this.now = options.now ?? (() => Date.now());
   }
 
-  async appendEntries(budgetId: string, entries: UndoEntry[]): Promise<void> {
-    if (entries.length === 0) {
+  async appendEntries(
+    budgetId: string,
+    entries: UndoEntry[],
+    idMappings: IdMappingUpdate[] = [],
+  ): Promise<void> {
+    if (entries.length === 0 && idMappings.length === 0) {
       return;
     }
 
@@ -67,6 +76,10 @@ export class UndoStore {
         0,
         this.maxEntriesPerBudget,
       );
+
+      for (const { sourceEntityId, targetEntityId } of idMappings) {
+        this.applyIdMapping(current, sourceEntityId, targetEntityId);
+      }
       this.pruneIdMappings(current);
 
       const currentTime = this.now();
@@ -145,23 +158,28 @@ export class UndoStore {
   ): Promise<void> {
     await this.withBudgetLock(budgetId, async () => {
       const history = await this.readBudgetHistoryUnsafe(budgetId);
-      history.id_mappings[sourceEntityId] = targetEntityId;
-
-      for (const [key, value] of Object.entries(history.id_mappings)) {
-        if (value === sourceEntityId) {
-          history.id_mappings[key] = targetEntityId;
-        }
-      }
-
-      for (const key of Object.keys(history.id_mappings)) {
-        history.id_mappings[key] = this.resolveMappedIdFromHistory(
-          history,
-          key,
-        );
-      }
+      this.applyIdMapping(history, sourceEntityId, targetEntityId);
 
       await this.writeBudgetHistoryUnsafe(budgetId, history);
     });
+  }
+
+  private applyIdMapping(
+    history: UndoHistoryFile,
+    sourceEntityId: string,
+    targetEntityId: string,
+  ): void {
+    history.id_mappings[sourceEntityId] = targetEntityId;
+
+    for (const [key, value] of Object.entries(history.id_mappings)) {
+      if (value === sourceEntityId) {
+        history.id_mappings[key] = targetEntityId;
+      }
+    }
+
+    for (const key of Object.keys(history.id_mappings)) {
+      history.id_mappings[key] = this.resolveMappedIdFromHistory(history, key);
+    }
   }
 
   private resolveMappedIdFromHistory(

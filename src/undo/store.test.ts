@@ -50,6 +50,35 @@ describe("appendEntries and persistence", () => {
     expect(result[0].id).toBe("budget-1::1::aaa");
   });
 
+  it("writes entries and id mappings in one append operation", async () => {
+    const e = entry("budget-1::1::replace", {
+      undo_action: {
+        type: "update",
+        entity_type: "transaction",
+        entity_id: "old-id",
+        expected_state: {},
+        restore_state: {},
+      },
+    });
+
+    await store.appendEntries(
+      BUDGET_ID,
+      [e],
+      [{ sourceEntityId: "old-id", targetEntityId: "new-id" }],
+    );
+
+    const entries = await store.listEntries(BUDGET_ID, {
+      includeAllSessions: true,
+      sessionId: "any",
+      limit: 100,
+      includeUndone: true,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].id).toBe("budget-1::1::replace");
+    expect(await store.resolveMappedId(BUDGET_ID, "old-id")).toBe("new-id");
+  });
+
   it("prepends new entries (most recent first)", async () => {
     const e1 = entry("budget-1::1::first");
     const e2 = entry("budget-1::2::second");

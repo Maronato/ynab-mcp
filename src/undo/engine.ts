@@ -17,6 +17,11 @@ interface RecordUndoEntryInput {
   undo_action: UndoEntry["undo_action"];
 }
 
+interface RecordIdMappingInput {
+  sourceEntityId: string;
+  targetEntityId: string;
+}
+
 interface UndoResult {
   results: UndoExecutionResult[];
   summary: {
@@ -33,10 +38,19 @@ export class UndoEngine {
     private readonly store: UndoStore,
   ) {}
 
+  async updateIdMappings(
+    budgetId: string,
+    oldId: string,
+    newId: string,
+  ): Promise<void> {
+    await this.store.updateIdMappings(budgetId, oldId, newId);
+  }
+
   async recordEntries(
     budgetId: string,
     entries: RecordUndoEntryInput[],
     sessionId: string,
+    idMappings: RecordIdMappingInput[] = [],
   ): Promise<UndoEntry[]> {
     if (entries.length === 0) {
       return [];
@@ -54,7 +68,7 @@ export class UndoEngine {
       status: "active",
     }));
 
-    await this.store.appendEntries(budgetId, createdEntries);
+    await this.store.appendEntries(budgetId, createdEntries, idMappings);
     return createdEntries;
   }
 
@@ -224,15 +238,18 @@ export class UndoEngine {
 
       const currentState = await this.getCurrentState(entry, resolvedEntityId);
 
-      // When an entity was re-created with a new ID (after undoing a delete),
-      // the snapshot's `id` won't match the original in expected_state.
-      // Normalize so conflict detection compares content, not generated IDs.
-      if (
-        currentState &&
-        resolvedEntityId !== entry.undo_action.entity_id &&
-        "id" in currentState
-      ) {
-        currentState.id = entry.undo_action.entity_id;
+      // After a replace (delete+create), the entity gets a new ID.
+      // Both the current state snapshot and the expected state may contain
+      // the replaced ID rather than the original entity_id.
+      // Normalize both sides so conflict detection compares content, not IDs.
+      if (resolvedEntityId !== entry.undo_action.entity_id) {
+        if (currentState && "id" in currentState) {
+          currentState.id = entry.undo_action.entity_id;
+        }
+        const expectedState = entry.undo_action.expected_state;
+        if ("id" in expectedState) {
+          expectedState.id = entry.undo_action.entity_id;
+        }
       }
 
       const conflict = this.detectConflict(entry, currentState);
@@ -338,6 +355,50 @@ export class UndoEngine {
     }
 
     if (entry.undo_action.type === "update") {
+      const expected = entry.undo_action.expected_state;
+      const currentIsSplit =
+        Array.isArray(expected.subtransactions) &&
+        (expected.subtransactions as unknown[]).length > 0;
+
+      // The YNAB API silently ignores category_id and subtransaction changes
+      // on existing splits. When the current transaction is a split, always
+      // use delete+recreate to guarantee the restore state is fully applied.
+      if (currentIsSplit) {
+        const subtransactions = asOptionalSubtransactions(
+          restore.subtransactions,
+        );
+        const replacement = {
+          account_id: asRequiredString(restore.account_id),
+          date: asRequiredString(restore.date),
+          amount: milliunitsToCurrency(asNumber(restore.amount)),
+          payee_id: asOptionalNullableString(restore.payee_id),
+          category_id: subtransactions
+            ? undefined
+            : asOptionalNullableString(restore.category_id),
+          memo: asOptionalNullableString(restore.memo),
+          cleared: asOptionalString(restore.cleared) as
+            | "cleared"
+            | "uncleared"
+            | "reconciled"
+            | undefined,
+          approved: asOptionalBoolean(restore.approved),
+          flag_color: asOptionalNullableString(restore.flag_color),
+          subtransactions,
+        };
+        const { transaction: recreated } = await this.client.replaceTransaction(
+          entry.budget_id,
+          resolvedEntityId,
+          replacement,
+        );
+        await this.store.updateIdMappings(
+          entry.budget_id,
+          entry.undo_action.entity_id,
+          recreated.id,
+        );
+        return "Restored transaction via replace (split).";
+      }
+
+      const restoreSubs = asOptionalSubtransactions(restore.subtransactions);
       await this.client.updateTransactions(entry.budget_id, [
         {
           transaction_id: resolvedEntityId,
@@ -348,7 +409,9 @@ export class UndoEngine {
               ? milliunitsToCurrency(asNumber(restore.amount))
               : undefined,
           payee_id: asOptionalNullableString(restore.payee_id),
-          category_id: asOptionalNullableString(restore.category_id),
+          category_id: restoreSubs
+            ? undefined
+            : asOptionalNullableString(restore.category_id),
           memo: asOptionalNullableString(restore.memo),
           cleared: asOptionalString(restore.cleared) as
             | "cleared"
@@ -357,19 +420,23 @@ export class UndoEngine {
             | undefined,
           approved: asOptionalBoolean(restore.approved),
           flag_color: asOptionalNullableString(restore.flag_color),
+          subtransactions: restoreSubs,
         },
       ]);
 
       return "Updated transaction to restore prior state.";
     }
 
+    const subtransactions = asOptionalSubtransactions(restore.subtransactions);
     const created = await this.client.createTransactions(entry.budget_id, [
       {
         account_id: asRequiredString(restore.account_id),
         date: asRequiredString(restore.date),
         amount: milliunitsToCurrency(asNumber(restore.amount)),
         payee_id: asOptionalNullableString(restore.payee_id),
-        category_id: asOptionalNullableString(restore.category_id),
+        category_id: subtransactions
+          ? undefined
+          : asOptionalNullableString(restore.category_id),
         memo: asOptionalNullableString(restore.memo),
         cleared: asOptionalString(restore.cleared) as
           | "cleared"
@@ -378,6 +445,7 @@ export class UndoEngine {
           | undefined,
         approved: asOptionalBoolean(restore.approved),
         flag_color: asOptionalNullableString(restore.flag_color),
+        subtransactions,
       },
     ]);
 
@@ -575,4 +643,22 @@ function asNumber(value: unknown): number {
   }
 
   throw new Error("Expected numeric value for undo state.");
+}
+
+function asOptionalSubtransactions(value: unknown):
+  | Array<{
+      amount: number;
+      payee_id?: string | null;
+      category_id?: string | null;
+      memo?: string | null;
+    }>
+  | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+
+  return value.map((sub: Record<string, unknown>) => ({
+    amount: milliunitsToCurrency(asNumber(sub.amount)),
+    payee_id: asOptionalNullableString(sub.payee_id),
+    category_id: asOptionalNullableString(sub.category_id),
+    memo: asOptionalNullableString(sub.memo),
+  }));
 }
