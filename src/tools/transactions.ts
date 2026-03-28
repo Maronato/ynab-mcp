@@ -281,58 +281,66 @@ export function registerTransactionTools(
       try {
         const resolvedBudgetId =
           await context.ynabClient.resolveRealBudgetId(budgetId);
-        const created = await context.ynabClient.createTransactions(
+        const pendingId = await context.undoEngine.markPending(
           resolvedBudgetId,
-          transactions as CreateTransactionInput[],
+          `Creating ${transactions.length} transaction${transactions.length === 1 ? "" : "s"}`,
         );
-        context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
-        const [lookups, settings] = await Promise.all([
-          context.ynabClient.getNameLookup(resolvedBudgetId),
-          context.ynabClient.getBudgetSettings(resolvedBudgetId),
-        ]);
+        try {
+          const created = await context.ynabClient.createTransactions(
+            resolvedBudgetId,
+            transactions as CreateTransactionInput[],
+          );
+          context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
+          const [lookups, settings] = await Promise.all([
+            context.ynabClient.getNameLookup(resolvedBudgetId),
+            context.ynabClient.getBudgetSettings(resolvedBudgetId),
+          ]);
 
-        for (let i = 0; i < created.length; i++) {
-          const payeeId = created[i].payee_id;
-          if (payeeId && !lookups.payeeById.has(payeeId)) {
-            const inputPayeeName = transactions[i]?.payee_name;
-            if (inputPayeeName) {
-              lookups.payeeById.set(payeeId, inputPayeeName);
+          for (let i = 0; i < created.length; i++) {
+            const payeeId = created[i].payee_id;
+            if (payeeId && !lookups.payeeById.has(payeeId)) {
+              const inputPayeeName = transactions[i]?.payee_name;
+              if (inputPayeeName) {
+                lookups.payeeById.set(payeeId, inputPayeeName);
+              }
             }
           }
+
+          const formatted = created.map((transaction) =>
+            formatTransactionForOutput(
+              brandAmounts(transaction),
+              lookups,
+              settings.currency_format,
+            ),
+          );
+
+          const undoEntries = created.map((transaction) => ({
+            operation: "create_transaction" as const,
+            description: `Created transaction ${transaction.id} (${formatCurrency(asMilliunits(transaction.amount), settings.currency_format)}).`,
+            undo_action: {
+              type: "delete" as const,
+              entity_type: "transaction" as const,
+              entity_id: transaction.id,
+              expected_state: snapshotTransaction(transaction),
+              restore_state: {},
+            },
+          }));
+
+          const undoHistoryIds = await recordUndoAndGetIds(
+            context.undoEngine,
+            resolvedBudgetId,
+            undoEntries,
+          );
+
+          return jsonToolResult({
+            budget_id: resolvedBudgetId,
+            created_count: created.length,
+            transactions: formatted,
+            undo_history_ids: undoHistoryIds,
+          });
+        } finally {
+          await context.undoEngine.clearPending(resolvedBudgetId, pendingId);
         }
-
-        const formatted = created.map((transaction) =>
-          formatTransactionForOutput(
-            brandAmounts(transaction),
-            lookups,
-            settings.currency_format,
-          ),
-        );
-
-        const undoEntries = created.map((transaction) => ({
-          operation: "create_transaction" as const,
-          description: `Created transaction ${transaction.id} (${formatCurrency(asMilliunits(transaction.amount), settings.currency_format)}).`,
-          undo_action: {
-            type: "delete" as const,
-            entity_type: "transaction" as const,
-            entity_id: transaction.id,
-            expected_state: snapshotTransaction(transaction),
-            restore_state: {},
-          },
-        }));
-
-        const undoHistoryIds = await recordUndoAndGetIds(
-          context.undoEngine,
-          resolvedBudgetId,
-          undoEntries,
-        );
-
-        return jsonToolResult({
-          budget_id: resolvedBudgetId,
-          created_count: created.length,
-          transactions: formatted,
-          undo_history_ids: undoHistoryIds,
-        });
       } catch (error) {
         return errorToolResult(
           extractErrorMessage(error, "Failed to create transactions."),
@@ -359,146 +367,112 @@ export function registerTransactionTools(
       try {
         const resolvedBudgetId =
           await context.ynabClient.resolveRealBudgetId(budgetId);
-        const beforeById = new Map<
-          string,
-          ReturnType<typeof snapshotTransaction>
-        >();
-        const missingIds = new Set<string>();
-
-        const prefetchResults = await Promise.all(
-          transactions.map(async (update) => ({
-            id: update.transaction_id,
-            transaction: await context.ynabClient.getTransactionById(
-              resolvedBudgetId,
-              update.transaction_id,
-            ),
-          })),
+        const pendingId = await context.undoEngine.markPending(
+          resolvedBudgetId,
+          `Updating ${transactions.length} transaction${transactions.length === 1 ? "" : "s"}`,
         );
+        try {
+          const beforeById = new Map<
+            string,
+            ReturnType<typeof snapshotTransaction>
+          >();
+          const missingIds = new Set<string>();
 
-        const prefetchedTransactions = new Map<
-          string,
-          NonNullable<(typeof prefetchResults)[number]["transaction"]>
-        >();
-
-        for (const result of prefetchResults) {
-          if (!result.transaction) {
-            missingIds.add(result.id);
-          } else {
-            beforeById.set(result.id, snapshotTransaction(result.transaction));
-            prefetchedTransactions.set(result.id, result.transaction);
-          }
-        }
-
-        const regularUpdates: (typeof transactions)[number][] = [];
-        const replaceUpdates: (typeof transactions)[number][] = [];
-
-        for (const update of transactions) {
-          if (missingIds.has(update.transaction_id)) continue;
-          const existing = prefetchedTransactions.get(update.transaction_id);
-          if (!existing) continue;
-
-          const isSplit =
-            (existing.subtransactions?.filter((s) => !s.deleted)?.length ?? 0) >
-            0;
-          const touchesFrozenFields =
-            update.category_id !== undefined ||
-            update.subtransactions !== undefined;
-
-          if (isSplit && touchesFrozenFields) {
-            replaceUpdates.push(update);
-          } else {
-            regularUpdates.push(update);
-          }
-        }
-
-        const updated = regularUpdates.length
-          ? await context.ynabClient.updateTransactions(
-              resolvedBudgetId,
-              regularUpdates as UpdateTransactionInput[],
-            )
-          : [];
-
-        const [lookups, settings] = await Promise.all([
-          context.ynabClient.getNameLookup(resolvedBudgetId),
-          context.ynabClient.getBudgetSettings(resolvedBudgetId),
-        ]);
-
-        const afterById = new Map(
-          updated.map((transaction) => [transaction.id, transaction]),
-        );
-        const undoEntries: Array<{
-          operation: "update_transaction";
-          description: string;
-          undo_action: {
-            type: "update";
-            entity_type: "transaction";
-            entity_id: string;
-            expected_state: Record<string, unknown>;
-            restore_state: Record<string, unknown>;
-          };
-        }> = [];
-        const idMappings: Array<{
-          sourceEntityId: string;
-          targetEntityId: string;
-        }> = [];
-
-        const results: Array<Record<string, unknown>> = [];
-        let anyMutated = false;
-
-        for (const update of regularUpdates) {
-          const after = afterById.get(update.transaction_id);
-          const before = beforeById.get(update.transaction_id);
-
-          if (!after || !before) {
-            results.push({
-              transaction_id: update.transaction_id,
-              status: "error",
-              message: "Transaction update did not return a result.",
-            });
-            continue;
-          }
-
-          anyMutated = true;
-          results.push({
-            transaction_id: update.transaction_id,
-            current_transaction_id: after.id,
-            status: "updated",
-            transaction: formatTransactionForOutput(
-              brandAmounts(after),
-              lookups,
-              settings.currency_format,
-            ),
-          });
-
-          undoEntries.push({
-            operation: "update_transaction",
-            description: `Updated transaction ${update.transaction_id}.`,
-            undo_action: {
-              type: "update",
-              entity_type: "transaction",
-              entity_id: update.transaction_id,
-              expected_state: snapshotTransaction(after),
-              restore_state: before,
-            },
-          });
-        }
-
-        for (const update of replaceUpdates) {
-          const existing = prefetchedTransactions.get(update.transaction_id);
-          const before = beforeById.get(update.transaction_id);
-          if (!existing || !before) continue;
-
-          try {
-            const replacement = buildReplacementFromUpdate(
-              existing,
-              update as UpdateTransactionInput,
-            );
-            const { transaction: after, previousId } =
-              await context.ynabClient.replaceTransaction(
+          const prefetchResults = await Promise.all(
+            transactions.map(async (update) => ({
+              id: update.transaction_id,
+              transaction: await context.ynabClient.getTransactionById(
                 resolvedBudgetId,
                 update.transaction_id,
-                replacement,
+              ),
+            })),
+          );
+
+          const prefetchedTransactions = new Map<
+            string,
+            NonNullable<(typeof prefetchResults)[number]["transaction"]>
+          >();
+
+          for (const result of prefetchResults) {
+            if (!result.transaction) {
+              missingIds.add(result.id);
+            } else {
+              beforeById.set(
+                result.id,
+                snapshotTransaction(result.transaction),
               );
+              prefetchedTransactions.set(result.id, result.transaction);
+            }
+          }
+
+          const regularUpdates: (typeof transactions)[number][] = [];
+          const replaceUpdates: (typeof transactions)[number][] = [];
+
+          for (const update of transactions) {
+            if (missingIds.has(update.transaction_id)) continue;
+            const existing = prefetchedTransactions.get(update.transaction_id);
+            if (!existing) continue;
+
+            const isSplit =
+              (existing.subtransactions?.filter((s) => !s.deleted)?.length ??
+                0) > 0;
+            const touchesFrozenFields =
+              update.category_id !== undefined ||
+              update.subtransactions !== undefined;
+
+            if (isSplit && touchesFrozenFields) {
+              replaceUpdates.push(update);
+            } else {
+              regularUpdates.push(update);
+            }
+          }
+
+          const updated = regularUpdates.length
+            ? await context.ynabClient.updateTransactions(
+                resolvedBudgetId,
+                regularUpdates as UpdateTransactionInput[],
+              )
+            : [];
+
+          const [lookups, settings] = await Promise.all([
+            context.ynabClient.getNameLookup(resolvedBudgetId),
+            context.ynabClient.getBudgetSettings(resolvedBudgetId),
+          ]);
+
+          const afterById = new Map(
+            updated.map((transaction) => [transaction.id, transaction]),
+          );
+          const undoEntries: Array<{
+            operation: "update_transaction";
+            description: string;
+            undo_action: {
+              type: "update";
+              entity_type: "transaction";
+              entity_id: string;
+              expected_state: Record<string, unknown>;
+              restore_state: Record<string, unknown>;
+            };
+          }> = [];
+          const idMappings: Array<{
+            sourceEntityId: string;
+            targetEntityId: string;
+          }> = [];
+
+          const results: Array<Record<string, unknown>> = [];
+          let anyMutated = false;
+
+          for (const update of regularUpdates) {
+            const after = afterById.get(update.transaction_id);
+            const before = beforeById.get(update.transaction_id);
+
+            if (!after || !before) {
+              results.push({
+                transaction_id: update.transaction_id,
+                status: "error",
+                message: "Transaction update did not return a result.",
+              });
+              continue;
+            }
 
             anyMutated = true;
             results.push({
@@ -514,55 +488,100 @@ export function registerTransactionTools(
 
             undoEntries.push({
               operation: "update_transaction",
-              description: `Updated transaction ${update.transaction_id} (replaced split).`,
+              description: `Updated transaction ${update.transaction_id}.`,
               undo_action: {
                 type: "update",
                 entity_type: "transaction",
-                entity_id: previousId,
+                entity_id: update.transaction_id,
                 expected_state: snapshotTransaction(after),
                 restore_state: before,
               },
             });
-            idMappings.push({
-              sourceEntityId: previousId,
-              targetEntityId: after.id,
-            });
-          } catch (error) {
+          }
+
+          for (const update of replaceUpdates) {
+            const existing = prefetchedTransactions.get(update.transaction_id);
+            const before = beforeById.get(update.transaction_id);
+            if (!existing || !before) continue;
+
+            try {
+              const replacement = buildReplacementFromUpdate(
+                existing,
+                update as UpdateTransactionInput,
+              );
+              const { transaction: after, previousId } =
+                await context.ynabClient.replaceTransaction(
+                  resolvedBudgetId,
+                  update.transaction_id,
+                  replacement,
+                );
+
+              anyMutated = true;
+              results.push({
+                transaction_id: update.transaction_id,
+                current_transaction_id: after.id,
+                status: "updated",
+                transaction: formatTransactionForOutput(
+                  brandAmounts(after),
+                  lookups,
+                  settings.currency_format,
+                ),
+              });
+
+              undoEntries.push({
+                operation: "update_transaction",
+                description: `Updated transaction ${update.transaction_id} (replaced split).`,
+                undo_action: {
+                  type: "update",
+                  entity_type: "transaction",
+                  entity_id: previousId,
+                  expected_state: snapshotTransaction(after),
+                  restore_state: before,
+                },
+              });
+              idMappings.push({
+                sourceEntityId: previousId,
+                targetEntityId: after.id,
+              });
+            } catch (error) {
+              results.push({
+                transaction_id: update.transaction_id,
+                status: "error",
+                message: extractErrorMessage(
+                  error,
+                  "Failed to replace split transaction.",
+                ),
+              });
+            }
+          }
+
+          if (anyMutated) {
+            context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
+          }
+
+          for (const missingId of missingIds.values()) {
             results.push({
-              transaction_id: update.transaction_id,
+              transaction_id: missingId,
               status: "error",
-              message: extractErrorMessage(
-                error,
-                "Failed to replace split transaction.",
-              ),
+              message: "Transaction not found.",
             });
           }
-        }
 
-        if (anyMutated) {
-          context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
-        }
+          const undoHistoryIds = await recordUndoAndGetIds(
+            context.undoEngine,
+            resolvedBudgetId,
+            undoEntries,
+            idMappings,
+          );
 
-        for (const missingId of missingIds.values()) {
-          results.push({
-            transaction_id: missingId,
-            status: "error",
-            message: "Transaction not found.",
+          return jsonToolResult({
+            budget_id: resolvedBudgetId,
+            results,
+            undo_history_ids: undoHistoryIds,
           });
+        } finally {
+          await context.undoEngine.clearPending(resolvedBudgetId, pendingId);
         }
-
-        const undoHistoryIds = await recordUndoAndGetIds(
-          context.undoEngine,
-          resolvedBudgetId,
-          undoEntries,
-          idMappings,
-        );
-
-        return jsonToolResult({
-          budget_id: resolvedBudgetId,
-          results,
-          undo_history_ids: undoHistoryIds,
-        });
       } catch (error) {
         return errorToolResult(
           extractErrorMessage(error, "Failed to update transactions."),
@@ -589,100 +608,107 @@ export function registerTransactionTools(
       try {
         const resolvedBudgetId =
           await context.ynabClient.resolveRealBudgetId(budgetId);
-
-        const prefetchResults = await Promise.all(
-          transactionIds.map(async (id) => ({
-            id,
-            transaction: await context.ynabClient.getTransactionById(
-              resolvedBudgetId,
-              id,
-            ),
-          })),
+        const pendingId = await context.undoEngine.markPending(
+          resolvedBudgetId,
+          `Deleting ${transactionIds.length} transaction${transactionIds.length === 1 ? "" : "s"}`,
         );
+        try {
+          const prefetchResults = await Promise.all(
+            transactionIds.map(async (id) => ({
+              id,
+              transaction: await context.ynabClient.getTransactionById(
+                resolvedBudgetId,
+                id,
+              ),
+            })),
+          );
 
-        const results: Array<Record<string, unknown>> = [];
-        const undoEntries: Array<{
-          operation: "delete_transaction";
-          description: string;
-          undo_action: {
-            type: "create";
-            entity_type: "transaction";
-            entity_id: string;
-            expected_state: Record<string, unknown>;
-            restore_state: Record<string, unknown>;
-          };
-        }> = [];
+          const results: Array<Record<string, unknown>> = [];
+          const undoEntries: Array<{
+            operation: "delete_transaction";
+            description: string;
+            undo_action: {
+              type: "create";
+              entity_type: "transaction";
+              entity_id: string;
+              expected_state: Record<string, unknown>;
+              restore_state: Record<string, unknown>;
+            };
+          }> = [];
 
-        for (const {
-          id: transactionId,
-          transaction: before,
-        } of prefetchResults) {
-          if (!before) {
-            results.push({
-              transaction_id: transactionId,
-              status: "error",
-              message: "Transaction not found.",
-            });
-            continue;
-          }
-
-          try {
-            const deleted = await context.ynabClient.deleteTransaction(
-              resolvedBudgetId,
-              transactionId,
-            );
-
-            if (!deleted) {
+          for (const {
+            id: transactionId,
+            transaction: before,
+          } of prefetchResults) {
+            if (!before) {
               results.push({
                 transaction_id: transactionId,
                 status: "error",
-                message: "Delete request failed.",
+                message: "Transaction not found.",
               });
               continue;
             }
 
-            results.push({
-              transaction_id: transactionId,
-              status: "deleted",
-            });
-            undoEntries.push({
-              operation: "delete_transaction",
-              description: `Deleted transaction ${transactionId}.`,
-              undo_action: {
-                type: "create",
-                entity_type: "transaction",
-                entity_id: transactionId,
-                expected_state: {},
-                restore_state: snapshotTransaction(before),
-              },
-            });
-          } catch (error) {
-            results.push({
-              transaction_id: transactionId,
-              status: "error",
-              message: extractErrorMessage(
-                error,
-                "Failed to delete transaction.",
-              ),
-            });
+            try {
+              const deleted = await context.ynabClient.deleteTransaction(
+                resolvedBudgetId,
+                transactionId,
+              );
+
+              if (!deleted) {
+                results.push({
+                  transaction_id: transactionId,
+                  status: "error",
+                  message: "Delete request failed.",
+                });
+                continue;
+              }
+
+              results.push({
+                transaction_id: transactionId,
+                status: "deleted",
+              });
+              undoEntries.push({
+                operation: "delete_transaction",
+                description: `Deleted transaction ${transactionId}.`,
+                undo_action: {
+                  type: "create",
+                  entity_type: "transaction",
+                  entity_id: transactionId,
+                  expected_state: {},
+                  restore_state: snapshotTransaction(before),
+                },
+              });
+            } catch (error) {
+              results.push({
+                transaction_id: transactionId,
+                status: "error",
+                message: extractErrorMessage(
+                  error,
+                  "Failed to delete transaction.",
+                ),
+              });
+            }
           }
+
+          if (undoEntries.length > 0) {
+            context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
+          }
+
+          const undoHistoryIds = await recordUndoAndGetIds(
+            context.undoEngine,
+            resolvedBudgetId,
+            undoEntries,
+          );
+
+          return jsonToolResult({
+            budget_id: resolvedBudgetId,
+            results,
+            undo_history_ids: undoHistoryIds,
+          });
+        } finally {
+          await context.undoEngine.clearPending(resolvedBudgetId, pendingId);
         }
-
-        if (undoEntries.length > 0) {
-          context.payeeProfileAnalyzer.invalidate(resolvedBudgetId);
-        }
-
-        const undoHistoryIds = await recordUndoAndGetIds(
-          context.undoEngine,
-          resolvedBudgetId,
-          undoEntries,
-        );
-
-        return jsonToolResult({
-          budget_id: resolvedBudgetId,
-          results,
-          undo_history_ids: undoHistoryIds,
-        });
       } catch (error) {
         return errorToolResult(
           extractErrorMessage(error, "Failed to delete transactions."),

@@ -364,99 +364,107 @@ export function registerCategoryTools(
         const budgetId = await context.ynabClient.resolveRealBudgetId(
           input.budget_id,
         );
-        const prefetchResults = await Promise.all(
-          input.assignments.map(async (assignment) => ({
-            assignment,
-            before: await context.ynabClient.getMonthCategoryById(
-              budgetId,
-              assignment.month,
-              assignment.category_id,
-            ),
-          })),
+        const pendingId = await context.undoEngine.markPending(
+          budgetId,
+          `Setting budgets for ${input.assignments.length} categor${input.assignments.length === 1 ? "y" : "ies"}`,
         );
+        try {
+          const prefetchResults = await Promise.all(
+            input.assignments.map(async (assignment) => ({
+              assignment,
+              before: await context.ynabClient.getMonthCategoryById(
+                budgetId,
+                assignment.month,
+                assignment.category_id,
+              ),
+            })),
+          );
 
-        const updateResults = await Promise.all(
-          prefetchResults.map(async ({ assignment, before }) => {
-            try {
-              if (!before) {
+          const updateResults = await Promise.all(
+            prefetchResults.map(async ({ assignment, before }) => {
+              try {
+                if (!before) {
+                  return {
+                    result: {
+                      assignment,
+                      status: "error",
+                      message: "Category/month not found.",
+                    } as Record<string, unknown>,
+                    undoEntry: null,
+                  };
+                }
+
+                const updated = await context.ynabClient.setCategoryBudget(
+                  budgetId,
+                  assignment,
+                );
+
+                return {
+                  result: {
+                    category_id: updated.id,
+                    month: assignment.month,
+                    status: "updated",
+                    previous_budgeted_milliunits: before.budgeted,
+                    updated_budgeted_milliunits: updated.budgeted,
+                    previous_budgeted: milliunitsToCurrency(
+                      asMilliunits(before.budgeted),
+                    ),
+                    updated_budgeted: milliunitsToCurrency(
+                      asMilliunits(updated.budgeted),
+                    ),
+                  } as Record<string, unknown>,
+                  undoEntry: {
+                    operation: "set_category_budget" as const,
+                    description: `Set budget for category ${assignment.category_id} in ${assignment.month}.`,
+                    undo_action: {
+                      type: "update" as const,
+                      entity_type: "category_budget" as const,
+                      entity_id: `${assignment.month}:${assignment.category_id}`,
+                      expected_state: {
+                        category_id: updated.id,
+                        month: assignment.month,
+                        budgeted: updated.budgeted,
+                      },
+                      restore_state: {
+                        category_id: before.id,
+                        month: assignment.month,
+                        budgeted: before.budgeted,
+                      },
+                    },
+                  },
+                };
+              } catch (error) {
                 return {
                   result: {
                     assignment,
                     status: "error",
-                    message: "Category/month not found.",
+                    message: extractErrorMessage(error, "Update failed."),
                   } as Record<string, unknown>,
                   undoEntry: null,
                 };
               }
+            }),
+          );
 
-              const updated = await context.ynabClient.setCategoryBudget(
-                budgetId,
-                assignment,
-              );
+          const results = updateResults.map((r) => r.result);
+          const undoEntries = updateResults
+            .map((r) => r.undoEntry)
+            .filter((e): e is NonNullable<typeof e> => e !== null);
 
-              return {
-                result: {
-                  category_id: updated.id,
-                  month: assignment.month,
-                  status: "updated",
-                  previous_budgeted_milliunits: before.budgeted,
-                  updated_budgeted_milliunits: updated.budgeted,
-                  previous_budgeted: milliunitsToCurrency(
-                    asMilliunits(before.budgeted),
-                  ),
-                  updated_budgeted: milliunitsToCurrency(
-                    asMilliunits(updated.budgeted),
-                  ),
-                } as Record<string, unknown>,
-                undoEntry: {
-                  operation: "set_category_budget" as const,
-                  description: `Set budget for category ${assignment.category_id} in ${assignment.month}.`,
-                  undo_action: {
-                    type: "update" as const,
-                    entity_type: "category_budget" as const,
-                    entity_id: `${assignment.month}:${assignment.category_id}`,
-                    expected_state: {
-                      category_id: updated.id,
-                      month: assignment.month,
-                      budgeted: updated.budgeted,
-                    },
-                    restore_state: {
-                      category_id: before.id,
-                      month: assignment.month,
-                      budgeted: before.budgeted,
-                    },
-                  },
-                },
-              };
-            } catch (error) {
-              return {
-                result: {
-                  assignment,
-                  status: "error",
-                  message: extractErrorMessage(error, "Update failed."),
-                } as Record<string, unknown>,
-                undoEntry: null,
-              };
-            }
-          }),
-        );
+          const undoHistoryIds = await recordUndoAndGetIds(
+            context.undoEngine,
+            budgetId,
+            undoEntries,
+          );
 
-        const results = updateResults.map((r) => r.result);
-        const undoEntries = updateResults
-          .map((r) => r.undoEntry)
-          .filter((e): e is NonNullable<typeof e> => e !== null);
-
-        const undoHistoryIds = await recordUndoAndGetIds(
-          context.undoEngine,
-          budgetId,
-          undoEntries,
-        );
-
-        return jsonToolResult({
-          budget_id: budgetId,
-          results,
-          undo_history_ids: undoHistoryIds,
-        });
+          return jsonToolResult({
+            budget_id: budgetId,
+            results,
+            undo_history_ids: undoHistoryIds,
+          });
+        } finally {
+          await context.undoEngine.clearPending(budgetId, pendingId);
+        }
       } catch (error) {
         return errorToolResult(
           extractErrorMessage(error, "Failed to set category budgets."),
