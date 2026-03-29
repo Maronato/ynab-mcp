@@ -410,13 +410,13 @@ export function registerHealthTools(
 }
 
 function getCurrentMonth(): string {
-  return `${new Date().toISOString().slice(0, 7)}-01`;
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
 function getEndOfMonth(monthStr: string): string {
-  const date = new Date(monthStr);
-  const year = date.getFullYear();
-  const month = date.getMonth();
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  return `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  // Parse YYYY-MM-DD components directly to avoid timezone shifts from new Date()
+  const [year, month] = monthStr.split("-").map(Number);
+  const lastDay = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 }

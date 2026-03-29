@@ -92,11 +92,11 @@ export function registerVelocityTools(
 
         const cf = settings.currency_format;
 
-        // Date calculations
-        const monthDate = new Date(month);
-        const year = monthDate.getFullYear();
-        const monthIndex = monthDate.getMonth();
-        const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+        // Date calculations — parse YYYY-MM-DD components to avoid timezone shifts
+        const [year, monthNum] = month.split("-").map(Number);
+        const monthIndex = monthNum - 1; // 0-indexed
+        const daysInMonth = new Date(year, monthNum, 0).getDate();
+        const monthDate = new Date(year, monthIndex, 1);
         const today = new Date();
 
         // If analyzing current month, use today's day. Otherwise use full month.
@@ -262,7 +262,8 @@ export function registerVelocityTools(
 }
 
 function getCurrentMonth(): string {
-  return `${new Date().toISOString().slice(0, 7)}-01`;
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
 async function computeHistoricalAverages(

@@ -100,11 +100,11 @@ export function registerForecastTools(
 
         const cf = settings.currency_format;
 
-        // Date calculations
-        const monthDate = new Date(month);
-        const year = monthDate.getFullYear();
-        const monthIndex = monthDate.getMonth();
-        const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+        // Date calculations — parse YYYY-MM-DD components to avoid timezone shifts
+        const [year, monthNum] = month.split("-").map(Number);
+        const monthIndex = monthNum - 1; // 0-indexed
+        const daysInMonth = new Date(year, monthNum, 0).getDate();
+        const monthDate = new Date(year, monthIndex, 1);
         const today = new Date();
 
         let dayOfMonth: number;
@@ -308,15 +308,15 @@ export function registerForecastTools(
 // --- Helpers ---
 
 function getCurrentMonth(): string {
-  return `${new Date().toISOString().slice(0, 7)}-01`;
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
 function getEndOfMonth(monthStr: string): string {
-  const date = new Date(monthStr);
-  const year = date.getFullYear();
-  const month = date.getMonth();
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  return `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  // Parse YYYY-MM-DD components directly to avoid timezone shifts from new Date()
+  const [year, month] = monthStr.split("-").map(Number);
+  const lastDay = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 }
 
 /**
@@ -346,11 +346,12 @@ async function computeHistoricalDailyRates(
   const totals = new Map<string, number>();
   let totalDays = 0;
 
-  const monthDate = new Date(currentMonth);
+  // Parse YYYY-MM-DD components directly to avoid timezone shifts from new Date()
+  const [curYear, curMonth] = currentMonth.split("-").map(Number);
 
   const fetches: Promise<number>[] = [];
   for (let i = 1; i <= historyMonths; i++) {
-    const past = new Date(monthDate.getFullYear(), monthDate.getMonth() - i, 1);
+    const past = new Date(curYear, curMonth - 1 - i, 1);
     const pastMonth = `${past.getFullYear()}-${String(past.getMonth() + 1).padStart(2, "0")}-01`;
     const daysInPastMonth = new Date(
       past.getFullYear(),
