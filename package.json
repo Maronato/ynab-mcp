@@ -19,6 +19,8 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test": "vitest run",
+    "test:unit": "vitest run --exclude 'src/integration/**'",
+    "test:integration": "vitest run src/integration/",
     "test:watch": "vitest",
     "ci": "npm run typecheck && npm run lint && npm run test",
     "prepare": "lefthook install",
