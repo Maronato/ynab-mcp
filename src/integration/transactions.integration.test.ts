@@ -157,7 +157,8 @@ describe("create_transactions", () => {
     };
     const checkingBefore = accountsBefore.accounts.find(
       (a) => a.id === "acct-checking",
-    )!;
+    );
+    if (!checkingBefore) throw new Error("expected acct-checking");
 
     const createResult = (await harness.callTool("create_transactions", {
       transactions: [
@@ -206,7 +207,8 @@ describe("create_transactions", () => {
     };
     const checkingAfter = accountsAfter.accounts.find(
       (a) => a.id === "acct-checking",
-    )!;
+    );
+    if (!checkingAfter) throw new Error("expected acct-checking");
     expect(checkingAfter.balance).toBe(checkingBefore.balance - 25.5);
   });
 
@@ -415,7 +417,8 @@ describe("delete_transactions", () => {
     };
     const checkingBefore = accountsBefore.accounts.find(
       (a) => a.id === "acct-checking",
-    )!;
+    );
+    if (!checkingBefore) throw new Error("expected acct-checking");
 
     const deleteResult = (await harness.callTool("delete_transactions", {
       transaction_ids: [txId],
@@ -440,7 +443,8 @@ describe("delete_transactions", () => {
     };
     const checkingAfter = accountsAfter.accounts.find(
       (a) => a.id === "acct-checking",
-    )!;
+    );
+    if (!checkingAfter) throw new Error("expected acct-checking");
     expect(checkingAfter.balance).toBe(checkingBefore.balance + 20.0);
   });
 

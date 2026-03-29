@@ -340,7 +340,7 @@ describe("suggest_transaction_categories", () => {
       (s) => s.transaction_id === "tx-uncategorized",
     );
     expect(grocerySuggestion).toBeDefined();
-    expect(grocerySuggestion!.payee_name).toBe("Grocery Store");
+    expect(grocerySuggestion?.payee_name).toBe("Grocery Store");
   });
 });
 
@@ -772,18 +772,18 @@ describe("detect_recurring_charges", () => {
       (s) => s.payee_name === "Landlord",
     );
     expect(landlord).toBeDefined();
-    expect(landlord!.occurrence_count).toBe(3);
-    expect(landlord!.detected_frequency_label).toBe("monthly");
-    expect(landlord!.has_scheduled_transaction).toBe(true);
+    expect(landlord?.occurrence_count).toBe(3);
+    expect(landlord?.detected_frequency_label).toBe("monthly");
+    expect(landlord?.has_scheduled_transaction).toBe(true);
 
     // Internet Provider: 3 occurrences, monthly, $0.55 each, has scheduled tx (stx-internet)
     const internet = result.subscriptions.find(
       (s) => s.payee_name === "Internet Provider",
     );
     expect(internet).toBeDefined();
-    expect(internet!.occurrence_count).toBe(3);
-    expect(internet!.detected_frequency_label).toBe("monthly");
-    expect(internet!.has_scheduled_transaction).toBe(true);
+    expect(internet?.occurrence_count).toBe(3);
+    expect(internet?.detected_frequency_label).toBe("monthly");
+    expect(internet?.has_scheduled_transaction).toBe(true);
 
     // total_monthly_cost should be positive
     expect(result.total_monthly_cost).toBeGreaterThan(0);
@@ -820,8 +820,8 @@ describe("detect_anomalies", () => {
         a.anomaly_type === "unusual_amount",
     );
     expect(groceryAnomaly).toBeDefined();
-    expect(["warning", "alert"]).toContain(groceryAnomaly!.severity);
-    expect(groceryAnomaly!.detail).toBeTruthy();
+    expect(["warning", "alert"]).toContain(groceryAnomaly?.severity);
+    expect(groceryAnomaly?.detail).toBeTruthy();
   });
 });
 
