@@ -2,12 +2,18 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
-import { monthKeysBack } from "../shared/dates.js";
+import {
+  endOfMonthString,
+  monthKeysBack,
+  todayString,
+} from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
+  asCurrency,
   asMilliunits,
   type CurrencyFormatLike,
+  currencyToMilliunits,
   formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
@@ -46,7 +52,9 @@ export function registerIncomeExpenseTools(
     {
       title: "Get Income vs Expense Summary",
       description:
-        "Monthly income vs expense breakdown with savings rate calculation and trend detection across months.",
+        "Monthly income vs expense breakdown with savings rate calculation and " +
+        "trend detection across months. The in-progress current month is listed " +
+        "marked partial, but excluded from averages and the trend.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -75,19 +83,20 @@ export function registerIncomeExpenseTools(
           ),
         );
 
-        // Build per-month breakdown
-        let totalIncome = 0;
-        let totalExpenses = 0;
+        // The last month key is the current month; treat it as partial until
+        // its final day and keep it out of averages and the trend windows so
+        // an incomplete month does not read as a spending drop.
+        const currentMonthPartial =
+          todayString() <
+          endOfMonthString(`${monthKeys[monthKeys.length - 1]}-01`);
 
+        // Build per-month breakdown
         const months = monthSummaries.map((summary, idx) => {
           const income = summary.income; // milliunits, positive
           const expenses = Math.abs(summary.activity); // activity is negative for spending
           const net = income - expenses;
           const savingsRate =
             income > 0 ? Math.round((net / income) * 10000) / 100 : 0;
-
-          totalIncome += income;
-          totalExpenses += expenses;
 
           const incFmt = formatAmount(income, cf);
           const expFmt = formatAmount(expenses, cf);
@@ -102,13 +111,33 @@ export function registerIncomeExpenseTools(
             net: netFmt.value,
             net_display: netFmt.display,
             savings_rate: savingsRate,
+            ...(currentMonthPartial &&
+              idx === monthSummaries.length - 1 && { partial: true }),
           };
         });
 
-        // Compute averages
-        const avgIncome = Math.round(totalIncome / monthCount);
-        const avgExpenses = Math.round(totalExpenses / monthCount);
-        const avgNet = Math.round((totalIncome - totalExpenses) / monthCount);
+        // Averages and trend use complete months only
+        const completeMonths = currentMonthPartial
+          ? months.slice(0, -1)
+          : months;
+        const completeCount = completeMonths.length;
+        const totalIncome = completeMonths.reduce(
+          (sum, m) => sum + currencyToMilliunits(asCurrency(m.income)),
+          0,
+        );
+        const totalExpenses = completeMonths.reduce(
+          (sum, m) => sum + currencyToMilliunits(asCurrency(m.expenses)),
+          0,
+        );
+
+        const avgIncome =
+          completeCount > 0 ? Math.round(totalIncome / completeCount) : 0;
+        const avgExpenses =
+          completeCount > 0 ? Math.round(totalExpenses / completeCount) : 0;
+        const avgNet =
+          completeCount > 0
+            ? Math.round((totalIncome - totalExpenses) / completeCount)
+            : 0;
         const avgSavingsRate =
           totalIncome > 0
             ? Math.round(
@@ -120,10 +149,13 @@ export function registerIncomeExpenseTools(
         const avgExpensesFmt = formatAmount(avgExpenses, cf);
         const avgNetFmt = formatAmount(avgNet, cf);
 
-        // Compute trend: recent 3 months avg savings rate vs prior months
-        const recentWindow = Math.min(3, Math.floor(monthCount / 2));
-        const recentMonths = months.slice(-recentWindow);
-        const priorMonths = months.slice(0, -recentWindow);
+        // Compute trend: recent months avg savings rate vs prior months,
+        // over complete months only
+        const recentWindow = Math.min(3, Math.floor(completeCount / 2));
+        const recentMonths =
+          recentWindow > 0 ? completeMonths.slice(-recentWindow) : [];
+        const priorMonths =
+          recentWindow > 0 ? completeMonths.slice(0, -recentWindow) : [];
 
         const recentTotalIncome = recentMonths.reduce(
           (sum, m) => sum + m.income,
@@ -170,6 +202,7 @@ export function registerIncomeExpenseTools(
 
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
+          current_month_partial: currentMonthPartial,
           months,
           averages: {
             avg_income: avgIncomeFmt.value,

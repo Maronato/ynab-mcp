@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockAppContext } from "../test-utils.js";
 import {
   captureToolHandlers,
@@ -57,9 +57,19 @@ function setupMonthSummaries(
 }
 
 beforeEach(() => {
+  // Pin "now" to the last day of a month so the current month counts as
+  // complete and averages/trends behave deterministically. Individual tests
+  // that exercise the partial-month path re-pin to a mid-month date.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 5, 30, 12, 0, 0)); // 2026-06-30, 30-day month
+
   ctx = createMockContext();
   const tools = captureToolHandlers(registerIncomeExpenseTools, ctx);
   handler = tools.get_income_expense_summary;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("get_income_expense_summary", () => {
@@ -263,6 +273,32 @@ describe("get_income_expense_summary", () => {
       const result = parseResult(await handler({}));
 
       expect(result.months).toHaveLength(6);
+    });
+  });
+
+  describe("partial current month", () => {
+    it("excludes the partial current month from averages and trend", async () => {
+      // Mid-month: the current month is incomplete
+      vi.setSystemTime(new Date(2026, 5, 15, 12, 0, 0)); // 2026-06-15
+      setupMonthSummaries([
+        { offset: -2, income: 5000000, activity: -3000000 },
+        { offset: -1, income: 5000000, activity: -3000000 },
+        // Current month has almost no activity yet
+        { offset: 0, income: 0, activity: -500000 },
+      ]);
+
+      const result = parseResult(await handler({ months: 3 }));
+
+      expect(result.current_month_partial).toBe(true);
+      expect(result.months).toHaveLength(3);
+      expect(result.months[2].partial).toBe(true);
+      expect(result.months[0].partial).toBeUndefined();
+
+      // Averages must cover only the two complete months: income $5000,
+      // expenses $3000 — unaffected by the nearly-empty current month.
+      expect(result.averages.avg_income).toBe(5000);
+      expect(result.averages.avg_expenses).toBe(3000);
+      expect(result.averages.avg_savings_rate).toBe(40);
     });
   });
 });

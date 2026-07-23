@@ -117,11 +117,12 @@ export function registerAnomalyTools(
 
         const currencyFormat = settings.currency_format;
 
-        // Build per-payee history from all transactions (outflows, non-transfers)
+        // Build per-payee history from all transactions (outflows, non-transfers).
+        // Sums and sums-of-squares allow O(1) leave-one-out statistics below.
         interface PayeeStats {
-          amounts: number[];
-          mean: number;
-          stddev: number;
+          count: number;
+          sum: number;
+          sumSq: number;
         }
         const payeeHistory = new Map<string, PayeeStats>();
         const allOutflowAmounts: number[] = [];
@@ -135,22 +136,28 @@ export function registerAnomalyTools(
           if (!tx.payee_id) continue;
           let stats = payeeHistory.get(tx.payee_id);
           if (!stats) {
-            stats = { amounts: [], mean: 0, stddev: 0 };
+            stats = { count: 0, sum: 0, sumSq: 0 };
             payeeHistory.set(tx.payee_id, stats);
           }
-          stats.amounts.push(absAmount);
+          stats.count += 1;
+          stats.sum += absAmount;
+          stats.sumSq += absAmount * absAmount;
         }
 
-        // Compute mean and stddev for each payee
-        for (const stats of payeeHistory.values()) {
-          const n = stats.amounts.length;
-          if (n === 0) continue;
-          stats.mean = stats.amounts.reduce((s, v) => s + v, 0) / n;
-          if (n >= 2) {
-            const variance =
-              stats.amounts.reduce((s, v) => s + (v - stats.mean) ** 2, 0) / n;
-            stats.stddev = Math.sqrt(variance);
-          }
+        // Leave-one-out mean/stddev: the tested transaction is excluded from
+        // its own baseline so a large outlier cannot mask itself.
+        function baselineExcluding(
+          stats: PayeeStats,
+          amount: number,
+        ): { n: number; mean: number; stddev: number } {
+          const n = stats.count - 1;
+          if (n < 1) return { n, mean: 0, stddev: 0 };
+          const mean = (stats.sum - amount) / n;
+          const variance = Math.max(
+            0,
+            (stats.sumSq - amount * amount) / n - mean * mean,
+          );
+          return { n, mean, stddev: Math.sqrt(variance) };
         }
 
         // Compute 75th percentile of all outflow amounts
@@ -183,14 +190,22 @@ export function registerAnomalyTools(
           // Check 1: Unusual amount for known payee
           if (tx.payee_id) {
             const stats = payeeHistory.get(tx.payee_id);
-            if (stats && stats.amounts.length >= 5 && stats.stddev > 0) {
-              const deviation = Math.abs(absAmount - stats.mean);
-              if (deviation > sigma * stats.stddev) {
+            const baseline = stats ? baselineExcluding(stats, absAmount) : null;
+            if (baseline && baseline.n >= 5 && baseline.mean > 0) {
+              // Floor the deviation scale so a perfectly consistent history
+              // (stddev 0, e.g. a fixed subscription) still flags meaningful
+              // deviations instead of being skipped.
+              const scale = Math.max(
+                baseline.stddev,
+                baseline.mean * 0.05,
+                500,
+              );
+              const deviation = Math.abs(absAmount - baseline.mean);
+              if (deviation > sigma * scale) {
                 const key = `unusual_amount:${tx.id}`;
                 if (!seenAnomalyKeys.has(key)) {
                   seenAnomalyKeys.add(key);
-                  const sigmas =
-                    Math.round((deviation / stats.stddev) * 10) / 10;
+                  const sigmas = Math.round((deviation / scale) * 10) / 10;
                   const severity: Severity = sigmas >= 3 ? "alert" : "warning";
                   anomalies.push({
                     transaction_id: tx.id,
@@ -206,14 +221,14 @@ export function registerAnomalyTools(
                     severity,
                     detail:
                       `Amount ${formatCurrency(asMilliunits(absAmount), currencyFormat)} is ${sigmas} standard deviations ` +
-                      `from the mean of ${formatCurrency(asMilliunits(Math.round(stats.mean)), currencyFormat)} ` +
-                      `for ${payeeName ?? "this payee"} (${stats.amounts.length} historical transactions).`,
+                      `from the mean of ${formatCurrency(asMilliunits(Math.round(baseline.mean)), currencyFormat)} ` +
+                      `for ${payeeName ?? "this payee"} (${baseline.n} other transactions).`,
                     reference: {
                       payee_mean: milliunitsToCurrency(
-                        asMilliunits(Math.round(stats.mean)),
+                        asMilliunits(Math.round(baseline.mean)),
                       ),
                       payee_stddev: milliunitsToCurrency(
-                        asMilliunits(Math.round(stats.stddev)),
+                        asMilliunits(Math.round(baseline.stddev)),
                       ),
                       sigma_distance: sigmas,
                     },
@@ -226,10 +241,10 @@ export function registerAnomalyTools(
           // Check 2: New payee with large amount
           if (tx.payee_id) {
             const stats = payeeHistory.get(tx.payee_id);
-            const historyCount = stats?.amounts.length ?? 0;
+            const historyCount = stats?.count ?? 0;
             // "New" means all occurrences are in the recent window
             const allRecent = stats
-              ? stats.amounts.length <=
+              ? stats.count <=
                 recentTransactions.filter(
                   (r) => r.payee_id === tx.payee_id && r.amount < 0,
                 ).length

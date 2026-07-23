@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockAppContext } from "../test-utils.js";
 import {
   captureToolHandlers,
@@ -72,9 +72,19 @@ function setupLookups() {
 }
 
 beforeEach(() => {
+  // Pin "now" to the last day of a month so the current month counts as
+  // complete and trend labels behave deterministically. Individual tests
+  // that exercise the partial-month path re-pin to a mid-month date.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 5, 30, 12, 0, 0)); // 2026-06-30, 30-day month
+
   ctx = createMockContext();
   const tools = captureToolHandlers(registerTrendTools, ctx);
   handler = tools.get_spending_trends;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("get_spending_trends", () => {
@@ -764,6 +774,53 @@ describe("get_spending_trends", () => {
       expect(result.summary.highest_growth_percent).toBe(60);
       expect(result.summary.biggest_reduction_category).toBe("Rent");
       expect(result.summary.biggest_reduction_percent).toBe(-50);
+    });
+  });
+
+  describe("partial current month", () => {
+    it("excludes the partial current month from trend labels and averages", async () => {
+      // Mid-month: the current month is incomplete
+      vi.setSystemTime(new Date(2026, 5, 15, 12, 0, 0)); // 2026-06-15
+      setupLookups();
+
+      // Flat $300/month for two complete months, only $30 so far this month.
+      // With the partial month excluded the trend must read stable, not
+      // decreasing.
+      ctx.ynabClient.getTransactionsInRange.mockResolvedValue([
+        createMockTransaction({
+          id: "t1",
+          date: dateInMonth(-2),
+          amount: -300000,
+          category_id: "cat-groceries",
+          payee_id: "payee-grocery-store",
+        }),
+        createMockTransaction({
+          id: "t2",
+          date: dateInMonth(-1),
+          amount: -300000,
+          category_id: "cat-groceries",
+          payee_id: "payee-grocery-store",
+        }),
+        createMockTransaction({
+          id: "t3",
+          date: dateInMonth(0, 10),
+          amount: -30000,
+          category_id: "cat-groceries",
+          payee_id: "payee-grocery-store",
+        }),
+      ]);
+
+      const result = parseResult(await handler({ months: 3 }));
+
+      expect(result.current_month_partial).toBe(true);
+      const groceries = result.series[0];
+      expect(groceries.trend_direction).toBe("stable");
+      // Average over the two complete months only: $300
+      expect(groceries.average_monthly).toBe(300);
+      // The last data point and month total carry the partial marker
+      expect(groceries.data[2].partial).toBe(true);
+      expect(groceries.data[0].partial).toBeUndefined();
+      expect(result.total_by_month[2].partial).toBe(true);
     });
   });
 });

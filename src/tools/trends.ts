@@ -2,7 +2,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
-import { endOfMonthString, monthKeysBack } from "../shared/dates.js";
+import {
+  endOfMonthString,
+  monthKeysBack,
+  todayString,
+} from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
@@ -138,7 +142,10 @@ export function registerTrendTools(
     {
       title: "Get Spending Trends",
       description:
-        "Multi-month spending time series with trend detection. Groups spending by category, payee, or category group and identifies increasing/decreasing patterns.",
+        "Multi-month spending time series with trend detection. Groups spending " +
+        "by category, payee, or category group and identifies increasing/decreasing " +
+        "patterns. The in-progress current month is included in the series marked " +
+        "partial, but excluded from trend labels and monthly averages.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -157,6 +164,14 @@ export function registerTrendTools(
         const { sinceDate, untilDate, monthKeys } = computeDateRange(
           input.months ?? 6,
         );
+
+        // The last month key is the current month; treat it as partial until
+        // its final day so trend labels compare complete months only. A
+        // partial month would otherwise read as a systematic decrease.
+        const currentMonthPartial = todayString() < untilDate;
+        const trendKeys = currentMonthPartial
+          ? monthKeys.slice(0, -1)
+          : monthKeys;
 
         const [transactions, lookups, settings] = await Promise.all([
           context.ynabClient.getTransactionsInRange(
@@ -243,8 +258,16 @@ export function registerTrendTools(
 
         // Build series output
         const series = ranked.map((entity) => {
-          const trend = determineTrend(entity.byMonth, monthKeys);
+          const trend = determineTrend(entity.byMonth, trendKeys);
           const movingAvg = computeMovingAverage(entity.byMonth, monthKeys, 3);
+          const completeTotal = trendKeys.reduce(
+            (sum, key) => sum + (entity.byMonth.get(key)?.total ?? 0),
+            0,
+          );
+          const avgMonthly =
+            trendKeys.length > 0
+              ? Math.round(completeTotal / trendKeys.length)
+              : 0;
 
           return {
             id: entity.id,
@@ -255,6 +278,8 @@ export function registerTrendTools(
             data: monthKeys.map((month, idx) => {
               const bucket = entity.byMonth.get(month);
               const amount = bucket?.total ?? 0;
+              const isPartial =
+                currentMonthPartial && idx === monthKeys.length - 1;
               return {
                 month,
                 ...formatMonthAmount(amount, settings.currency_format),
@@ -262,6 +287,7 @@ export function registerTrendTools(
                 moving_average_3m: milliunitsToCurrency(
                   asMilliunits(movingAvg[idx]),
                 ),
+                ...(isPartial && { partial: true }),
               };
             }),
             total: milliunitsToCurrency(asMilliunits(entity.total)),
@@ -269,11 +295,9 @@ export function registerTrendTools(
               asMilliunits(entity.total),
               settings.currency_format,
             ),
-            average_monthly: milliunitsToCurrency(
-              asMilliunits(Math.round(entity.total / monthKeys.length)),
-            ),
+            average_monthly: milliunitsToCurrency(asMilliunits(avgMonthly)),
             average_monthly_display: formatCurrency(
-              asMilliunits(Math.round(entity.total / monthKeys.length)),
+              asMilliunits(avgMonthly),
               settings.currency_format,
             ),
             trend_direction: trend.direction,
@@ -282,8 +306,9 @@ export function registerTrendTools(
         });
 
         // Build total_by_month
-        const totalByMonth = monthKeys.map((month) => {
+        const totalByMonth = monthKeys.map((month, idx) => {
           const total = monthTotals.get(month) ?? 0;
+          const isPartial = currentMonthPartial && idx === monthKeys.length - 1;
           return {
             month,
             total: milliunitsToCurrency(asMilliunits(total)),
@@ -291,6 +316,7 @@ export function registerTrendTools(
               asMilliunits(total),
               settings.currency_format,
             ),
+            ...(isPartial && { partial: true }),
           };
         });
 
@@ -316,6 +342,7 @@ export function registerTrendTools(
           period_start: sinceDate,
           period_end: untilDate,
           months: monthKeys,
+          current_month_partial: currentMonthPartial,
           total_by_month: totalByMonth,
           series,
           summary: {
