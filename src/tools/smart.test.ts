@@ -174,8 +174,10 @@ describe("suggest_transaction_categories", () => {
       "Everyday",
     );
     expect(content.suggestions[0].confidence).toBe("definitive");
+    // approve now defaults to false: applying suggestions must not
+    // silently approve transactions.
     expect(content.update_actions).toEqual([
-      { transaction_id: "tx-1", category_id: "cat-groceries", approved: true },
+      { transaction_id: "tx-1", category_id: "cat-groceries" },
     ]);
   });
 
@@ -252,6 +254,50 @@ describe("suggest_transaction_categories", () => {
 
     expect(content.suggestion_count).toBe(1);
     expect(content.suggestions[0].confidence).toBe("low");
+  });
+
+  it("gates update_actions by action_confidence (default high)", async () => {
+    const { context, handlers } = setup();
+    const tx = createMockTransaction({
+      id: "tx-low",
+      category_id: null,
+      payee_id: "unknown-payee",
+    });
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([tx])
+      .mockResolvedValueOnce([]);
+    setupDefaultMocks(context);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(new Map());
+
+    // Default: a low-confidence suggestion stays out of update_actions
+    const gated = JSON.parse(
+      (
+        await handlers.suggest_transaction_categories({
+          budget_id: "budget-1",
+        })
+      ).content[0].text,
+    );
+    expect(gated.suggestions[0].confidence).toBe("low");
+    expect(gated.update_actions).toEqual([]);
+
+    // Opt in explicitly to receive low-confidence actions
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([tx])
+      .mockResolvedValueOnce([]);
+    const opted = JSON.parse(
+      (
+        await handlers.suggest_transaction_categories({
+          budget_id: "budget-1",
+          action_confidence: "low",
+        })
+      ).content[0].text,
+    );
+    expect(opted.update_actions.length).toBe(
+      opted.suggestions.filter(
+        (s: { suggested_category_id: string | null }) =>
+          s.suggested_category_id,
+      ).length,
+    );
   });
 
   it("excludes transfers by default", async () => {

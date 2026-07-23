@@ -40,7 +40,17 @@ const autoCategorizeSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "When true, update_actions will include approved: true so categorization and approval happen in one pass. Defaults to true.",
+      "When true, update_actions will include approved: true so categorization " +
+        "and approval happen in one pass. Defaults to false so applying " +
+        "suggestions never silently approves transactions.",
+    ),
+  action_confidence: z
+    .enum(["definitive", "high", "medium", "low"])
+    .optional()
+    .describe(
+      "Minimum confidence for a suggestion to be included in update_actions. " +
+        "Defaults to high. Lower-confidence suggestions still appear in " +
+        "suggestions for manual review.",
     ),
   limit: z
     .number()
@@ -105,7 +115,9 @@ export function registerCategorizationTools(
         "Analyze uncategorized (and optionally unapproved) transactions using payee history, " +
         "amount patterns, and scheduled transaction matching. " +
         "Returns categorization suggestions with confidence levels — does NOT apply changes. " +
-        "Use the returned update_actions with update_transactions to apply.",
+        "update_actions (for update_transactions) contains only suggestions at or above " +
+        "action_confidence (default high); review lower-confidence suggestions manually " +
+        "before applying them.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -124,7 +136,8 @@ export function registerCategorizationTools(
         const includeTransfers = input.include_transfers ?? false;
         const includeApprovedUncategorized =
           input.include_approved_uncategorized ?? true;
-        const shouldApprove = input.approve ?? true;
+        const shouldApprove = input.approve ?? false;
+        const actionConfidence = input.action_confidence ?? "high";
         const sinceDate = input.since_date ?? getDefaultSinceDate();
         const historyMonths = input.history_months;
 
@@ -315,8 +328,19 @@ export function registerCategorizationTools(
           signals: s.signals,
         }));
 
+        const confidenceRank: Record<string, number> = {
+          definitive: 3,
+          high: 2,
+          medium: 1,
+          low: 0,
+        };
+        const minRank = confidenceRank[actionConfidence];
         const updateActions = suggestions
-          .filter((s) => s.suggested_category_id)
+          .filter(
+            (s) =>
+              s.suggested_category_id &&
+              confidenceRank[s.confidence] >= minRank,
+          )
           .map((s) => ({
             transaction_id: s.transaction_id,
             category_id: s.suggested_category_id,
