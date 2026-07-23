@@ -13,12 +13,6 @@ import {
   TWO_MONTHS_AGO,
 } from "./seed.js";
 
-/** Number of days in the month of a YYYY-MM-DD string. Parses components to avoid timezone shifts. */
-function daysIn(dateStr: string): number {
-  const [y, m] = dateStr.split("-").map(Number);
-  return new Date(y, m, 0).getDate();
-}
-
 /**
  * Extended seed that adds data needed by analytics tools beyond the standard seed:
  * - Multiple months of month details for trends/income-expense
@@ -198,28 +192,6 @@ afterEach(async () => {
   await harness.close();
 });
 
-// ── get_budget_summary ──
-
-describe("get_budget_summary", () => {
-  it("returns net worth, account summary, and month totals", async () => {
-    const result = (await harness.callTool("get_budget_summary", {})) as {
-      net_worth_milliunits: number;
-      net_worth_display: string;
-      account_summary_by_type: Array<{
-        type: string;
-        total_balance_milliunits: number;
-        count: number;
-      }>;
-    };
-
-    // Seed accounts: checking 5,000,000 + credit -1,000,000 + savings 10,000,000 = 14,000,000
-    expect(result.net_worth_milliunits).toBe(14000000);
-    expect(result.net_worth_display).toBeTruthy();
-    // 3 account types: checking, creditCard, savings
-    expect(result.account_summary_by_type.length).toBe(3);
-  });
-});
-
 // ── sync_budget_data ──
 
 describe("sync_budget_data", () => {
@@ -384,8 +356,10 @@ describe("get_budget_health", () => {
       budget_id: string;
       month: string;
       ready_to_assign: { amount: number; status: string };
+      net_worth: { amount: number };
+      accounts_by_type: Array<{ type: string; count: number }>;
       overspending: {
-        total_cash: number;
+        total: number;
         categories: Array<{ id: string; name: string }>;
       };
       underfunded_targets: { count: number };
@@ -403,7 +377,11 @@ describe("get_budget_health", () => {
     // Seed month to_be_budgeted = 2,840,000 milliunits → positive
     expect(result.ready_to_assign.status).toBe("positive");
     expect(result.ready_to_assign.amount).toBeGreaterThan(0);
-    expect(result.overspending).toHaveProperty("total_cash");
+    expect(result.overspending).toHaveProperty("total");
+    // Seed accounts: checking 5,000,000 + credit -1,000,000 + savings 10,000,000 = 14,000,000
+    expect(result.net_worth.amount).toBe(14000);
+    // 3 account types: checking, creditCard, savings
+    expect(result.accounts_by_type.length).toBe(3);
     // Seed has exactly one uncategorized tx (tx-uncategorized) in the current month
     expect(result.uncategorized_count).toBe(1);
     // Seed has exactly one unapproved tx (tx-uncategorized, approved: false) in the current month

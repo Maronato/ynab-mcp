@@ -280,64 +280,6 @@ export class YnabClient {
     return budgetCache.settings.data;
   }
 
-  async getBudgetSummary(budgetId?: string) {
-    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
-    const [accounts, month] = await Promise.all([
-      this.getAccounts(resolvedBudgetId, { includeClosed: true }),
-      this.getMonthSummary(resolvedBudgetId, "current"),
-    ]);
-
-    const netWorthMilliunits = accounts.reduce(
-      (sum, account) => sum + account.balance,
-      0,
-    );
-
-    const overspentCategoryCount = month.categories.filter(
-      (category) =>
-        category.balance < 0 && !category.hidden && !category.deleted,
-    ).length;
-
-    const accountsByType = new Map<
-      string,
-      { type: string; count: number; total_balance: number }
-    >();
-
-    for (const account of accounts) {
-      const current = accountsByType.get(account.type) ?? {
-        type: account.type,
-        count: 0,
-        total_balance: 0,
-      };
-
-      current.count += 1;
-      current.total_balance += account.balance;
-      accountsByType.set(account.type, current);
-    }
-
-    return {
-      budget_id: resolvedBudgetId,
-      month: month.month,
-      net_worth_milliunits: netWorthMilliunits,
-      net_worth: milliunitsToCurrency(asMilliunits(netWorthMilliunits)),
-      income_milliunits: month.income,
-      income: milliunitsToCurrency(asMilliunits(month.income)),
-      budgeted_milliunits: month.budgeted,
-      budgeted: milliunitsToCurrency(asMilliunits(month.budgeted)),
-      activity_milliunits: month.activity,
-      activity: milliunitsToCurrency(asMilliunits(month.activity)),
-      to_be_budgeted_milliunits: month.to_be_budgeted,
-      to_be_budgeted: milliunitsToCurrency(asMilliunits(month.to_be_budgeted)),
-      age_of_money: month.age_of_money ?? null,
-      overspent_category_count: overspentCategoryCount,
-      account_summary_by_type: [...accountsByType.values()].map((entry) => ({
-        type: entry.type,
-        count: entry.count,
-        total_balance_milliunits: entry.total_balance,
-        total_balance: milliunitsToCurrency(asMilliunits(entry.total_balance)),
-      })),
-    };
-  }
-
   async getAccounts(
     budgetId?: string,
     options: GetAccountsOptions = {},

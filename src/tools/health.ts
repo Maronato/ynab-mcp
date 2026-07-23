@@ -44,9 +44,12 @@ export function registerHealthTools(
     {
       title: "Get Budget Health",
       description:
-        "Single-call budget diagnostic. Surfaces overspending (cash vs credit), " +
-        "underfunded targets, credit card payment gaps, uncategorized/unapproved " +
-        "transaction counts, and Ready to Assign status with severity-rated issues.",
+        "Single-call budget snapshot and diagnostic. Surfaces net worth, account " +
+        "totals by type, month totals, overspent categories, underfunded targets, " +
+        "credit card payment gaps, uncategorized/unapproved transaction counts, and " +
+        "Ready to Assign status with severity-rated issues. Note: the YNAB API does " +
+        "not expose whether overspending happened on cash or credit; judge that from " +
+        "the credit card payment gaps and the transactions themselves.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -59,17 +62,36 @@ export function registerHealthTools(
       try {
         const month = input.month ?? getCurrentMonth();
 
-        const [monthSummary, accounts, categoryGroups, settings] =
+        const [monthSummary, allAccounts, categoryGroups, settings] =
           await Promise.all([
             context.ynabClient.getMonthSummary(input.budget_id, month),
             context.ynabClient.getAccounts(input.budget_id, {
-              includeClosed: false,
+              includeClosed: true,
             }),
             context.ynabClient.getCategories(input.budget_id, { month }),
             context.ynabClient.getBudgetSettings(input.budget_id),
           ]);
 
         const cf = settings.currency_format;
+
+        // --- Net worth and account totals (all accounts, including closed) ---
+        const netWorth = allAccounts.reduce((sum, a) => sum + a.balance, 0);
+        const accountsByType = new Map<
+          string,
+          { type: string; count: number; total_balance: number }
+        >();
+        for (const account of allAccounts) {
+          const entry = accountsByType.get(account.type) ?? {
+            type: account.type,
+            count: 0,
+            total_balance: 0,
+          };
+          entry.count += 1;
+          entry.total_balance += account.balance;
+          accountsByType.set(account.type, entry);
+        }
+
+        const openAccounts = allAccounts.filter((a) => !a.closed);
 
         // --- Ready to Assign ---
         const rta = monthSummary.to_be_budgeted;
@@ -79,7 +101,7 @@ export function registerHealthTools(
         else rtaStatus = "zero";
 
         // --- Build account lookup for credit card gap detection ---
-        const creditCardAccounts = accounts.filter(
+        const creditCardAccounts = openAccounts.filter(
           (a) => a.type === "creditCard",
         );
 
@@ -110,8 +132,6 @@ export function registerHealthTools(
           group_name: string;
           balance: number;
           balance_display: string;
-          type: "cash" | "credit";
-          _balance_milliunits: number;
         }> = [];
         const underfundedCategories: Array<{
           id: string;
@@ -122,21 +142,8 @@ export function registerHealthTools(
           target_type: string | null;
         }> = [];
 
-        let totalCashOverspend = 0;
-        let totalCreditOverspend = 0;
+        let totalOverspend = 0;
         let totalUnderfunded = 0;
-        let uncategorizedCount = 0;
-        let unapprovedCount = 0;
-
-        // Determine which category IDs belong to credit card payment categories
-        const creditCardPaymentCategoryIds = new Set<string>();
-        for (const group of categoryGroups) {
-          if (group.name === CREDIT_CARD_PAYMENTS_GROUP) {
-            for (const cat of group.categories) {
-              creditCardPaymentCategoryIds.add(cat.id);
-            }
-          }
-        }
 
         for (const group of categoryGroups) {
           if (INTERNAL_GROUP_NAMES.has(group.name)) continue;
@@ -144,35 +151,17 @@ export function registerHealthTools(
           for (const cat of group.categories) {
             if (cat.hidden || cat.deleted) continue;
 
-            // Overspent detection
             if (cat.balance < 0) {
-              // In YNAB, overspending on a credit card category is "credit overspending"
-              // (deferred to debt), while overspending on cash categories is immediate.
-              // We approximate: if category activity comes from credit card accounts,
-              // it's credit overspending. Since we can't check per-transaction here,
-              // we use a simpler heuristic: if the category has no budgeted amount and
-              // the balance equals the activity, spending was likely all on credit.
-              // However, the most reliable signal is checking if the balance is negative
-              // and whether it represents cash vs credit. YNAB handles this internally.
-              // For this diagnostic we mark overspending as "credit" if the negative
-              // balance would be absorbed by a credit card payment category.
-              // A practical approach: check if any credit card payment category also
-              // has a reduced balance. For simplicity, we'll report all overspending
-              // and let the credit card gap analysis handle the credit distinction.
-              const isCreditOverspend = false; // Will be refined below
               overspentCategories.push({
                 id: cat.id,
                 name: cat.name,
                 group_name: group.name,
                 balance: milliunitsToCurrency(asMilliunits(cat.balance)),
                 balance_display: formatCurrency(asMilliunits(cat.balance), cf),
-                type: isCreditOverspend ? "credit" : "cash",
-                _balance_milliunits: cat.balance,
               });
-              totalCashOverspend += Math.abs(cat.balance);
+              totalOverspend += Math.abs(cat.balance);
             }
 
-            // Underfunded detection
             if (
               cat.goal_under_funded !== null &&
               cat.goal_under_funded !== undefined &&
@@ -196,18 +185,7 @@ export function registerHealthTools(
           }
         }
 
-        // Refine cash vs credit overspend classification.
-        // YNAB shows credit overspending when spending in a category came through
-        // a credit card. Since we have account data, we check: if ANY credit card
-        // account's absolute balance exceeds its payment category balance, then
-        // there's credit overspending happening. We mark individual overspent
-        // categories as "credit" if the spending was likely on credit cards.
-        // The simplest reliable approach: YNAB's month data doesn't tell us which
-        // account the spending came from per-category. We'll mark ALL overspending
-        // as cash (the conservative/actionable interpretation) unless we can detect
-        // credit overspending from the credit card gap analysis.
-        // Actually, let's use a better heuristic: if there are credit card gaps,
-        // there's credit overspending happening somewhere.
+        // --- Credit card payment gaps (owed vs available to pay) ---
         const creditCardGaps: Array<{
           account_id: string;
           account_name: string;
@@ -217,7 +195,6 @@ export function registerHealthTools(
           payment_available_display: string;
           gap: number;
           gap_display: string;
-          _gap_milliunits: number;
         }> = [];
 
         for (const account of creditCardAccounts) {
@@ -246,32 +223,11 @@ export function registerHealthTools(
               ),
               gap: milliunitsToCurrency(asMilliunits(gap)),
               gap_display: formatCurrency(asMilliunits(gap), cf),
-              _gap_milliunits: gap,
             });
           }
         }
 
-        // If there are credit card gaps, re-classify some overspending as credit
-        if (creditCardGaps.length > 0) {
-          let creditOverspendPool = creditCardGaps.reduce(
-            (sum, g) => sum + g._gap_milliunits,
-            0,
-          );
-          for (const cat of overspentCategories) {
-            if (creditOverspendPool <= 0) break;
-            const absBalance = Math.abs(cat._balance_milliunits);
-            const creditPortion = Math.min(absBalance, creditOverspendPool);
-            if (creditPortion === absBalance) {
-              cat.type = "credit";
-              totalCashOverspend -= absBalance;
-              totalCreditOverspend += absBalance;
-            }
-            creditOverspendPool -= creditPortion;
-          }
-        }
-
         // --- Count uncategorized and unapproved ---
-        // Use searchTransactions to count these efficiently
         const sinceDate = month; // Start of month
         const endOfMonth = getEndOfMonth(month);
 
@@ -288,8 +244,8 @@ export function registerHealthTools(
           }),
         ]);
 
-        uncategorizedCount = uncategorized.length;
-        unapprovedCount = unapproved.length;
+        const uncategorizedCount = uncategorized.length;
+        const unapprovedCount = unapproved.length;
 
         // --- Build issues array ---
         const issues: Issue[] = [];
@@ -301,17 +257,12 @@ export function registerHealthTools(
           });
         }
 
-        if (totalCashOverspend > 0) {
+        if (totalOverspend > 0) {
           issues.push({
             severity: "critical",
-            message: `Cash overspending of ${formatCurrency(asMilliunits(totalCashOverspend), cf)} across ${overspentCategories.filter((c) => c.type === "cash").length} category(ies). This reduces Ready to Assign next month.`,
-          });
-        }
-
-        if (totalCreditOverspend > 0) {
-          issues.push({
-            severity: "warning",
-            message: `Credit overspending of ${formatCurrency(asMilliunits(totalCreditOverspend), cf)} detected. This creates unbudgeted debt on your credit card(s).`,
+            message:
+              `Overspending of ${formatCurrency(asMilliunits(totalOverspend), cf)} across ${overspentCategories.length} category(ies). ` +
+              "Cash overspending reduces next month's Ready to Assign; credit overspending becomes card debt unless the payment category is topped up.",
           });
         }
 
@@ -364,27 +315,48 @@ export function registerHealthTools(
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
           month,
+          net_worth: {
+            amount: milliunitsToCurrency(asMilliunits(netWorth)),
+            display: formatCurrency(asMilliunits(netWorth), cf),
+          },
+          accounts_by_type: [...accountsByType.values()].map((entry) => ({
+            type: entry.type,
+            count: entry.count,
+            total_balance: milliunitsToCurrency(
+              asMilliunits(entry.total_balance),
+            ),
+            total_balance_display: formatCurrency(
+              asMilliunits(entry.total_balance),
+              cf,
+            ),
+          })),
+          month_totals: {
+            income: milliunitsToCurrency(asMilliunits(monthSummary.income)),
+            income_display: formatCurrency(
+              asMilliunits(monthSummary.income),
+              cf,
+            ),
+            budgeted: milliunitsToCurrency(asMilliunits(monthSummary.budgeted)),
+            budgeted_display: formatCurrency(
+              asMilliunits(monthSummary.budgeted),
+              cf,
+            ),
+            activity: milliunitsToCurrency(asMilliunits(monthSummary.activity)),
+            activity_display: formatCurrency(
+              asMilliunits(monthSummary.activity),
+              cf,
+            ),
+          },
           ready_to_assign: {
             amount: milliunitsToCurrency(asMilliunits(rta)),
             display: formatCurrency(asMilliunits(rta), cf),
             status: rtaStatus,
           },
           overspending: {
-            total_cash: milliunitsToCurrency(asMilliunits(totalCashOverspend)),
-            total_cash_display: formatCurrency(
-              asMilliunits(totalCashOverspend),
-              cf,
-            ),
-            total_credit: milliunitsToCurrency(
-              asMilliunits(totalCreditOverspend),
-            ),
-            total_credit_display: formatCurrency(
-              asMilliunits(totalCreditOverspend),
-              cf,
-            ),
-            categories: overspentCategories.map(
-              ({ _balance_milliunits: _, ...rest }) => rest,
-            ),
+            total: milliunitsToCurrency(asMilliunits(totalOverspend)),
+            total_display: formatCurrency(asMilliunits(totalOverspend), cf),
+            count: overspentCategories.length,
+            categories: overspentCategories,
           },
           underfunded_targets: {
             total: milliunitsToCurrency(asMilliunits(totalUnderfunded)),
@@ -392,9 +364,7 @@ export function registerHealthTools(
             count: underfundedCategories.length,
             top_underfunded: underfundedCategories.slice(0, 10),
           },
-          credit_card_gaps: creditCardGaps.map(
-            ({ _gap_milliunits: _, ...rest }) => rest,
-          ),
+          credit_card_gaps: creditCardGaps,
           uncategorized_count: uncategorizedCount,
           unapproved_count: unapprovedCount,
           age_of_money: monthSummary.age_of_money ?? null,

@@ -4,7 +4,6 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import { asMilliunits, formatCurrency } from "../ynab/format.js";
 
 const budgetIdSchema = z.object({
   budget_id: z
@@ -44,66 +43,6 @@ export function registerBudgetTools(
       } catch (error) {
         return errorToolResult(
           extractErrorMessage(error, "Failed to list budgets."),
-        );
-      }
-    },
-  );
-
-  server.registerTool(
-    "get_budget_summary",
-    {
-      title: "Get Budget Summary",
-      description:
-        "Get a high-level budget snapshot (net worth, current month totals, overspending, account totals).",
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: true,
-      },
-      inputSchema: budgetIdSchema,
-    },
-    async ({ budget_id: budgetId }) => {
-      try {
-        const [summary, settings] = await Promise.all([
-          context.ynabClient.getBudgetSummary(budgetId),
-          context.ynabClient.getBudgetSettings(budgetId),
-        ]);
-
-        return jsonToolResult({
-          ...summary,
-          net_worth_display: formatCurrency(
-            asMilliunits(summary.net_worth_milliunits),
-            settings.currency_format,
-          ),
-          income_display: formatCurrency(
-            asMilliunits(summary.income_milliunits),
-            settings.currency_format,
-          ),
-          budgeted_display: formatCurrency(
-            asMilliunits(summary.budgeted_milliunits),
-            settings.currency_format,
-          ),
-          activity_display: formatCurrency(
-            asMilliunits(summary.activity_milliunits),
-            settings.currency_format,
-          ),
-          to_be_budgeted_display: formatCurrency(
-            asMilliunits(summary.to_be_budgeted_milliunits),
-            settings.currency_format,
-          ),
-          account_summary_by_type: summary.account_summary_by_type.map(
-            (entry) => ({
-              ...entry,
-              total_balance_display: formatCurrency(
-                asMilliunits(entry.total_balance_milliunits),
-                settings.currency_format,
-              ),
-            }),
-          ),
-        });
-      } catch (error) {
-        return errorToolResult(
-          extractErrorMessage(error, "Failed to get budget summary."),
         );
       }
     },
