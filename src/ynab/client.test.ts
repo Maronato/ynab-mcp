@@ -2418,8 +2418,9 @@ describe("TTL expiration", () => {
         },
       });
 
+    // 2024-01 is a completed past month, so it uses the longer 24h TTL
     const first = await client.getMonthSummary("b", "2024-01-01");
-    vi.advanceTimersByTime(59 * 60 * 1000);
+    vi.advanceTimersByTime(23 * 60 * 60 * 1000);
     const second = await client.getMonthSummary("b", "2024-01-01");
 
     expect(mockApi.months.getPlanMonth).toHaveBeenCalledTimes(1);
@@ -2457,8 +2458,9 @@ describe("TTL expiration", () => {
         },
       });
 
+    // 2024-01 is a completed past month, so it uses the longer 24h TTL
     const first = await client.getMonthCategoryById("b", "2024-01-01", "c1");
-    vi.advanceTimersByTime(59 * 60 * 1000);
+    vi.advanceTimersByTime(23 * 60 * 60 * 1000);
     const second = await client.getMonthCategoryById("b", "2024-01-01", "c1");
 
     expect(mockApi.categories.getMonthCategoryById).toHaveBeenCalledTimes(1);

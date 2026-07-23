@@ -12,6 +12,24 @@ import { createYnabMcpServer } from "./server.js";
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
 
+function parseTtlSecondsEnv(
+  name: string,
+  value: string | undefined,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(
+      `Invalid ${name} value "${value}". Use a positive number of seconds.`,
+    );
+  }
+
+  return seconds * 1000;
+}
+
 function parseBooleanEnv(
   name: string,
   value: string | undefined,
@@ -47,12 +65,23 @@ async function main(): Promise<void> {
   const readOnly =
     parseBooleanEnv("YNAB_READ_ONLY", process.env.YNAB_READ_ONLY) ?? false;
 
+  const cacheTtlMs = parseTtlSecondsEnv(
+    "YNAB_CACHE_TTL",
+    process.env.YNAB_CACHE_TTL,
+  );
+  const pastMonthCacheTtlMs = parseTtlSecondsEnv(
+    "YNAB_PAST_MONTH_CACHE_TTL",
+    process.env.YNAB_PAST_MONTH_CACHE_TTL,
+  );
+
   const { server } = createYnabMcpServer({
     accessToken,
     endpointUrl,
     dataDirectory,
     version,
     readOnly,
+    cacheTtlMs,
+    pastMonthCacheTtlMs,
   });
 
   const transport = new StdioServerTransport();

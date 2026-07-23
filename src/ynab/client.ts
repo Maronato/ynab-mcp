@@ -171,7 +171,7 @@ class RateLimitTrackingApi extends ynab.API {
 export class YnabClient {
   private readonly api: ynab.API;
 
-  private readonly cache = new CacheManager();
+  private readonly cache: CacheManager;
 
   private resolvedLastUsedId: string | null = null;
 
@@ -184,10 +184,20 @@ export class YnabClient {
   constructor(
     accessToken: string,
     endpointUrl?: string,
-    options?: { readOnly?: boolean; timeoutMs?: number; maxRetries?: number },
+    options?: {
+      readOnly?: boolean;
+      timeoutMs?: number;
+      maxRetries?: number;
+      cacheTtlMs?: number;
+      pastMonthCacheTtlMs?: number;
+    },
   ) {
     this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.cache = new CacheManager({
+      ttlMs: options?.cacheTtlMs,
+      pastMonthTtlMs: options?.pastMonthCacheTtlMs,
+    });
     const rateLimiter = new RateLimiter();
     this.api = this.withRateLimitAndResilience(
       new RateLimitTrackingApi(accessToken, endpointUrl, rateLimiter),
@@ -427,7 +437,7 @@ export class YnabClient {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
     const cached = budgetCache.monthSummaries.get(month);
-    if (this.cache.isSimpleCacheValid(cached)) {
+    if (this.cache.isMonthCacheValid(cached, month)) {
       return cached.data;
     }
 
@@ -1078,7 +1088,7 @@ export class YnabClient {
     const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
     const cacheKey = `${month}:${categoryId}`;
     const cached = budgetCache.monthCategories.get(cacheKey);
-    if (this.cache.isSimpleCacheValid(cached)) {
+    if (this.cache.isMonthCacheValid(cached, month)) {
       return cached.data;
     }
 
