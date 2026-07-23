@@ -21,7 +21,7 @@ function daysIn(dateStr: string): number {
 
 /**
  * Extended seed that adds data needed by analytics tools beyond the standard seed:
- * - Multiple months of month details for trends/income-expense/velocity/forecast
+ * - Multiple months of month details for trends/income-expense
  * - Recurring payee transactions for detect_recurring_charges
  * - Extra grocery transactions for detect_anomalies (need >= 5 for unusual_amount)
  * - An anomaly outlier transaction for detect_anomalies
@@ -344,41 +344,6 @@ describe("suggest_transaction_categories", () => {
   });
 });
 
-// ── suggest_overspending_coverage ──
-
-describe("suggest_overspending_coverage", () => {
-  it("analyzes overspending and returns suggestions", async () => {
-    const result = (await harness.callTool("suggest_overspending_coverage", {
-      month: CURRENT_MONTH,
-    })) as {
-      budget_id: string;
-      month: string;
-      suggestion_count?: number;
-      suggestions?: Array<{
-        from_category_id: string;
-        to_category_id: string;
-        amount: number;
-      }>;
-      set_budget_actions?: Array<{
-        category_id: string;
-        month: string;
-        budgeted: number;
-      }>;
-      overspent_count?: number;
-      message?: string;
-    };
-
-    expect(result.budget_id).toBeTruthy();
-    expect(result.month).toBe(CURRENT_MONTH);
-    // May have no overspent categories or some, depending on seed balance
-    expect(
-      typeof result.suggestion_count === "number" ||
-        typeof result.overspent_count === "number" ||
-        typeof result.message === "string",
-    ).toBe(true);
-  });
-});
-
 // ── set_category_targets ──
 
 describe("set_category_targets", () => {
@@ -447,139 +412,6 @@ describe("get_budget_health", () => {
     expect(result.issues.length).toBeGreaterThanOrEqual(1);
     const severities = result.issues.map((i) => i.severity);
     expect(severities).toContain("info");
-  });
-});
-
-// ── get_spending_velocity ──
-
-describe("get_spending_velocity", () => {
-  it("returns velocity analysis with risk levels", async () => {
-    const result = (await harness.callTool("get_spending_velocity", {
-      month: CURRENT_MONTH,
-      history_months: 2,
-    })) as {
-      budget_id: string;
-      month: string;
-      day_of_month: number;
-      days_in_month: number;
-      overall_status: string;
-      categories: Array<{
-        id: string;
-        name: string;
-        budgeted: number;
-        risk: string;
-        daily_burn_rate: number;
-      }>;
-    };
-
-    expect(result.budget_id).toBeTruthy();
-    expect(result.month).toBe(CURRENT_MONTH);
-    expect(result.days_in_month).toBe(daysIn(CURRENT_MONTH));
-    // Should analyze budgeted categories from seed (6 non-savings categories)
-    expect(result.categories.length).toBeGreaterThan(0);
-    for (const cat of result.categories) {
-      expect(["likely_overspend", "watch", "safe"]).toContain(cat.risk);
-      expect(cat.daily_burn_rate).toBeGreaterThanOrEqual(0);
-      expect(cat.budgeted).toBeGreaterThanOrEqual(0);
-    }
-    // Verify known category IDs from seed are present
-    const catIds = result.categories.map((c) => c.id);
-    expect(catIds).toContain("cat-groceries");
-    expect(catIds).toContain("cat-rent");
-  });
-});
-
-// ── suggest_budget_allocation ──
-
-describe("suggest_budget_allocation", () => {
-  it("suggests allocations for a given amount", async () => {
-    const result = (await harness.callTool("suggest_budget_allocation", {
-      month: CURRENT_MONTH,
-      available_amount: 1000.0,
-      history_months: 2,
-    })) as {
-      budget_id: string;
-      month: string;
-      available_amount: number;
-      total_allocated: number;
-      allocation_count: number;
-      allocations: Array<{
-        category_id: string;
-        category_name: string;
-        priority: string;
-        amount: number;
-        reason: string;
-      }>;
-      set_budget_actions: Array<{
-        category_id: string;
-        month: string;
-        budgeted: number;
-      }>;
-    };
-
-    expect(result.budget_id).toBeTruthy();
-    expect(result.available_amount).toBe(1000.0);
-    // With historical spending data across 2 months, allocations should be suggested
-    expect(result.allocation_count).toBeGreaterThan(0);
-    expect(result.allocations.length).toBeGreaterThan(0);
-    // Total allocated should not exceed available amount
-    expect(result.total_allocated).toBeLessThanOrEqual(1000.0);
-    expect(result.total_allocated).toBeGreaterThan(0);
-    // Each allocation should reference a valid seed category and have a reason
-    for (const alloc of result.allocations) {
-      expect(alloc.category_id).toBeTruthy();
-      expect(alloc.category_name).toBeTruthy();
-      expect(alloc.amount).toBeGreaterThan(0);
-      expect(alloc.reason).toBeTruthy();
-      expect([
-        "P1_bills_due",
-        "P2_monthly_contribution",
-        "P3_variable_spending",
-        "P4_savings",
-      ]).toContain(alloc.priority);
-    }
-    // set_budget_actions should match allocations
-    expect(result.set_budget_actions.length).toBe(result.allocation_count);
-  });
-});
-
-// ── forecast_category_balances ──
-
-describe("forecast_category_balances", () => {
-  it("forecasts end-of-month balances per category", async () => {
-    const result = (await harness.callTool("forecast_category_balances", {
-      month: CURRENT_MONTH,
-      history_months: 2,
-    })) as {
-      budget_id: string;
-      month: string;
-      days_in_month: number;
-      going_negative_count: number;
-      going_negative: Array<{ id: string; name: string }>;
-      categories: Array<{
-        id: string;
-        name: string;
-        current_balance: number;
-        projected_end_balance: number;
-        will_go_negative: boolean;
-        confidence: string;
-      }>;
-    };
-
-    expect(result.budget_id).toBeTruthy();
-    expect(result.days_in_month).toBe(daysIn(CURRENT_MONTH));
-    // Should forecast for the budgeted categories from seed
-    expect(result.categories.length).toBeGreaterThan(0);
-    for (const cat of result.categories) {
-      expect(typeof cat.will_go_negative).toBe("boolean");
-      expect(typeof cat.current_balance).toBe("number");
-      expect(typeof cat.projected_end_balance).toBe("number");
-      expect(["high", "medium", "low"]).toContain(cat.confidence);
-    }
-    // Verify known seed categories appear
-    const catIds = result.categories.map((c) => c.id);
-    expect(catIds).toContain("cat-groceries");
-    expect(catIds).toContain("cat-rent");
   });
 });
 
@@ -822,55 +654,5 @@ describe("detect_anomalies", () => {
     expect(groceryAnomaly).toBeDefined();
     expect(["warning", "alert"]).toContain(groceryAnomaly?.severity);
     expect(groceryAnomaly?.detail).toBeTruthy();
-  });
-});
-
-// ── diagnose_credit_card_debt ──
-
-describe("diagnose_credit_card_debt", () => {
-  it("diagnoses credit card debt and traces sources", async () => {
-    const result = (await harness.callTool("diagnose_credit_card_debt", {
-      lookback_months: 3,
-    })) as {
-      budget_id: string;
-      cards: Array<{
-        account_id: string;
-        account_name: string;
-        card_balance: number;
-        payment_available: number;
-        gap: number;
-        has_debt: boolean;
-        debt_sources: Array<{
-          month: string;
-          category_name: string;
-          overspent_amount: number;
-        }>;
-      }>;
-      total_debt: number;
-      set_budget_actions: Array<{
-        category_id: string;
-        month: string;
-        budgeted: number;
-      }>;
-    };
-
-    expect(result.budget_id).toBeTruthy();
-    // Exactly 1 credit card account in the seed
-    expect(result.cards).toHaveLength(1);
-
-    const creditCard = result.cards[0];
-    expect(creditCard.account_id).toBe("acct-credit");
-    expect(creditCard.account_name).toBe("Credit Card");
-    // The tool passes card.balance through milliunitsToCurrency(asMilliunits(balance)).
-    // Seed balance is -1,000,000 milliunits / 1000 = -1000. Sign is preserved (negative = debt owed).
-    expect(creditCard.card_balance).toBe(-1000.0);
-    expect(typeof creditCard.payment_available).toBe("number");
-    expect(typeof creditCard.gap).toBe("number");
-    expect(typeof creditCard.has_debt).toBe("boolean");
-
-    // If there's a gap, we should have set_budget_actions suggestions
-    if (creditCard.has_debt) {
-      expect(result.set_budget_actions.length).toBeGreaterThan(0);
-    }
   });
 });

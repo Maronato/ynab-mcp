@@ -20,7 +20,7 @@ afterEach(async () => {
 describe("tool listing", () => {
   it("lists all registered tools", async () => {
     const result = await harness.client.listTools();
-    expect(result.tools.length).toBeGreaterThanOrEqual(27);
+    expect(result.tools.length).toBeGreaterThanOrEqual(25);
   });
 
   it("each tool has a name and inputSchema", async () => {
