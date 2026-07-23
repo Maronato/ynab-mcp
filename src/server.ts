@@ -17,6 +17,7 @@ export interface CreateServerOptions {
   readOnly?: boolean;
   cacheTtlMs?: number;
   pastMonthCacheTtlMs?: number;
+  undoHistoryLimit?: number;
 }
 
 export function createYnabMcpServer(options: CreateServerOptions): {
@@ -28,7 +29,10 @@ export function createYnabMcpServer(options: CreateServerOptions): {
     cacheTtlMs: options.cacheTtlMs,
     pastMonthCacheTtlMs: options.pastMonthCacheTtlMs,
   });
-  const undoStore = new UndoStore(options.dataDirectory);
+  const undoStore = new UndoStore(
+    options.dataDirectory,
+    options.undoHistoryLimit,
+  );
   const undoEngine = new UndoEngine(ynabClient, undoStore);
 
   const server = new McpServer(

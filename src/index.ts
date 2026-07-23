@@ -30,6 +30,24 @@ function parseTtlSecondsEnv(
   return seconds * 1000;
 }
 
+function parsePositiveIntEnv(
+  name: string,
+  value: string | undefined,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid ${name} value "${value}". Use a positive whole number.`,
+    );
+  }
+
+  return parsed;
+}
+
 function parseBooleanEnv(
   name: string,
   value: string | undefined,
@@ -73,6 +91,10 @@ async function main(): Promise<void> {
     "YNAB_PAST_MONTH_CACHE_TTL",
     process.env.YNAB_PAST_MONTH_CACHE_TTL,
   );
+  const undoHistoryLimit = parsePositiveIntEnv(
+    "YNAB_UNDO_HISTORY_LIMIT",
+    process.env.YNAB_UNDO_HISTORY_LIMIT,
+  );
 
   const { server } = createYnabMcpServer({
     accessToken,
@@ -82,6 +104,7 @@ async function main(): Promise<void> {
     readOnly,
     cacheTtlMs,
     pastMonthCacheTtlMs,
+    undoHistoryLimit,
   });
 
   const transport = new StdioServerTransport();

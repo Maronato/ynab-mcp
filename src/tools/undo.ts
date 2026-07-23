@@ -18,7 +18,7 @@ export function registerUndoTools(
       .number()
       .int()
       .min(1)
-      .max(200)
+      .max(500)
       .default(20)
       .describe("Maximum entries to return. Defaults to 20."),
     include_undone: z.boolean().default(false),

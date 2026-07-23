@@ -71,6 +71,7 @@ All configuration is done through environment variables.
 | `YNAB_READ_ONLY`            | Hide and disable all write operations (`true`/`false`/`1`/`0`)     | `false`       |
 | `YNAB_CACHE_TTL`            | Cache TTL in seconds for live data                                 | `3600`        |
 | `YNAB_PAST_MONTH_CACHE_TTL` | Cache TTL in seconds for completed past months                     | `86400`       |
+| `YNAB_UNDO_HISTORY_LIMIT`   | Undo entries kept per budget (oldest are dropped beyond this)      | `2000`        |
 
 ## Tools
 
@@ -172,7 +173,7 @@ Knowledge base resources for YNAB methodology. Workflow prompts reference these 
 
 **`budget_id`** — Most tools accept an optional `budget_id`. Omit it or pass `"last-used"` to target the most recently accessed budget.
 
-**Undo** — Every write operation records an undo entry. Use `list_undo_history` and `undo_operations` to review or revert changes.
+**Undo** — Every write operation records an undo entry. Use `list_undo_history` and `undo_operations` to review or revert changes. The most recent 2000 entries per budget are kept (tunable via `YNAB_UNDO_HISTORY_LIMIT`).
 
 **Read-only mode** — Set `YNAB_READ_ONLY=true` to hide and block all write operations. Useful for exploring your budget safely or restricting an MCP client to read-only access.
 

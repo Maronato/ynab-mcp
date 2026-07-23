@@ -25,7 +25,11 @@ export class UndoStore {
 
   private readonly budgetLocks = new Map<string, Promise<void>>();
 
-  constructor(dataDirectory: string, maxEntriesPerBudget = 200) {
+  // The history file is reparsed and rewritten whole on every write
+  // operation (up to three times per tool call, counting pending markers),
+  // so the cap is bounded by serialization latency rather than memory:
+  // ~1 KB per compact entry keeps a full 2000-entry file around 2 MB.
+  constructor(dataDirectory: string, maxEntriesPerBudget = 2000) {
     this.historyDirectory = join(dataDirectory, "history");
     this.maxEntriesPerBudget = maxEntriesPerBudget;
   }
@@ -239,7 +243,9 @@ export class UndoStore {
     await this.ensureHistoryDirectory();
     const filePath = this.getBudgetHistoryPath(budgetId);
     const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    const content = JSON.stringify(history, null, 2);
+    // Compact JSON: this file is machine-read only, and it is rewritten on
+    // every write operation, so pretty-printing would double the I/O.
+    const content = JSON.stringify(history);
 
     await writeFile(temporaryPath, content, "utf8");
     await rename(temporaryPath, filePath);
