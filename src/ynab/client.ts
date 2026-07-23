@@ -24,6 +24,11 @@ import type {
 } from "./types.js";
 
 /** Default timeout for individual YNAB API requests. */
+// Explicit floor for "all history" transaction fetches. The live API
+// defaults a missing since_date to one year ago (spec 1.85+), so omitting
+// the parameter must never be used to mean "everything".
+const FULL_HISTORY_SINCE_DATE = "2000-01-01";
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** Maximum number of retries for transient failures on read operations. */
@@ -1253,9 +1258,12 @@ export class YnabClient {
     budgetId: string,
     sinceDate: string,
   ): Promise<void> {
+    // Always pass an explicit since_date: the live API defaults a missing
+    // since_date to one year ago, which would silently truncate a "full
+    // history" fetch while the cache still claims full coverage.
     const response = await this.api.transactions.getTransactions(
       budgetId,
-      sinceDate || undefined,
+      sinceDate || FULL_HISTORY_SINCE_DATE,
     );
 
     this.cache.applyFullTransactionFetch(
@@ -1273,7 +1281,7 @@ export class YnabClient {
 
     const response = await this.api.transactions.getTransactions(
       budgetId,
-      txCache.coveredSinceDate || undefined,
+      txCache.coveredSinceDate || FULL_HISTORY_SINCE_DATE,
       undefined,
       txCache.serverKnowledge,
     );

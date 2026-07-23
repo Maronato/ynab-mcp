@@ -250,9 +250,11 @@ describe("default budget resolution", () => {
 
     await client.searchTransactions(undefined, {});
 
+    // A search without since_date fetches full history with an explicit
+    // early date (the live API defaults a missing since_date to 1 year ago)
     expect(mockApi.transactions.getTransactions).toHaveBeenCalledWith(
       "budget-b",
-      undefined,
+      "2000-01-01",
     );
   });
 });
@@ -2093,7 +2095,7 @@ describe("transaction cache window expansion", () => {
 
     expect(mockApi.transactions.getTransactions).toHaveBeenCalledWith(
       "b",
-      undefined,
+      "2000-01-01",
     );
   });
 });
