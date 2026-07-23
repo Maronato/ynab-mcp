@@ -9,12 +9,7 @@ import {
 } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import {
-  asMilliunits,
-  type CurrencyFormatLike,
-  formatCurrency,
-  milliunitsToCurrency,
-} from "../ynab/format.js";
+import { asMilliunits, milliunitsToCurrency } from "../ynab/format.js";
 
 const spendingTrendsSchema = z.object({
   budget_id: z
@@ -122,15 +117,8 @@ function computeMovingAverage(
   return result;
 }
 
-function formatMonthAmount(
-  milliunits: number,
-  currencyFormat?: CurrencyFormatLike,
-): { amount: number; amount_display: string } {
-  const m = asMilliunits(milliunits);
-  return {
-    amount: milliunitsToCurrency(m),
-    amount_display: formatCurrency(m, currencyFormat),
-  };
+function toCurrency(milliunits: number): number {
+  return milliunitsToCurrency(asMilliunits(milliunits));
 }
 
 export function registerTrendTools(
@@ -282,7 +270,7 @@ export function registerTrendTools(
                 currentMonthPartial && idx === monthKeys.length - 1;
               return {
                 month,
-                ...formatMonthAmount(amount, settings.currency_format),
+                amount: toCurrency(amount),
                 transaction_count: bucket?.count ?? 0,
                 moving_average_3m: milliunitsToCurrency(
                   asMilliunits(movingAvg[idx]),
@@ -291,15 +279,7 @@ export function registerTrendTools(
               };
             }),
             total: milliunitsToCurrency(asMilliunits(entity.total)),
-            total_display: formatCurrency(
-              asMilliunits(entity.total),
-              settings.currency_format,
-            ),
             average_monthly: milliunitsToCurrency(asMilliunits(avgMonthly)),
-            average_monthly_display: formatCurrency(
-              asMilliunits(avgMonthly),
-              settings.currency_format,
-            ),
             trend_direction: trend.direction,
             trend_percent_change: trend.percent_change,
           };
@@ -312,10 +292,6 @@ export function registerTrendTools(
           return {
             month,
             total: milliunitsToCurrency(asMilliunits(total)),
-            total_display: formatCurrency(
-              asMilliunits(total),
-              settings.currency_format,
-            ),
             ...(isPartial && { partial: true }),
           };
         });
@@ -339,6 +315,7 @@ export function registerTrendTools(
 
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
+          currency: settings.currency_format?.iso_code ?? null,
           period_start: sinceDate,
           period_end: untilDate,
           months: monthKeys,

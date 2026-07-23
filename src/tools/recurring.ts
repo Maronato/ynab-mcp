@@ -14,7 +14,6 @@ import {
   asCurrency,
   asMilliunits,
   currencyToMilliunits,
-  formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
 import type { ScheduledFrequency } from "../ynab/types.js";
@@ -63,13 +62,10 @@ interface DetectedSubscription {
   detected_frequency_label: string;
   occurrence_count: number;
   current_amount: number;
-  current_amount_display: string;
   previous_amount: number | null;
-  previous_amount_display: string | null;
   price_changed: boolean;
   price_change_percent: number | null;
   monthly_equivalent: number;
-  monthly_equivalent_display: string;
   last_charge_date: string;
   next_expected_date: string;
   is_overdue: boolean;
@@ -168,8 +164,6 @@ export function registerRecurringTools(
             context.ynabClient.getNameLookup(resolvedBudgetId),
             context.ynabClient.getBudgetSettings(resolvedBudgetId),
           ]);
-
-        const currencyFormat = settings.currency_format;
 
         // Step 4: Group transactions by payee_id (outflows only, skip transfers)
         const payeeGroups = new Map<string, PayeeTransactionGroup>();
@@ -305,26 +299,14 @@ export function registerRecurringTools(
             detected_frequency_label: frequencyLabel,
             occurrence_count: sortedAmounts.length,
             current_amount: milliunitsToCurrency(asMilliunits(absLast)),
-            current_amount_display: formatCurrency(
-              asMilliunits(absLast),
-              currencyFormat,
-            ),
             previous_amount:
               absPrev !== null
                 ? milliunitsToCurrency(asMilliunits(absPrev))
-                : null,
-            previous_amount_display:
-              absPrev !== null
-                ? formatCurrency(asMilliunits(absPrev), currencyFormat)
                 : null,
             price_changed: priceChanged,
             price_change_percent: priceChangePercent,
             monthly_equivalent: milliunitsToCurrency(
               asMilliunits(monthlyEquivalent),
-            ),
-            monthly_equivalent_display: formatCurrency(
-              asMilliunits(monthlyEquivalent),
-              currencyFormat,
             ),
             last_charge_date: lastChargeDate,
             next_expected_date: nextExpectedDate,
@@ -375,14 +357,11 @@ export function registerRecurringTools(
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
+          currency: settings.currency_format?.iso_code ?? null,
           subscription_count: subscriptions.length,
           unmatched_count: unmatchedCount,
           total_monthly_cost: milliunitsToCurrency(
             asMilliunits(totalMonthlyCostMilliunits),
-          ),
-          total_monthly_cost_display: formatCurrency(
-            asMilliunits(totalMonthlyCostMilliunits),
-            currencyFormat,
           ),
           subscriptions,
           create_scheduled_actions: createScheduledActions,

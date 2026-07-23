@@ -2071,6 +2071,7 @@ describe("transaction cache window expansion", () => {
       "b",
       "2024-01-01",
       undefined,
+      undefined,
       10,
     );
 
@@ -2328,6 +2329,7 @@ describe("TTL expiration", () => {
       2,
       "b",
       "2024-01-01",
+      undefined,
       undefined,
       5,
     );

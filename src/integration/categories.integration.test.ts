@@ -129,7 +129,6 @@ describe("get_monthly_budget", () => {
     })) as {
       month: string;
       income: number;
-      income_display: string;
       budgeted: number;
       activity: number;
       to_be_budgeted: number;
@@ -141,7 +140,6 @@ describe("get_monthly_budget", () => {
           id: string;
           name: string;
           budgeted: number;
-          budgeted_display: string;
           activity: number;
           balance: number;
           overspent: boolean;
@@ -152,7 +150,6 @@ describe("get_monthly_budget", () => {
     expect(result.month).toBe(CURRENT_MONTH);
     // Seed values: income=6000000mu => 6000.0, budgeted=3160000mu => 3160.0
     expect(result.income).toBe(6000.0);
-    expect(result.income_display).toBe("$6,000.00");
     expect(result.budgeted).toBe(3160.0);
     expect(result.activity).toBe(-3655.0);
     expect(result.to_be_budgeted).toBe(2840.0);

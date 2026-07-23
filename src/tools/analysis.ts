@@ -5,12 +5,7 @@ import type { AppContext } from "../context.js";
 import { dayOfWeek, mondayOfWeek, parseDateParts } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import {
-  asMilliunits,
-  type CurrencyFormatLike,
-  formatCurrency,
-  milliunitsToCurrency,
-} from "../ynab/format.js";
+import { asMilliunits, milliunitsToCurrency } from "../ynab/format.js";
 
 const timeGranularities = [
   "daily",
@@ -326,15 +321,12 @@ export function registerAnalysisTools(
         const topN = input.top_n ?? 10;
         const result: Record<string, unknown> = {
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
+          currency: settings.currency_format?.iso_code ?? null,
           since_date: input.since_date,
           until_date: input.until_date ?? null,
           total_spending_milliunits: totalSpendingMilliunits,
           total_spending: milliunitsToCurrency(
             asMilliunits(totalSpendingMilliunits),
-          ),
-          total_spending_display: formatCurrency(
-            asMilliunits(totalSpendingMilliunits),
-            settings.currency_format,
           ),
           transaction_count: transactionCount,
         };
@@ -347,16 +339,13 @@ export function registerAnalysisTools(
           result.by_category = entries.map((entry) => {
             const catInfo = lookups.categoryById.get(entry.id);
             return {
-              ...formatAggregateEntry(
-                {
-                  ...entry,
-                  name:
-                    entry.id === "uncategorized"
-                      ? "Uncategorized"
-                      : (catInfo?.name ?? "Unknown Category"),
-                },
-                settings.currency_format,
-              ),
+              ...formatAggregateEntry({
+                ...entry,
+                name:
+                  entry.id === "uncategorized"
+                    ? "Uncategorized"
+                    : (catInfo?.name ?? "Unknown Category"),
+              }),
               category_group_id: catInfo?.group_id ?? null,
               category_group_name: catInfo?.group_name ?? null,
             };
@@ -375,9 +364,7 @@ export function registerAnalysisTools(
                 : (lookups.payeeById.get(entry.id) ?? "Unknown Payee");
           }
 
-          result.by_payee = entries.map((entry) =>
-            formatAggregateEntry(entry, settings.currency_format),
-          );
+          result.by_payee = entries.map((entry) => formatAggregateEntry(entry));
         }
 
         if (bucketMap && timeGranularity) {
@@ -385,7 +372,6 @@ export function registerAnalysisTools(
             bucketMap,
             timeGranularity,
             totalSpendingMilliunits,
-            settings.currency_format,
           );
         }
 
@@ -403,7 +389,6 @@ function buildTimeBuckets(
   bucketMap: Map<string, TimeBucket>,
   granularity: TimeGranularity,
   grandTotal: number,
-  currencyFormat?: CurrencyFormatLike,
 ): Record<string, unknown> {
   const sortedBuckets = [...bucketMap.values()].sort((a, b) =>
     a.key.localeCompare(b.key),
@@ -425,7 +410,6 @@ function buildTimeBuckets(
       key: bucket.key,
       label: bucket.label,
       total: milliunitsToCurrency(asMilliunits(bucket.total)),
-      total_display: formatCurrency(asMilliunits(bucket.total), currencyFormat),
       transaction_count: bucket.count,
       percentage,
     };
@@ -450,44 +434,27 @@ function buildTimeBuckets(
       highest_bucket: highestBucket
         ? {
             label: highestBucket.label,
-            total_display: highestBucket.total_display,
             percentage: highestBucket.percentage,
           }
         : null,
       lowest_bucket: lowestBucket
         ? {
             label: lowestBucket.label,
-            total_display: lowestBucket.total_display,
             percentage: lowestBucket.percentage,
           }
         : null,
       average_per_bucket: milliunitsToCurrency(asMilliunits(avgPerBucket)),
-      average_per_bucket_display: formatCurrency(
-        asMilliunits(avgPerBucket),
-        currencyFormat,
-      ),
       std_deviation: milliunitsToCurrency(asMilliunits(stdDev)),
-      std_deviation_display: formatCurrency(
-        asMilliunits(stdDev),
-        currencyFormat,
-      ),
     },
   };
 }
 
-function formatAggregateEntry(
-  entry: AggregateEntry,
-  currencyFormat?: CurrencyFormatLike,
-): Record<string, unknown> {
+function formatAggregateEntry(entry: AggregateEntry): Record<string, unknown> {
   return {
     id: entry.id,
     name: entry.name,
     total_milliunits: entry.total_milliunits,
     total: milliunitsToCurrency(asMilliunits(entry.total_milliunits)),
-    total_display: formatCurrency(
-      asMilliunits(entry.total_milliunits),
-      currencyFormat,
-    ),
     count: entry.count,
   };
 }

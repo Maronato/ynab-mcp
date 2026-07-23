@@ -41,7 +41,6 @@ describe("search_transactions", () => {
         transactions: Array<{
           id: string;
           amount: number;
-          amount_display: string;
         }>;
       }>;
     };
@@ -53,11 +52,10 @@ describe("search_transactions", () => {
     expect(rs.count).toBe(rs.transactions.length);
     expect(rs.count).toBeGreaterThanOrEqual(10);
 
-    // Every returned transaction should have amount and amount_display
+    // Every returned transaction should have a currency-unit amount
     for (const tx of rs.transactions) {
       expect(tx).toHaveProperty("id");
       expect(typeof tx.amount).toBe("number");
-      expect(typeof tx.amount_display).toBe("string");
     }
   });
 
@@ -176,7 +174,6 @@ describe("create_transactions", () => {
       transactions: Array<{
         id: string;
         amount: number;
-        amount_display: string;
       }>;
       undo_history_ids: string[];
     };
@@ -185,7 +182,6 @@ describe("create_transactions", () => {
     expect(createResult.transactions).toHaveLength(1);
     expect(createResult.transactions[0]).toHaveProperty("id");
     expect(createResult.transactions[0].amount).toBe(-25.5);
-    expect(createResult.transactions[0].amount_display).toBe("-$25.50");
 
     // Search to verify it appears — count should have increased by 1
     const after = (await harness.callTool("search_transactions", {
@@ -230,11 +226,9 @@ describe("create_transactions", () => {
       created_count: number;
       transactions: Array<{
         amount: number;
-        amount_display: string;
         is_split: boolean;
         subtransactions: Array<{
           amount: number;
-          amount_display: string;
           memo: string;
         }>;
       }>;
@@ -244,7 +238,6 @@ describe("create_transactions", () => {
     const tx = result.transactions[0];
     expect(tx.is_split).toBe(true);
     expect(tx.amount).toBe(-100.0);
-    expect(tx.amount_display).toBe("-$100.00");
     expect(tx.subtransactions).toHaveLength(2);
     // Verify sub amounts are in currency units
     const subAmounts = tx.subtransactions
@@ -285,7 +278,6 @@ describe("create_transactions", () => {
         id: string;
         date: string;
         amount: number;
-        amount_display: string;
         account_name: string;
         category_name: string;
         is_split: boolean;
@@ -297,7 +289,6 @@ describe("create_transactions", () => {
     expect(tx.date).toBe(futureDateStr(1, 4));
     // Tool input is currency units (-42.99), output should also be currency units
     expect(tx.amount).toBe(-42.99);
-    expect(tx.amount_display).toBe("-$42.99");
     expect(tx.account_name).toBe("Checking");
     expect(tx.category_name).toBe("Groceries");
     expect(tx.is_split).toBe(false);
@@ -335,7 +326,6 @@ describe("update_transactions", () => {
         transaction: {
           memo: string;
           amount: number;
-          amount_display: string;
         };
       }>;
       undo_history_ids: string[];
@@ -344,7 +334,6 @@ describe("update_transactions", () => {
     expect(updateResult.results[0].status).toBe("updated");
     expect(updateResult.results[0].transaction.memo).toBe("Updated memo");
     expect(updateResult.results[0].transaction.amount).toBe(-45.0);
-    expect(updateResult.results[0].transaction.amount_display).toBe("-$45.00");
 
     // Verify via search — original memo gone, updated memo present
     const searchOld = (await harness.callTool("search_transactions", {

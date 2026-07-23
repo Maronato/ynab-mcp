@@ -188,13 +188,10 @@ describe("get_targets", () => {
     expect(cat.target_type).toBeNull();
     expect(cat.target_needs_whole_amount).toBeNull();
     expect(cat.target_amount).toBeNull();
-    expect(cat.target_amount_display).toBeNull();
     expect(cat.target_date).toBeNull();
     expect(cat.target_months_to_budget).toBeNull();
     expect(cat.target_underfunded).toBeNull();
-    expect(cat.target_underfunded_display).toBeNull();
     expect(cat.target_overall_funded).toBeNull();
-    expect(cat.target_overall_funded_display).toBeNull();
     expect(cat.target_percentage_complete).toBeNull();
   });
 

@@ -48,7 +48,6 @@ interface AnomalyEntry {
   date: string;
   payee_name: string | null;
   amount: number;
-  amount_display: string;
   category_name: string | null;
   anomaly_type: AnomalyType;
   severity: Severity;
@@ -212,10 +211,6 @@ export function registerAnomalyTools(
                     date: tx.date,
                     payee_name: payeeName,
                     amount: milliunitsToCurrency(asMilliunits(tx.amount)),
-                    amount_display: formatCurrency(
-                      asMilliunits(tx.amount),
-                      currencyFormat,
-                    ),
                     category_name: catInfo?.name ?? null,
                     anomaly_type: "unusual_amount",
                     severity,
@@ -263,10 +258,6 @@ export function registerAnomalyTools(
                   date: tx.date,
                   payee_name: payeeName,
                   amount: milliunitsToCurrency(asMilliunits(tx.amount)),
-                  amount_display: formatCurrency(
-                    asMilliunits(tx.amount),
-                    currencyFormat,
-                  ),
                   category_name: catInfo?.name ?? null,
                   anomaly_type: "new_payee_large",
                   severity: "warning",
@@ -310,10 +301,6 @@ export function registerAnomalyTools(
                     date: tx.date,
                     payee_name: payeeName,
                     amount: milliunitsToCurrency(asMilliunits(tx.amount)),
-                    amount_display: formatCurrency(
-                      asMilliunits(tx.amount),
-                      currencyFormat,
-                    ),
                     category_name: catInfo?.name ?? null,
                     anomaly_type: "potential_duplicate",
                     severity: "info",

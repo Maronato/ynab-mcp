@@ -12,9 +12,7 @@ import { extractErrorMessage } from "../ynab/errors.js";
 import {
   asCurrency,
   asMilliunits,
-  type CurrencyFormatLike,
   currencyToMilliunits,
-  formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
 
@@ -32,15 +30,8 @@ const incomeExpenseSchema = z.object({
     .describe("Number of months to analyze (2-12)."),
 });
 
-function formatAmount(
-  milliunits: number,
-  currencyFormat?: CurrencyFormatLike,
-): { value: number; display: string } {
-  const m = asMilliunits(milliunits);
-  return {
-    value: milliunitsToCurrency(m),
-    display: formatCurrency(m, currencyFormat),
-  };
+function toCurrency(milliunits: number): number {
+  return milliunitsToCurrency(asMilliunits(milliunits));
 }
 
 export function registerIncomeExpenseTools(
@@ -71,7 +62,6 @@ export function registerIncomeExpenseTools(
         const settings = await context.ynabClient.getBudgetSettings(
           input.budget_id,
         );
-        const cf = settings.currency_format;
 
         // Fetch all month summaries in parallel
         const monthSummaries = await Promise.all(
@@ -98,18 +88,11 @@ export function registerIncomeExpenseTools(
           const savingsRate =
             income > 0 ? Math.round((net / income) * 10000) / 100 : 0;
 
-          const incFmt = formatAmount(income, cf);
-          const expFmt = formatAmount(expenses, cf);
-          const netFmt = formatAmount(net, cf);
-
           return {
             month: monthKeys[idx],
-            income: incFmt.value,
-            income_display: incFmt.display,
-            expenses: expFmt.value,
-            expenses_display: expFmt.display,
-            net: netFmt.value,
-            net_display: netFmt.display,
+            income: toCurrency(income),
+            expenses: toCurrency(expenses),
+            net: toCurrency(net),
             savings_rate: savingsRate,
             ...(currentMonthPartial &&
               idx === monthSummaries.length - 1 && { partial: true }),
@@ -144,10 +127,6 @@ export function registerIncomeExpenseTools(
                 ((totalIncome - totalExpenses) / totalIncome) * 10000,
               ) / 100
             : 0;
-
-        const avgIncomeFmt = formatAmount(avgIncome, cf);
-        const avgExpensesFmt = formatAmount(avgExpenses, cf);
-        const avgNetFmt = formatAmount(avgNet, cf);
 
         // Compute trend: recent months avg savings rate vs prior months,
         // over complete months only
@@ -202,15 +181,13 @@ export function registerIncomeExpenseTools(
 
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
+          currency: settings.currency_format?.iso_code ?? null,
           current_month_partial: currentMonthPartial,
           months,
           averages: {
-            avg_income: avgIncomeFmt.value,
-            avg_income_display: avgIncomeFmt.display,
-            avg_expenses: avgExpensesFmt.value,
-            avg_expenses_display: avgExpensesFmt.display,
-            avg_net: avgNetFmt.value,
-            avg_net_display: avgNetFmt.display,
+            avg_income: toCurrency(avgIncome),
+            avg_expenses: toCurrency(avgExpenses),
+            avg_net: toCurrency(avgNet),
             avg_savings_rate: avgSavingsRate,
           },
           trend: {

@@ -5,11 +5,7 @@ import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { recordUndoAndGetIds } from "../shared/undo-helpers.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import {
-  asMilliunits,
-  formatCurrency,
-  milliunitsToCurrency,
-} from "../ynab/format.js";
+import { asMilliunits, milliunitsToCurrency } from "../ynab/format.js";
 
 const listCategoriesSchema = z.object({
   budget_id: z
@@ -156,6 +152,7 @@ export function registerCategoryTools(
         ]);
 
         return jsonToolResult({
+          currency: settings.currency_format?.iso_code ?? null,
           month: input.month ?? "current",
           groups: groups.map((group) => ({
             id: group.id,
@@ -175,14 +172,6 @@ export function registerCategoryTools(
                 category.goal_target !== undefined
                   ? milliunitsToCurrency(asMilliunits(category.goal_target))
                   : null,
-              target_amount_display:
-                category.goal_target !== null &&
-                category.goal_target !== undefined
-                  ? formatCurrency(
-                      asMilliunits(category.goal_target),
-                      settings.currency_format,
-                    )
-                  : null,
               target_date: category.goal_target_date ?? null,
               target_months_to_budget: category.goal_months_to_budget ?? null,
               target_underfunded:
@@ -192,27 +181,11 @@ export function registerCategoryTools(
                       asMilliunits(category.goal_under_funded),
                     )
                   : null,
-              target_underfunded_display:
-                category.goal_under_funded !== null &&
-                category.goal_under_funded !== undefined
-                  ? formatCurrency(
-                      asMilliunits(category.goal_under_funded),
-                      settings.currency_format,
-                    )
-                  : null,
               target_overall_funded:
                 category.goal_overall_funded !== null &&
                 category.goal_overall_funded !== undefined
                   ? milliunitsToCurrency(
                       asMilliunits(category.goal_overall_funded),
-                    )
-                  : null,
-              target_overall_funded_display:
-                category.goal_overall_funded !== null &&
-                category.goal_overall_funded !== undefined
-                  ? formatCurrency(
-                      asMilliunits(category.goal_overall_funded),
-                      settings.currency_format,
                     )
                   : null,
               target_percentage_complete:
@@ -222,14 +195,6 @@ export function registerCategoryTools(
                 category.goal_overall_left !== undefined
                   ? milliunitsToCurrency(
                       asMilliunits(category.goal_overall_left),
-                    )
-                  : null,
-              target_overall_left_display:
-                category.goal_overall_left !== null &&
-                category.goal_overall_left !== undefined
-                  ? formatCurrency(
-                      asMilliunits(category.goal_overall_left),
-                      settings.currency_format,
                     )
                   : null,
               target_day: category.goal_day ?? null,
@@ -278,28 +243,13 @@ export function registerCategoryTools(
         );
 
         return jsonToolResult({
+          currency: settings.currency_format?.iso_code ?? null,
           month: month.month,
           income: milliunitsToCurrency(asMilliunits(month.income)),
-          income_display: formatCurrency(
-            asMilliunits(month.income),
-            settings.currency_format,
-          ),
           budgeted: milliunitsToCurrency(asMilliunits(month.budgeted)),
-          budgeted_display: formatCurrency(
-            asMilliunits(month.budgeted),
-            settings.currency_format,
-          ),
           activity: milliunitsToCurrency(asMilliunits(month.activity)),
-          activity_display: formatCurrency(
-            asMilliunits(month.activity),
-            settings.currency_format,
-          ),
           to_be_budgeted: milliunitsToCurrency(
             asMilliunits(month.to_be_budgeted),
-          ),
-          to_be_budgeted_display: formatCurrency(
-            asMilliunits(month.to_be_budgeted),
-            settings.currency_format,
           ),
           age_of_money: month.age_of_money ?? null,
           groups: categoryTree.map((group) => ({
@@ -318,20 +268,8 @@ export function registerCategoryTools(
                 category_group_name: group.name,
                 hidden: treeCat.hidden,
                 budgeted: milliunitsToCurrency(asMilliunits(budgeted)),
-                budgeted_display: formatCurrency(
-                  asMilliunits(budgeted),
-                  settings.currency_format,
-                ),
                 activity: milliunitsToCurrency(asMilliunits(activity)),
-                activity_display: formatCurrency(
-                  asMilliunits(activity),
-                  settings.currency_format,
-                ),
                 balance: milliunitsToCurrency(asMilliunits(balance)),
-                balance_display: formatCurrency(
-                  asMilliunits(balance),
-                  settings.currency_format,
-                ),
                 overspent: balance < 0,
               };
             }),

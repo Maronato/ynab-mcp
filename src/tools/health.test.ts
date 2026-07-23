@@ -91,7 +91,7 @@ describe("get_budget_health", () => {
       expect(result).toHaveProperty("issues");
     });
 
-    it("returns ready_to_assign with amount, display, and status", async () => {
+    it("returns ready_to_assign with amount and status", async () => {
       ctx.ynabClient.getMonthSummary.mockResolvedValue({
         to_be_budgeted: 150000,
         age_of_money: 30,
@@ -100,7 +100,6 @@ describe("get_budget_health", () => {
       const result = parseResult(await handler({ month: "2024-06-01" }));
 
       expect(result.ready_to_assign.amount).toBe(150);
-      expect(result.ready_to_assign.display).toBe("$150.00");
       expect(result.ready_to_assign.status).toBe("positive");
     });
   });

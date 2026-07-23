@@ -382,9 +382,7 @@ describe("get_spending_analysis", () => {
       );
 
       expect(result.by_time.insights.highest_bucket.label).toBe("2024-03-15");
-      expect(result.by_time.insights.highest_bucket.total_display).toBe(
-        "$80.00",
-      );
+      expect(result.by_time.insights.highest_bucket.label).toBe("2024-03-15");
       // 80 / 120 = 66.67%
       expect(result.by_time.insights.highest_bucket.percentage).toBeCloseTo(
         66.67,
@@ -392,9 +390,7 @@ describe("get_spending_analysis", () => {
       );
 
       expect(result.by_time.insights.lowest_bucket.label).toBe("2024-03-05");
-      expect(result.by_time.insights.lowest_bucket.total_display).toBe(
-        "$10.00",
-      );
+      expect(result.by_time.insights.lowest_bucket.label).toBe("2024-03-05");
       // 10 / 120 = 8.33%
       expect(result.by_time.insights.lowest_bucket.percentage).toBeCloseTo(
         8.33,

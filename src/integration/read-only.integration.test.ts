@@ -139,7 +139,7 @@ describe("read operations succeed in read-only mode", () => {
     })) as {
       result_sets: Array<{
         count: number;
-        transactions: Array<{ amount: number; amount_display: string }>;
+        transactions: Array<{ amount: number }>;
       }>;
     };
 
@@ -147,7 +147,6 @@ describe("read operations succeed in read-only mode", () => {
     // Verify returned transactions have proper formatting
     for (const tx of result.result_sets[0].transactions) {
       expect(typeof tx.amount).toBe("number");
-      expect(typeof tx.amount_display).toBe("string");
     }
   });
 

@@ -6,7 +6,9 @@ import { currentMonthString, endOfMonthString } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
+  asCurrency,
   asMilliunits,
+  currencyToMilliunits,
   formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
@@ -132,14 +134,12 @@ export function registerHealthTools(
           name: string;
           group_name: string;
           balance: number;
-          balance_display: string;
         }> = [];
         const underfundedCategories: Array<{
           id: string;
           name: string;
           group_name: string;
           underfunded: number;
-          underfunded_display: string;
           target_type: string | null;
         }> = [];
 
@@ -158,7 +158,6 @@ export function registerHealthTools(
                 name: cat.name,
                 group_name: group.name,
                 balance: milliunitsToCurrency(asMilliunits(cat.balance)),
-                balance_display: formatCurrency(asMilliunits(cat.balance), cf),
               });
               totalOverspend += Math.abs(cat.balance);
             }
@@ -175,10 +174,6 @@ export function registerHealthTools(
                 underfunded: milliunitsToCurrency(
                   asMilliunits(cat.goal_under_funded),
                 ),
-                underfunded_display: formatCurrency(
-                  asMilliunits(cat.goal_under_funded),
-                  cf,
-                ),
                 target_type: cat.goal_type ?? null,
               });
               totalUnderfunded += cat.goal_under_funded;
@@ -191,11 +186,8 @@ export function registerHealthTools(
           account_id: string;
           account_name: string;
           account_balance: number;
-          account_balance_display: string;
           payment_available: number;
-          payment_available_display: string;
           gap: number;
-          gap_display: string;
         }> = [];
 
         for (const account of creditCardAccounts) {
@@ -213,17 +205,8 @@ export function registerHealthTools(
               account_balance: milliunitsToCurrency(
                 asMilliunits(account.balance),
               ),
-              account_balance_display: formatCurrency(
-                asMilliunits(account.balance),
-                cf,
-              ),
               payment_available: milliunitsToCurrency(asMilliunits(available)),
-              payment_available_display: formatCurrency(
-                asMilliunits(available),
-                cf,
-              ),
               gap: milliunitsToCurrency(asMilliunits(gap)),
-              gap_display: formatCurrency(asMilliunits(gap), cf),
             });
           }
         }
@@ -270,7 +253,11 @@ export function registerHealthTools(
         for (const gap of creditCardGaps) {
           issues.push({
             severity: "warning",
-            message: `Credit card "${gap.account_name}" payment gap: owed ${gap.account_balance_display} but only ${gap.payment_available_display} available (gap: ${gap.gap_display}).`,
+            message:
+              `Credit card "${gap.account_name}" payment gap: owed ` +
+              `${formatCurrency(currencyToMilliunits(asCurrency(Math.abs(gap.account_balance))), cf)} but only ` +
+              `${formatCurrency(currencyToMilliunits(asCurrency(gap.payment_available)), cf)} available (gap: ` +
+              `${formatCurrency(currencyToMilliunits(asCurrency(gap.gap)), cf)}).`,
           });
         }
 
@@ -318,7 +305,6 @@ export function registerHealthTools(
           month,
           net_worth: {
             amount: milliunitsToCurrency(asMilliunits(netWorth)),
-            display: formatCurrency(asMilliunits(netWorth), cf),
           },
           accounts_by_type: [...accountsByType.values()].map((entry) => ({
             type: entry.type,
@@ -326,42 +312,23 @@ export function registerHealthTools(
             total_balance: milliunitsToCurrency(
               asMilliunits(entry.total_balance),
             ),
-            total_balance_display: formatCurrency(
-              asMilliunits(entry.total_balance),
-              cf,
-            ),
           })),
           month_totals: {
             income: milliunitsToCurrency(asMilliunits(monthSummary.income)),
-            income_display: formatCurrency(
-              asMilliunits(monthSummary.income),
-              cf,
-            ),
             budgeted: milliunitsToCurrency(asMilliunits(monthSummary.budgeted)),
-            budgeted_display: formatCurrency(
-              asMilliunits(monthSummary.budgeted),
-              cf,
-            ),
             activity: milliunitsToCurrency(asMilliunits(monthSummary.activity)),
-            activity_display: formatCurrency(
-              asMilliunits(monthSummary.activity),
-              cf,
-            ),
           },
           ready_to_assign: {
             amount: milliunitsToCurrency(asMilliunits(rta)),
-            display: formatCurrency(asMilliunits(rta), cf),
             status: rtaStatus,
           },
           overspending: {
             total: milliunitsToCurrency(asMilliunits(totalOverspend)),
-            total_display: formatCurrency(asMilliunits(totalOverspend), cf),
             count: overspentCategories.length,
             categories: overspentCategories,
           },
           underfunded_targets: {
             total: milliunitsToCurrency(asMilliunits(totalUnderfunded)),
-            total_display: formatCurrency(asMilliunits(totalUnderfunded), cf),
             count: underfundedCategories.length,
             top_underfunded: underfundedCategories.slice(0, 10),
           },

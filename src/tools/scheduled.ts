@@ -162,12 +162,12 @@ export function registerScheduledTransactionTools(
 
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
+          currency: settings.currency_format?.iso_code ?? null,
           count: transactions.length,
           transactions: transactions.map((transaction) =>
             formatScheduledTransactionForOutput(
               { ...transaction, amount: asMilliunits(transaction.amount) },
               lookups,
-              settings.currency_format,
             ),
           ),
         });
@@ -237,7 +237,6 @@ export function registerScheduledTransactionTools(
               const formatted = formatScheduledTransactionForOutput(
                 { ...created, amount: asMilliunits(created.amount) },
                 lookups,
-                settings.currency_format,
               );
 
               createdTransactions.push(formatted);
@@ -277,6 +276,7 @@ export function registerScheduledTransactionTools(
 
           return jsonToolResult({
             budget_id: resolvedBudgetId,
+            currency: settings.currency_format?.iso_code ?? null,
             created_count: createdTransactions.length,
             results,
             transactions: createdTransactions,
@@ -370,7 +370,6 @@ export function registerScheduledTransactionTools(
                 transaction: formatScheduledTransactionForOutput(
                   { ...updated, amount: asMilliunits(updated.amount) },
                   lookups,
-                  settings.currency_format,
                 ),
               });
 
@@ -405,6 +404,7 @@ export function registerScheduledTransactionTools(
 
           return jsonToolResult({
             budget_id: resolvedBudgetId,
+            currency: settings.currency_format?.iso_code ?? null,
             results,
             undo_history_ids: undoHistoryIds,
           });

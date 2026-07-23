@@ -41,7 +41,6 @@ describe("scheduled transactions CRUD", () => {
       transactions: Array<{
         id: string;
         amount: number;
-        amount_display: string;
         frequency: string;
         category_name: string;
       }>;
@@ -51,7 +50,6 @@ describe("scheduled transactions CRUD", () => {
     expect(created.created_count).toBe(1);
     expect(created.transactions).toHaveLength(1);
     expect(created.transactions[0].amount).toBe(-100.0);
-    expect(created.transactions[0].amount_display).toBe("-$100.00");
     expect(created.transactions[0].frequency).toBe("monthly");
     expect(created.transactions[0].category_name).toBe("Rent/Mortgage");
     expect(created.undo_history_ids).toHaveLength(1);
@@ -69,14 +67,13 @@ describe("scheduled transactions CRUD", () => {
     })) as {
       results: Array<{
         status: string;
-        transaction?: { amount: number; amount_display: string };
+        transaction?: { amount: number };
       }>;
       undo_history_ids: string[];
     };
 
     expect(updated.results[0].status).toBe("updated");
     expect(updated.results[0].transaction?.amount).toBe(-120.0);
-    expect(updated.results[0].transaction?.amount_display).toBe("-$120.00");
     expect(updated.undo_history_ids).toHaveLength(1);
 
     // Delete

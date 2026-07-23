@@ -1283,6 +1283,7 @@ export class YnabClient {
       budgetId,
       txCache.coveredSinceDate || FULL_HISTORY_SINCE_DATE,
       undefined,
+      undefined,
       txCache.serverKnowledge,
     );
 
