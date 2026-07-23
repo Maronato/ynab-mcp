@@ -7,7 +7,7 @@ import {
   createMockTransaction,
 } from "../test-utils.js";
 import { asMilliunits } from "../ynab/format.js";
-import { registerBreakdownTools } from "./breakdown.js";
+import { registerAnalysisTools } from "./analysis.js";
 
 type ToolHandler = (input: Record<string, unknown>) => Promise<{
   content: Array<{ text: string }>;
@@ -46,11 +46,11 @@ function setupLookups() {
 
 beforeEach(() => {
   ctx = createMockContext();
-  const tools = captureToolHandlers(registerBreakdownTools, ctx);
-  handler = tools.get_spending_breakdown;
+  const tools = captureToolHandlers(registerAnalysisTools, ctx);
+  handler = tools.get_spending_analysis;
 });
 
-describe("get_spending_breakdown", () => {
+describe("get_spending_analysis", () => {
   describe("daily granularity", () => {
     it("groups transactions into daily buckets with correct totals", async () => {
       setupLookups();
@@ -84,23 +84,23 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
-      expect(result.bucket_count).toBe(2);
+      expect(result.by_time.bucket_count).toBe(2);
       expect(result.transaction_count).toBe(3);
       // Total: 25 + 15 + 40 = $80
       expect(result.total_spending).toBe(80);
 
-      const march10 = result.buckets.find(
+      const march10 = result.by_time.buckets.find(
         (b: { key: string }) => b.key === "2024-03-10",
       );
       expect(march10.total).toBe(40); // 25 + 15
       expect(march10.transaction_count).toBe(2);
       expect(march10.percentage).toBe(50);
 
-      const march12 = result.buckets.find(
+      const march12 = result.by_time.buckets.find(
         (b: { key: string }) => b.key === "2024-03-12",
       );
       expect(march12.total).toBe(40);
@@ -143,20 +143,20 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "weekly",
+          time_granularity: "weekly",
         }),
       );
 
-      expect(result.bucket_count).toBe(2);
+      expect(result.by_time.bucket_count).toBe(2);
 
-      const week1 = result.buckets.find(
+      const week1 = result.by_time.buckets.find(
         (b: { key: string }) => b.key === "2024-03-11",
       );
       expect(week1.label).toBe("Week of 2024-03-11");
       expect(week1.total).toBe(50); // 30 + 20
       expect(week1.transaction_count).toBe(2);
 
-      const week2 = result.buckets.find(
+      const week2 = result.by_time.buckets.find(
         (b: { key: string }) => b.key === "2024-03-18",
       );
       expect(week2.total).toBe(50);
@@ -198,14 +198,14 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "day_of_week",
+          time_granularity: "day_of_week",
         }),
       );
 
-      expect(result.bucket_count).toBe(2);
+      expect(result.by_time.bucket_count).toBe(2);
       // Total: 30 + 15 + 45 = $90
 
-      const monday = result.buckets.find(
+      const monday = result.by_time.buckets.find(
         (b: { label: string }) => b.label === "Monday",
       );
       expect(monday.total).toBe(75); // 30 + 45
@@ -213,7 +213,7 @@ describe("get_spending_breakdown", () => {
       // Monday percentage: 75/90 = 83.33%
       expect(monday.percentage).toBeCloseTo(83.33, 1);
 
-      const tuesday = result.buckets.find(
+      const tuesday = result.by_time.buckets.find(
         (b: { label: string }) => b.label === "Tuesday",
       );
       expect(tuesday.total).toBe(15);
@@ -263,25 +263,25 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "week_of_month",
+          time_granularity: "week_of_month",
         }),
       );
 
-      expect(result.bucket_count).toBe(3);
+      expect(result.by_time.bucket_count).toBe(3);
 
-      const week1 = result.buckets.find(
+      const week1 = result.by_time.buckets.find(
         (b: { label: string }) => b.label === "Week 1",
       );
       expect(week1.total).toBe(30); // 20 + 10
       expect(week1.transaction_count).toBe(2);
 
-      const week2 = result.buckets.find(
+      const week2 = result.by_time.buckets.find(
         (b: { label: string }) => b.label === "Week 2",
       );
       expect(week2.total).toBe(35);
       expect(week2.transaction_count).toBe(1);
 
-      const week4 = result.buckets.find(
+      const week4 = result.by_time.buckets.find(
         (b: { label: string }) => b.label === "Week 4",
       );
       expect(week4.total).toBe(55);
@@ -322,22 +322,22 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
-      const totalPercentage = result.buckets.reduce(
+      const totalPercentage = result.by_time.buckets.reduce(
         (sum: number, b: { percentage: number }) => sum + b.percentage,
         0,
       );
       expect(totalPercentage).toBeCloseTo(100, 0);
 
       // 25/100 = 25%, 50/100 = 50%, 25/100 = 25%
-      const march5 = result.buckets.find(
+      const march5 = result.by_time.buckets.find(
         (b: { key: string }) => b.key === "2024-03-05",
       );
       expect(march5.percentage).toBe(25);
-      const march15 = result.buckets.find(
+      const march15 = result.by_time.buckets.find(
         (b: { key: string }) => b.key === "2024-03-15",
       );
       expect(march15.percentage).toBe(50);
@@ -377,19 +377,29 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
-      expect(result.insights.highest_bucket.label).toBe("2024-03-15");
-      expect(result.insights.highest_bucket.total_display).toBe("$80.00");
+      expect(result.by_time.insights.highest_bucket.label).toBe("2024-03-15");
+      expect(result.by_time.insights.highest_bucket.total_display).toBe(
+        "$80.00",
+      );
       // 80 / 120 = 66.67%
-      expect(result.insights.highest_bucket.percentage).toBeCloseTo(66.67, 1);
+      expect(result.by_time.insights.highest_bucket.percentage).toBeCloseTo(
+        66.67,
+        1,
+      );
 
-      expect(result.insights.lowest_bucket.label).toBe("2024-03-05");
-      expect(result.insights.lowest_bucket.total_display).toBe("$10.00");
+      expect(result.by_time.insights.lowest_bucket.label).toBe("2024-03-05");
+      expect(result.by_time.insights.lowest_bucket.total_display).toBe(
+        "$10.00",
+      );
       // 10 / 120 = 8.33%
-      expect(result.insights.lowest_bucket.percentage).toBeCloseTo(8.33, 1);
+      expect(result.by_time.insights.lowest_bucket.percentage).toBeCloseTo(
+        8.33,
+        1,
+      );
     });
 
     it("computes average per bucket and standard deviation", async () => {
@@ -425,16 +435,16 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
       // Average per bucket: (10k + 20k + 30k) / 3 = 20000 milliunits = $20
-      expect(result.insights.average_per_bucket).toBe(20);
+      expect(result.by_time.insights.average_per_bucket).toBe(20);
 
       // Std dev: sqrt(((10k-20k)^2 + (20k-20k)^2 + (30k-20k)^2) / 3) = sqrt(200000000/3) ~= 8165
       // Rounded by code: 8165 milliunits = $8.165 => $8.17 (or similar depending on rounding)
-      expect(result.insights.std_deviation).toBeCloseTo(8.165, 0);
+      expect(result.by_time.insights.std_deviation).toBeCloseTo(8.165, 0);
     });
   });
 
@@ -447,18 +457,18 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
-      expect(result.buckets).toHaveLength(0);
-      expect(result.bucket_count).toBe(0);
+      expect(result.by_time.buckets).toHaveLength(0);
+      expect(result.by_time.bucket_count).toBe(0);
       expect(result.transaction_count).toBe(0);
       expect(result.total_spending).toBe(0);
-      expect(result.insights.highest_bucket).toBeNull();
-      expect(result.insights.lowest_bucket).toBeNull();
-      expect(result.insights.average_per_bucket).toBe(0);
-      expect(result.insights.std_deviation).toBe(0);
+      expect(result.by_time.insights.highest_bucket).toBeNull();
+      expect(result.by_time.insights.lowest_bucket).toBeNull();
+      expect(result.by_time.insights.average_per_bucket).toBe(0);
+      expect(result.by_time.insights.std_deviation).toBe(0);
     });
 
     it("excludes transfers (transactions with transfer_account_id)", async () => {
@@ -487,7 +497,7 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
@@ -520,7 +530,7 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
@@ -577,7 +587,7 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
@@ -610,7 +620,7 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
           category_ids: ["cat-groceries"],
         }),
       );
@@ -667,15 +677,15 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
       // Both subtransactions on 2024-03-10
       expect(result.total_spending).toBe(55);
       expect(result.transaction_count).toBe(2);
-      expect(result.bucket_count).toBe(1);
-      expect(result.buckets[0].total).toBe(55);
+      expect(result.by_time.bucket_count).toBe(1);
+      expect(result.by_time.buckets[0].total).toBe(55);
     });
 
     it("buckets are sorted by key", async () => {
@@ -711,11 +721,11 @@ describe("get_spending_breakdown", () => {
         await handler({
           since_date: "2024-03-01",
           until_date: "2024-03-31",
-          granularity: "daily",
+          time_granularity: "daily",
         }),
       );
 
-      const keys = result.buckets.map((b: { key: string }) => b.key);
+      const keys = result.by_time.buckets.map((b: { key: string }) => b.key);
       expect(keys).toEqual(["2024-03-05", "2024-03-15", "2024-03-25"]);
     });
   });

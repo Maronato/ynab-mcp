@@ -4,7 +4,6 @@ import type { AppContext } from "../context.js";
 import { registerAccountTools } from "./accounts.js";
 import { registerAnalysisTools } from "./analysis.js";
 import { registerAnomalyTools } from "./anomalies.js";
-import { registerBreakdownTools } from "./breakdown.js";
 import { registerBudgetTools } from "./budgets.js";
 import { registerCategoryTools } from "./categories.js";
 import { registerHealthTools } from "./health.js";
@@ -30,7 +29,6 @@ export function registerTools(server: McpServer, context: AppContext): void {
   registerHealthTools(server, context);
   registerTrendTools(server, context);
   registerIncomeExpenseTools(server, context);
-  registerBreakdownTools(server, context);
   registerRecurringTools(server, context);
   registerAnomalyTools(server, context);
 }

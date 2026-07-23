@@ -71,7 +71,7 @@ export function registerPrompts(server: McpServer): void {
           "",
           "1) Call `get_spending_trends` covering the date range for multi-month category and payee trends.",
           "2) Call `get_income_expense_summary` for income vs expense totals and savings rate.",
-          "3) Call `get_spending_breakdown` for behavioral patterns (daily, weekly, or day-of-week granularity).",
+          "3) Call `get_spending_analysis` with `time_granularity` (daily, weekly, or day_of_week) for behavioral patterns in when money is spent.",
           "4) Call `detect_recurring_charges` for a subscription overview and recurring cost summary.",
           "5) Highlight unusual patterns, top spending categories, and actionable recommendations.",
         ].join("\n"),

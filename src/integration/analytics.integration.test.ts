@@ -479,38 +479,40 @@ describe("get_income_expense_summary", () => {
   });
 });
 
-// ── get_spending_breakdown ──
+// ── get_spending_analysis time_granularity ──
 
-describe("get_spending_breakdown", () => {
-  it("breaks down spending by day_of_week", async () => {
-    const result = (await harness.callTool("get_spending_breakdown", {
+describe("get_spending_analysis with time_granularity", () => {
+  it("buckets spending by day_of_week", async () => {
+    const result = (await harness.callTool("get_spending_analysis", {
       since_date: TWO_MONTHS_AGO,
       until_date: endOfMonth(CURRENT_MONTH),
-      granularity: "day_of_week",
+      time_granularity: "day_of_week",
     })) as {
       budget_id: string;
-      granularity: string;
       total_spending: number;
       transaction_count: number;
-      bucket_count: number;
-      buckets: Array<{
-        key: string;
-        label: string;
-        total: number;
-        transaction_count: number;
-        percentage: number;
-      }>;
-      insights: {
-        highest_bucket: { label: string } | null;
-        lowest_bucket: { label: string } | null;
+      by_time: {
+        granularity: string;
+        bucket_count: number;
+        buckets: Array<{
+          key: string;
+          label: string;
+          total: number;
+          transaction_count: number;
+          percentage: number;
+        }>;
+        insights: {
+          highest_bucket: { label: string } | null;
+          lowest_bucket: { label: string } | null;
+        };
       };
     };
 
-    expect(result.granularity).toBe("day_of_week");
+    expect(result.by_time.granularity).toBe("day_of_week");
     expect(result.total_spending).toBeGreaterThan(0);
     // 17 outflow transactions in the analytics seed
     expect(result.transaction_count).toBe(17);
-    expect(result.buckets.length).toBeGreaterThan(0);
+    expect(result.by_time.buckets.length).toBeGreaterThan(0);
     // Day-of-week buckets should have labels like "Monday", "Tuesday", etc.
     const validDays = [
       "Sunday",
@@ -521,7 +523,7 @@ describe("get_spending_breakdown", () => {
       "Friday",
       "Saturday",
     ];
-    for (const bucket of result.buckets) {
+    for (const bucket of result.by_time.buckets) {
       expect(validDays).toContain(bucket.label);
       expect(bucket.total).toBeGreaterThan(0);
       // Percentages should be between 0 and 100
@@ -529,20 +531,25 @@ describe("get_spending_breakdown", () => {
       expect(bucket.percentage).toBeLessThanOrEqual(100);
     }
     // Sum of percentages across all buckets should be ~100
-    const totalPct = result.buckets.reduce((s, b) => s + b.percentage, 0);
+    const totalPct = result.by_time.buckets.reduce(
+      (s, b) => s + b.percentage,
+      0,
+    );
     expect(totalPct).toBeCloseTo(100, 0);
   });
 
-  it("breaks down spending weekly", async () => {
-    const result = (await harness.callTool("get_spending_breakdown", {
+  it("buckets spending weekly", async () => {
+    const result = (await harness.callTool("get_spending_analysis", {
       since_date: TWO_MONTHS_AGO,
       until_date: endOfMonth(CURRENT_MONTH),
-      granularity: "weekly",
+      time_granularity: "weekly",
     })) as {
-      buckets: Array<{ key: string; label: string; total: number }>;
+      by_time: {
+        buckets: Array<{ key: string; label: string; total: number }>;
+      };
     };
 
-    expect(result.buckets.length).toBeGreaterThan(0);
+    expect(result.by_time.buckets.length).toBeGreaterThan(0);
   });
 });
 
