@@ -31,10 +31,28 @@ export function createYnabMcpServer(options: CreateServerOptions): {
   const undoStore = new UndoStore(options.dataDirectory);
   const undoEngine = new UndoEngine(ynabClient, undoStore);
 
-  const server = new McpServer({
-    name: "ynab-mcp-server",
-    version: options.version ?? "0.0.0",
-  });
+  const server = new McpServer(
+    {
+      name: "ynab-mcp-server",
+      version: options.version ?? "0.0.0",
+    },
+    {
+      instructions:
+        "Tools for working with the user's YNAB (You Need A Budget) data: " +
+        "reading and searching accounts, transactions, categories, targets, and " +
+        "scheduled transactions; batch-creating/updating/deleting transactions " +
+        "and scheduled transactions; assigning budget amounts and targets; " +
+        "spending analysis (aggregation, time series, income vs expense, " +
+        "recurring-charge and anomaly detection); a one-call budget health " +
+        "snapshot; and undo for every write. Amounts are plain currency units " +
+        "(never milliunits). Every write returns undo_history_ids usable with " +
+        "undo_operations. Read the ynab://knowledge/* resources for YNAB " +
+        "methodology (credit cards, targets, overspending, reconciliation) " +
+        "before giving budgeting advice. The YNAB API allows 200 requests/hour; " +
+        "some batch tools cost one request per item and say so in their " +
+        "descriptions.",
+    },
+  );
 
   const payeeProfileAnalyzer = new PayeeProfileAnalyzer(ynabClient);
 

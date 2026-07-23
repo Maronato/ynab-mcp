@@ -211,6 +211,7 @@ export async function createFakeYnabServer(state: FakeYnabState): Promise<{
   url: string;
   close: () => Promise<void>;
 }> {
+  let requestCount = 0;
   const httpServer = createServer(
     async (req: IncomingMessage, res: ServerResponse) => {
       try {
@@ -259,7 +260,16 @@ export async function createFakeYnabServer(state: FakeYnabState): Promise<{
           body,
         );
 
-        res.writeHead(result.status, { "Content-Type": "application/json" });
+        // Like the live API: an X-Rate-Limit "used/limit" header on
+        // responses, omitted on 429s.
+        requestCount += 1;
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        if (result.status !== 429) {
+          headers["X-Rate-Limit"] = `${Math.min(requestCount, 200)}/200`;
+        }
+        res.writeHead(result.status, headers);
         res.end(JSON.stringify(result.body));
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
