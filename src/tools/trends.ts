@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import { endOfMonthString, monthKeysBack } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
@@ -59,27 +60,10 @@ function computeDateRange(monthsBack: number): {
   untilDate: string;
   monthKeys: string[];
 } {
-  const now = new Date();
-  // End of the current month
-  const endYear = now.getFullYear();
-  const endMonth = now.getMonth(); // 0-indexed
-  const untilDate = new Date(endYear, endMonth + 1, 0)
-    .toISOString()
-    .slice(0, 10);
-
-  // Start of (monthsBack - 1) months ago (current month counts as one)
-  const startDate = new Date(endYear, endMonth - (monthsBack - 1), 1);
-  const sinceDate = startDate.toISOString().slice(0, 10);
-
-  const monthKeys: string[] = [];
-  const cursor = new Date(startDate);
-  while (cursor <= now || cursor.getMonth() === now.getMonth()) {
-    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
-    monthKeys.push(key);
-    cursor.setMonth(cursor.getMonth() + 1);
-    if (monthKeys.length >= monthsBack) break;
-  }
-
+  // Current month counts as one, so go back (monthsBack - 1) months.
+  const monthKeys = monthKeysBack(monthsBack);
+  const sinceDate = `${monthKeys[0]}-01`;
+  const untilDate = endOfMonthString(`${monthKeys[monthKeys.length - 1]}-01`);
   return { sinceDate, untilDate, monthKeys };
 }
 

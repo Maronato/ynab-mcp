@@ -1,3 +1,4 @@
+import { dateMonthsAgo } from "../shared/dates.js";
 import type { YnabClient } from "../ynab/client.js";
 
 export interface PayeeProfile {
@@ -165,9 +166,7 @@ export class PayeeProfileAnalyzer {
 }
 
 function getHistorySinceDate(months: number): string {
-  const date = new Date();
-  date.setMonth(date.getMonth() - months);
-  return date.toISOString().slice(0, 10);
+  return dateMonthsAgo(months);
 }
 
 export function getDominantCategory(

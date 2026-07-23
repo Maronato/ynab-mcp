@@ -2,6 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import {
+  addDaysToDateString,
+  dateMonthsAgo,
+  daysBetween,
+  todayString,
+} from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
@@ -74,9 +80,7 @@ interface DetectedSubscription {
 }
 
 function getHistorySinceDate(months: number): string {
-  const date = new Date();
-  date.setMonth(date.getMonth() - months);
-  return date.toISOString().slice(0, 10);
+  return dateMonthsAgo(months);
 }
 
 function computeMedian(values: number[]): number {
@@ -121,21 +125,6 @@ function labelToScheduledFrequency(label: string): ScheduledFrequency {
     default:
       return "monthly";
   }
-}
-
-function addDays(dateStr: string, days: number): string {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + Math.round(days));
-  return d.toISOString().slice(0, 10);
-}
-
-function daysBetween(a: string, b: string): number {
-  const msPerDay = 1000 * 60 * 60 * 24;
-  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / msPerDay);
-}
-
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 export function registerRecurringTools(
@@ -273,8 +262,11 @@ export function registerRecurringTools(
 
           // Compute next expected date and overdue status
           const lastChargeDate = sortedDates[sortedDates.length - 1];
-          const nextExpectedDate = addDays(lastChargeDate, medianInterval);
-          const today = todayStr();
+          const nextExpectedDate = addDaysToDateString(
+            lastChargeDate,
+            medianInterval,
+          );
+          const today = todayString();
           const daysOverdue = daysBetween(nextExpectedDate, today);
           const isOverdue = daysOverdue > 0;
 

@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import { monthKeysBack } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
@@ -24,18 +25,6 @@ const incomeExpenseSchema = z.object({
     .default(6)
     .describe("Number of months to analyze (2-12)."),
 });
-
-function buildMonthKeys(monthsBack: number): string[] {
-  const now = new Date();
-  const keys: string[] = [];
-  for (let i = monthsBack - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    keys.push(
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-    );
-  }
-  return keys;
-}
 
 function formatAmount(
   milliunits: number,
@@ -69,7 +58,7 @@ export function registerIncomeExpenseTools(
     async (input) => {
       try {
         const monthCount = input.months ?? 6;
-        const monthKeys = buildMonthKeys(monthCount);
+        const monthKeys = monthKeysBack(monthCount);
 
         const settings = await context.ynabClient.getBudgetSettings(
           input.budget_id,

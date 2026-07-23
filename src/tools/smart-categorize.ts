@@ -7,6 +7,7 @@ import {
   type TargetTransaction,
 } from "../analysis/categorize.js";
 import type { AppContext } from "../context.js";
+import { dateDaysAgo } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
@@ -66,9 +67,7 @@ interface TransactionLike {
 }
 
 function getDefaultSinceDate(): string {
-  const date = new Date();
-  date.setDate(date.getDate() - 30);
-  return date.toISOString().slice(0, 10);
+  return dateDaysAgo(30);
 }
 
 function toTarget(

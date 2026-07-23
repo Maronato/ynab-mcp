@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import { dateDaysAgo, dateMonthsAgo, daysBetween } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
@@ -56,15 +57,11 @@ interface AnomalyEntry {
 }
 
 function getDefaultSinceDate(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 30);
-  return d.toISOString().slice(0, 10);
+  return dateDaysAgo(30);
 }
 
 function getHistorySinceDate(months: number): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - months);
-  return d.toISOString().slice(0, 10);
+  return dateMonthsAgo(months);
 }
 
 function sigmaThreshold(sensitivity: Sensitivity): number {
@@ -76,13 +73,6 @@ function sigmaThreshold(sensitivity: Sensitivity): number {
     case "high":
       return 1.5;
   }
-}
-
-function daysBetween(a: string, b: string): number {
-  const msPerDay = 1000 * 60 * 60 * 24;
-  return Math.abs(
-    Math.round((new Date(b).getTime() - new Date(a).getTime()) / msPerDay),
-  );
 }
 
 export function registerAnomalyTools(
@@ -293,7 +283,8 @@ export function registerAnomalyTools(
               const amountDiff = Math.abs(absAmount - otherAbs);
               const maxAmt = Math.max(absAmount, otherAbs);
               const withinTolerance = maxAmt > 0 && amountDiff / maxAmt <= 0.05;
-              const withinDays = daysBetween(tx.date, other.date) <= 3;
+              const withinDays =
+                Math.abs(daysBetween(tx.date, other.date)) <= 3;
 
               if (withinTolerance && withinDays) {
                 const key = `potential_duplicate:${tx.id}:${other.id}`;

@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import { currentMonthString, endOfMonthString } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
@@ -60,7 +61,7 @@ export function registerHealthTools(
     },
     async (input) => {
       try {
-        const month = input.month ?? getCurrentMonth();
+        const month = input.month ?? currentMonthString();
 
         const [monthSummary, allAccounts, categoryGroups, settings] =
           await Promise.all([
@@ -229,7 +230,7 @@ export function registerHealthTools(
 
         // --- Count uncategorized and unapproved ---
         const sinceDate = month; // Start of month
-        const endOfMonth = getEndOfMonth(month);
+        const endOfMonth = endOfMonthString(month);
 
         const [uncategorized, unapproved] = await Promise.all([
           context.ynabClient.searchTransactions(input.budget_id, {
@@ -377,16 +378,4 @@ export function registerHealthTools(
       }
     },
   );
-}
-
-function getCurrentMonth(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
-function getEndOfMonth(monthStr: string): string {
-  // Parse YYYY-MM-DD components directly to avoid timezone shifts from new Date()
-  const [year, month] = monthStr.split("-").map(Number);
-  const lastDay = new Date(year, month, 0).getDate();
-  return `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 }
