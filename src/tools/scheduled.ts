@@ -16,11 +16,24 @@ import type {
   UpdateScheduledTransactionInput,
 } from "../ynab/types.js";
 
-// The YNAB API only accepts these five frequency values.
-// The SDK enum includes compound values (everyOtherWeek, twiceAMonth, etc.)
-// but the API rejects them on both create and update. Scheduled transactions
-// with compound frequencies can only be created through the YNAB app.
-const frequencies = ["never", "daily", "weekly", "monthly", "yearly"] as const;
+// The full 13-value frequency enum from the current YNAB API spec, valid on
+// both create and update. If the live API still rejects a compound value the
+// per-item error result will surface it.
+const frequencies = [
+  "never",
+  "daily",
+  "weekly",
+  "everyOtherWeek",
+  "twiceAMonth",
+  "every4Weeks",
+  "monthly",
+  "everyOtherMonth",
+  "every3Months",
+  "every4Months",
+  "twiceAYear",
+  "yearly",
+  "everyOtherYear",
+] as const;
 
 const flagColors = [
   "red",

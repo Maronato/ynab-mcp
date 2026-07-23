@@ -110,10 +110,12 @@ function labelToScheduledFrequency(label: string): ScheduledFrequency {
   switch (label) {
     case "weekly":
       return "weekly";
-    case "monthly":
     case "biweekly":
-    case "quarterly":
+      return "everyOtherWeek";
+    case "monthly":
       return "monthly";
+    case "quarterly":
+      return "every3Months";
     case "annual":
       return "yearly";
     default:

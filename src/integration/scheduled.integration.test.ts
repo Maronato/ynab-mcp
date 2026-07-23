@@ -118,7 +118,27 @@ describe("frequency validation", () => {
     expect(result.created_count).toBe(1);
   });
 
-  it("rejects invalid frequency 'everyOtherWeek'", async () => {
+  it("accepts compound frequency 'everyOtherWeek'", async () => {
+    const result = (await harness.callTool("create_scheduled_transactions", {
+      transactions: [
+        {
+          account_id: "acct-checking",
+          date: futureDateStr(3, 1),
+          amount: -50.0,
+          frequency: "everyOtherWeek",
+          category_id: "cat-groceries",
+        },
+      ],
+    })) as {
+      created_count: number;
+      transactions: Array<{ frequency: string }>;
+    };
+
+    expect(result.created_count).toBe(1);
+    expect(result.transactions[0].frequency).toBe("everyOtherWeek");
+  });
+
+  it("rejects a frequency value outside the API enum", async () => {
     await expect(
       harness.callTool("create_scheduled_transactions", {
         transactions: [
@@ -126,7 +146,7 @@ describe("frequency validation", () => {
             account_id: "acct-checking",
             date: futureDateStr(3, 1),
             amount: -50.0,
-            frequency: "everyOtherWeek",
+            frequency: "fortnightly",
             category_id: "cat-groceries",
           },
         ],
