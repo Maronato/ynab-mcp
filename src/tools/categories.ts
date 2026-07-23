@@ -70,7 +70,7 @@ const setCategoryBudgetsSchema = z.object({
       }),
     )
     .min(1)
-    .max(200),
+    .max(50),
 });
 
 export function registerCategoryTools(
@@ -288,7 +288,9 @@ export function registerCategoryTools(
     {
       title: "Set Category Budgets",
       description:
-        "Set budgeted amounts for one or more categories/month pairs in a single request.",
+        "Set budgeted amounts for one or more category/month pairs in a single " +
+        "request. Costs one YNAB API call per pair against the 200/hour rate " +
+        "limit — keep batches small.",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

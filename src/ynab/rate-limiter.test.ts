@@ -45,7 +45,7 @@ describe("RateLimiter", () => {
     limiter.trackCall();
     // Oldest call is at t=0, window is 60s, current time is t=10s
     // Reset = ceil((0 + 60000 - 10000) / 60000) = ceil(50000/60000) = 1 minute
-    expect(() => limiter.trackCall()).toThrow("~1 minutes");
+    expect(() => limiter.trackCall()).toThrow("~1 minute(s)");
   });
 
   it("allows calls again after window expires", () => {
@@ -103,5 +103,65 @@ describe("RateLimiter", () => {
     expect(() => limiter.trackCall()).not.toThrow(); // recent count was 2, now 3 after push
     // Now at threshold
     expect(() => limiter.trackCall()).toThrow(/rate limit/);
+  });
+
+  describe("server reconciliation", () => {
+    it("blocks based on the server-reported count after a restart", () => {
+      // Fresh limiter (e.g. process restart): no local timestamps, but the
+      // server says the token has nearly exhausted its window.
+      const limiter = new RateLimiter({
+        threshold: 5,
+        max: 10,
+        windowMs: 60000,
+      });
+      limiter.syncFromServer(9);
+      expect(() => limiter.trackCall()).toThrow(/rate limit/);
+    });
+
+    it("treats a 429 as an exhausted window", () => {
+      const limiter = new RateLimiter({
+        threshold: 5,
+        max: 10,
+        windowMs: 60000,
+      });
+      limiter.notifyServerLimited();
+      expect(() => limiter.trackCall()).toThrow(/rate limit/);
+    });
+
+    it("decays the server count over the window", () => {
+      const limiter = new RateLimiter({
+        threshold: 5,
+        max: 10,
+        windowMs: 60000,
+      });
+      limiter.syncFromServer(8);
+      // After 80% of the window the stale server count decays to ~2,
+      // which is below the threshold again.
+      vi.advanceTimersByTime(48000);
+      expect(() => limiter.trackCall()).not.toThrow();
+    });
+
+    it("prefers the larger of local and server counts", () => {
+      const limiter = new RateLimiter({
+        threshold: 3,
+        max: 10,
+        windowMs: 60000,
+      });
+      limiter.trackCall();
+      limiter.trackCall();
+      limiter.syncFromServer(1); // server lags behind local activity
+      limiter.trackCall();
+      expect(() => limiter.trackCall()).toThrow(/rate limit/);
+    });
+
+    it("falls back to a generic reset estimate without local timestamps", () => {
+      const limiter = new RateLimiter({
+        threshold: 5,
+        max: 10,
+        windowMs: 60000,
+      });
+      limiter.notifyServerLimited();
+      expect(() => limiter.trackCall()).toThrow(/within the next 60 minutes/);
+    });
   });
 });

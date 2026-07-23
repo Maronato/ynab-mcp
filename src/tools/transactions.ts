@@ -588,7 +588,9 @@ export function registerTransactionTools(
     {
       title: "Delete Transactions",
       description:
-        "Delete one or more transactions. Each deletion is undoable by re-creating the transaction.",
+        "Delete one or more transactions. Each deletion is undoable by re-creating " +
+        "the transaction. Costs one YNAB API call per transaction against the " +
+        "200/hour rate limit.",
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,

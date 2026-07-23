@@ -184,7 +184,8 @@ export function registerScheduledTransactionTools(
     {
       title: "Create Scheduled Transactions",
       description:
-        "Create one or more scheduled transactions. Each successful creation is undoable.",
+        "Create one or more scheduled transactions. Each successful creation is " +
+        "undoable and costs one YNAB API call (no bulk endpoint exists).",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -301,7 +302,8 @@ export function registerScheduledTransactionTools(
     {
       title: "Update Scheduled Transactions",
       description:
-        "Update one or more scheduled transactions. Each successful update is undoable.",
+        "Update one or more scheduled transactions. Each successful update is " +
+        "undoable and costs one YNAB API call (no bulk endpoint exists).",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -427,7 +429,8 @@ export function registerScheduledTransactionTools(
     {
       title: "Delete Scheduled Transactions",
       description:
-        "Delete one or more scheduled transactions. Each deletion is undoable.",
+        "Delete one or more scheduled transactions. Each deletion is undoable " +
+        "and costs one YNAB API call (no bulk endpoint exists).",
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,

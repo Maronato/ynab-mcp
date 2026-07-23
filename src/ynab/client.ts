@@ -129,6 +129,45 @@ const DEFAULT_CATEGORIES_OPTIONS: Required<
   includeHidden: false,
 };
 
+/**
+ * ynab.API subclass whose Configuration routes requests through a custom
+ * fetch. This is the only clean hook the SDK offers for reading response
+ * headers (X-Rate-Limit) and intercepting 429s — its error path otherwise
+ * throws the parsed JSON body with no access to status or headers.
+ */
+class RateLimitTrackingApi extends ynab.API {
+  constructor(
+    accessToken: string,
+    endpointUrl: string | undefined,
+    rateLimiter: RateLimiter,
+  ) {
+    super(accessToken, endpointUrl);
+    this._configuration = new ynab.Configuration({
+      accessToken,
+      basePath: endpointUrl ?? ynab.BASE_PATH,
+      fetchApi: async (input: string | URL | Request, init?: RequestInit) => {
+        const response = await fetch(input, init);
+        const header = response.headers.get("X-Rate-Limit");
+        if (header) {
+          const used = Number(header.split("/")[0]);
+          if (Number.isFinite(used)) {
+            rateLimiter.syncFromServer(used);
+          }
+        }
+        if (response.status === 429) {
+          // YNAB omits X-Rate-Limit (and Retry-After) on 429 responses, so
+          // the local window estimate is the only reset signal available.
+          rateLimiter.notifyServerLimited();
+          throw new Error(
+            `YNAB API rate limit exceeded (429). ${rateLimiter.describeReset()}`,
+          );
+        }
+        return response;
+      },
+    });
+  }
+}
+
 export class YnabClient {
   private readonly api: ynab.API;
 
@@ -149,9 +188,10 @@ export class YnabClient {
   ) {
     this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
+    const rateLimiter = new RateLimiter();
     this.api = this.withRateLimitAndResilience(
-      new ynab.API(accessToken, endpointUrl),
-      new RateLimiter(),
+      new RateLimitTrackingApi(accessToken, endpointUrl, rateLimiter),
+      rateLimiter,
     );
     this.readOnly = options?.readOnly ?? false;
   }
