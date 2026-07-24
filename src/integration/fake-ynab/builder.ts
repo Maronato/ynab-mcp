@@ -184,6 +184,50 @@ export class FakeBudgetBuilder {
     return this;
   }
 
+  withMoneyMovementGroup(
+    id: string,
+    data: { month: string; note?: string | null; created_at?: string },
+  ): this {
+    const groups = this.state.moneyMovementGroups.get(this.planId) ?? [];
+    groups.push({
+      id,
+      group_created_at: data.created_at ?? `${data.month}T12:00:00Z`,
+      month: data.month,
+      note: data.note ?? null,
+      performed_by_user_id: null,
+    });
+    this.state.moneyMovementGroups.set(this.planId, groups);
+    return this;
+  }
+
+  withMoneyMovement(
+    id: string,
+    data: {
+      month: string;
+      amount: number;
+      from_category_id?: string | null;
+      to_category_id?: string | null;
+      note?: string | null;
+      group_id?: string | null;
+      moved_at?: string;
+    },
+  ): this {
+    const movements = this.state.moneyMovements.get(this.planId) ?? [];
+    movements.push({
+      id,
+      month: data.month,
+      moved_at: data.moved_at ?? `${data.month}T12:00:00Z`,
+      note: data.note ?? null,
+      money_movement_group_id: data.group_id ?? null,
+      performed_by_user_id: null,
+      from_category_id: data.from_category_id ?? null,
+      to_category_id: data.to_category_id ?? null,
+      amount: data.amount,
+    });
+    this.state.moneyMovements.set(this.planId, movements);
+    return this;
+  }
+
   withPayee(id: string, name: string, transferAccountId?: string | null): this {
     const payee: PayeeData = {
       id,

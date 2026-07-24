@@ -21,6 +21,12 @@ import {
   handlePatchCategory,
   handlePatchMonthCategory,
 } from "./routes/categories.js";
+import {
+  handleGetMoneyMovementGroups,
+  handleGetMoneyMovementGroupsByMonth,
+  handleGetMoneyMovements,
+  handleGetMoneyMovementsByMonth,
+} from "./routes/money-movements.js";
 import { handleGetMonth } from "./routes/months.js";
 import { handleGetPayees } from "./routes/payees.js";
 import { handleGetPlanSettings, handleGetPlans } from "./routes/plans.js";
@@ -153,6 +159,26 @@ const routes: RouteDefinition[] = [
     method: "GET",
     segments: ["plans", ":planId", "months", ":month"],
     handler: handleGetMonth,
+  },
+  {
+    method: "GET",
+    segments: ["plans", ":planId", "money_movements"],
+    handler: handleGetMoneyMovements,
+  },
+  {
+    method: "GET",
+    segments: ["plans", ":planId", "months", ":month", "money_movements"],
+    handler: handleGetMoneyMovementsByMonth,
+  },
+  {
+    method: "GET",
+    segments: ["plans", ":planId", "money_movement_groups"],
+    handler: handleGetMoneyMovementGroups,
+  },
+  {
+    method: "GET",
+    segments: ["plans", ":planId", "months", ":month", "money_movement_groups"],
+    handler: handleGetMoneyMovementGroupsByMonth,
   },
 ];
 

@@ -7,7 +7,7 @@ An MCP server for YNAB with batch operations, deterministic analysis tools, and 
 
 ## Highlights
 
-- **25 tools** covering budgets, accounts, transactions, categories, targets, scheduled transactions, and spending analysis
+- **26 tools** covering budgets, accounts, transactions, categories, targets, scheduled transactions, and spending analysis
 - **Deterministic analysis** — spending aggregation, trends, income vs expense, recurring-charge and anomaly detection, and a one-call budget health snapshot. Judgment calls (forecasting, reallocation, prioritization) are deliberately left to the calling agent, which has the exact data and more context
 - **Batch operations** — create, update, and delete multiple transactions in a single call, with per-item API costs documented where the YNAB API has no bulk endpoint
 - **Undo support** — every write operation is recorded and reversible
@@ -117,6 +117,7 @@ All configuration is done through environment variables.
 | `get_budget_health`          | Single-call snapshot: net worth, month totals, overspending, target gaps, credit card payment gaps, RTA, issues    |
 | `detect_recurring_charges`   | Subscription and recurring charge detection from transaction history                                               |
 | `detect_anomalies`           | Flag unusual transactions with leave-one-out statistical baselines                                                 |
+| `get_money_movements`        | Audit feed of budget moves between categories or Ready to Assign, including moves made in the YNAB apps            |
 
 All analysis tools are deterministic — no LLM sampling involved. They report facts and clearly-labeled statistical estimates; forecasting and reallocation decisions are left to the calling agent (the workflow prompts walk it through that reasoning using `get_targets`, `get_monthly_budget`, and `get_scheduled_transactions`).
 

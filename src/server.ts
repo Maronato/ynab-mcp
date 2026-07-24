@@ -47,7 +47,8 @@ export function createYnabMcpServer(options: CreateServerOptions): {
         "scheduled transactions; batch-creating/updating/deleting transactions " +
         "and scheduled transactions; assigning budget amounts and targets; " +
         "spending analysis (aggregation, time series, income vs expense, " +
-        "recurring-charge and anomaly detection); a one-call budget health " +
+        "recurring-charge and anomaly detection); the money-movement audit feed " +
+        "showing how budgeted amounts changed; a one-call budget health " +
         "snapshot; and undo for every write. Amounts are plain currency units " +
         "(never milliunits). Every write returns undo_history_ids usable with " +
         "undo_operations. Read the ynab://knowledge/* resources for YNAB " +

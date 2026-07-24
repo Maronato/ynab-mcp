@@ -8,6 +8,7 @@ import { registerBudgetTools } from "./budgets.js";
 import { registerCategoryTools } from "./categories.js";
 import { registerHealthTools } from "./health.js";
 import { registerIncomeExpenseTools } from "./income-expense.js";
+import { registerMoneyMovementTools } from "./money-movements.js";
 import { registerRecurringTools } from "./recurring.js";
 import { registerScheduledTransactionTools } from "./scheduled.js";
 import { registerSmartTools } from "./smart.js";
@@ -68,6 +69,7 @@ export function registerTools(rawServer: McpServer, context: AppContext): void {
   registerHealthTools(server, context);
   registerTrendTools(server, context);
   registerIncomeExpenseTools(server, context);
+  registerMoneyMovementTools(server, context);
   registerRecurringTools(server, context);
   registerAnomalyTools(server, context);
 }

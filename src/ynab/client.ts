@@ -1,5 +1,5 @@
 import * as ynab from "ynab";
-import { CacheManager } from "./cache.js";
+import { CacheManager, type MoneyMovementsSnapshot } from "./cache.js";
 import { extractErrorMessage, isNotFoundError } from "./errors.js";
 import {
   asCurrency,
@@ -89,6 +89,7 @@ async function withRetry<T>(
 }
 
 const KNOWN_SUB_APIS = new Set([
+  "money_movements",
   "plans",
   "accounts",
   "categories",
@@ -494,6 +495,54 @@ export class YnabClient {
     return payees
       .filter((payee) => !payee.deleted)
       .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  /**
+   * Money movements: the audit feed of moves between categories (or to/from
+   * Ready to Assign, represented by null category ids), including moves made
+   * in the YNAB apps. GET-only and full-fetch (no delta support in the API),
+   * so results are TTL-cached per month key.
+   */
+  async getMoneyMovements(
+    budgetId?: string,
+    options: { month?: string } = {},
+  ): Promise<MoneyMovementsSnapshot> {
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
+    const cacheKey = options.month ?? "all";
+
+    const cached = budgetCache.moneyMovements.get(cacheKey);
+    const isValid = options.month
+      ? this.cache.isMonthCacheValid(cached, options.month)
+      : this.cache.isSimpleCacheValid(cached);
+    if (isValid && cached) {
+      return cached.data;
+    }
+
+    const [movementsResponse, groupsResponse] = await Promise.all([
+      options.month
+        ? this.api.money_movements.getMoneyMovementsByMonth(
+            resolvedBudgetId,
+            options.month,
+          )
+        : this.api.money_movements.getMoneyMovements(resolvedBudgetId),
+      options.month
+        ? this.api.money_movements.getMoneyMovementGroupsByMonth(
+            resolvedBudgetId,
+            options.month,
+          )
+        : this.api.money_movements.getMoneyMovementGroups(resolvedBudgetId),
+    ]);
+
+    const data: MoneyMovementsSnapshot = {
+      movements: movementsResponse.data.money_movements,
+      groups: groupsResponse.data.money_movement_groups,
+    };
+    budgetCache.moneyMovements.set(cacheKey, {
+      data,
+      lastRefreshedAt: Date.now(),
+    });
+    return data;
   }
 
   async getNameLookup(budgetId?: string): Promise<NameLookup> {

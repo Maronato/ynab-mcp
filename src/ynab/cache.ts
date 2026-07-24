@@ -43,6 +43,11 @@ export interface SimpleCache<T> {
   lastRefreshedAt: number;
 }
 
+export interface MoneyMovementsSnapshot {
+  movements: ynab.MoneyMovement[];
+  groups: ynab.MoneyMovementGroup[];
+}
+
 export type StaleableCollectionKey =
   | "accounts"
   | "categories"
@@ -60,6 +65,9 @@ export interface BudgetCache {
   settings?: SimpleCache<ynab.PlanSettings>;
   monthSummaries: Map<string, SimpleCache<ynab.MonthDetail>>;
   monthCategories: Map<string, SimpleCache<ynab.Category>>;
+  /** Keyed by month (YYYY-MM-DD) or "all". Full-fetch only: the money
+   * movement endpoints accept no last_knowledge_of_server parameter. */
+  moneyMovements: Map<string, SimpleCache<MoneyMovementsSnapshot>>;
 }
 
 /**
@@ -111,6 +119,7 @@ export class CacheManager {
       categoryGroups: new Map(),
       monthSummaries: new Map(),
       monthCategories: new Map(),
+      moneyMovements: new Map(),
       settings: undefined,
     };
 
@@ -133,6 +142,8 @@ export class CacheManager {
     const cache = this.getBudgetCache(budgetId);
     cache.monthSummaries.clear();
     cache.monthCategories.clear();
+    // Budget writes create money movements server-side
+    cache.moneyMovements.clear();
   }
 
   isSimpleCacheValid<T>(
