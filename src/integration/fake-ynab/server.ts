@@ -27,7 +27,7 @@ import {
   handleGetMoneyMovements,
   handleGetMoneyMovementsByMonth,
 } from "./routes/money-movements.js";
-import { handleGetMonth } from "./routes/months.js";
+import { handleGetMonth, handleGetMonths } from "./routes/months.js";
 import { handleGetPayees } from "./routes/payees.js";
 import { handleGetPlanSettings, handleGetPlans } from "./routes/plans.js";
 import {
@@ -154,6 +154,11 @@ const routes: RouteDefinition[] = [
     method: "GET",
     segments: ["plans", ":planId", "payees"],
     handler: handleGetPayees,
+  },
+  {
+    method: "GET",
+    segments: ["plans", ":planId", "months"],
+    handler: handleGetMonths,
   },
   {
     method: "GET",

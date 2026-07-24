@@ -27,7 +27,7 @@ function monthKey(offset: number): string {
 }
 
 /**
- * Set up getMonthSummary to return provided monthly data.
+ * Set up getMonthSummaries to return provided monthly data.
  * Each entry maps a month offset (0=current, -1=last month, etc.) to { income, activity }.
  * income is in milliunits (positive), activity is in milliunits (negative for spending).
  */
@@ -38,21 +38,17 @@ function setupMonthSummaries(
     currency_format: createMockCurrencyFormat(),
   });
 
-  // Build a map of month-key-with-01 -> summary
-  const summaryMap = new Map<string, { income: number; activity: number }>();
-  for (const entry of data) {
-    const key = `${monthKey(entry.offset)}-01`;
-    summaryMap.set(key, { income: entry.income, activity: entry.activity });
-  }
-
-  ctx.ynabClient.getMonthSummary.mockImplementation(
-    async (_budgetId: string | undefined, monthDate: string) => {
-      const summary = summaryMap.get(monthDate);
-      if (summary) {
-        return summary;
-      }
-      return { income: 0, activity: 0 };
-    },
+  ctx.ynabClient.getMonthSummaries.mockResolvedValue(
+    data.map((entry) => ({
+      month: `${monthKey(entry.offset)}-01`,
+      note: null,
+      income: entry.income,
+      budgeted: 0,
+      activity: entry.activity,
+      to_be_budgeted: 0,
+      age_of_money: null,
+      deleted: false,
+    })),
   );
 }
 

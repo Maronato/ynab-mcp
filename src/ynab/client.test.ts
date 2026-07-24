@@ -90,6 +90,9 @@ function createMockApi() {
           },
         },
       }),
+      getPlanMonths: vi.fn().mockResolvedValue({
+        data: { months: [], server_knowledge: 100 },
+      }),
     },
   };
 }

@@ -542,6 +542,19 @@ export class YnabClient {
     return monthSummary;
   }
 
+  /**
+   * All month summaries for a budget in one delta-capable call
+   * (aggregates only — per-category month data still requires
+   * {@link getMonthSummary}). Sorted by month ascending.
+   */
+  async getMonthSummaries(budgetId?: string): Promise<ynab.MonthSummary[]> {
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    const months = await this.refreshMonths(resolvedBudgetId);
+    return months
+      .filter((month) => !month.deleted)
+      .sort((left, right) => left.month.localeCompare(right.month));
+  }
+
   async getScheduledTransactions(
     budgetId?: string,
     options: GetScheduledTransactionsOptions = {},
@@ -1311,6 +1324,7 @@ export class YnabClient {
     payees: { added: number; updated: number; deleted: number };
     scheduled_transactions: { added: number; updated: number; deleted: number };
     transactions: { added: number; updated: number; deleted: number };
+    months: { added: number; updated: number; deleted: number };
   }> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
@@ -1325,12 +1339,14 @@ export class YnabClient {
     budgetCache.payees.stale = true;
     budgetCache.scheduledTransactions.stale = true;
     budgetCache.transactions.stale = true;
+    budgetCache.months.stale = true;
 
     await Promise.all([
       this.refreshAccounts(resolvedBudgetId),
       this.refreshCategories(resolvedBudgetId),
       this.refreshPayees(resolvedBudgetId),
       this.refreshScheduledTransactions(resolvedBudgetId),
+      this.refreshMonths(resolvedBudgetId),
       budgetCache.transactions.serverKnowledge != null
         ? this.refreshTransactions(resolvedBudgetId)
         : this.fullFetchTransactions(
@@ -1347,6 +1363,7 @@ export class YnabClient {
       scheduled_transactions:
         budgetCache.scheduledTransactions.lastDeltas ?? zero,
       transactions: budgetCache.transactions.lastDeltas ?? zero,
+      months: budgetCache.months.lastDeltas ?? zero,
     };
   }
 
@@ -1406,6 +1423,24 @@ export class YnabClient {
     return this.cache.applyPayeeDeltas(
       budgetId,
       response.data.payees,
+      response.data.server_knowledge,
+    );
+  }
+
+  private async refreshMonths(budgetId: string): Promise<ynab.MonthSummary[]> {
+    const budgetCache = this.cache.getBudgetCache(budgetId);
+    if (!this.cache.needsRefresh(budgetCache.months)) {
+      return [...budgetCache.months.byId.values()];
+    }
+
+    const response = await this.api.months.getPlanMonths(
+      budgetId,
+      budgetCache.months.serverKnowledge,
+    );
+
+    return this.cache.applyMonthDeltas(
+      budgetId,
+      response.data.months,
       response.data.server_knowledge,
     );
   }

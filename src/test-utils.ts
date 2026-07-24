@@ -205,6 +205,7 @@ export function createMockContext(): MockAppContext {
       getAccounts: vi.fn().mockResolvedValue([]),
       getCategories: vi.fn().mockResolvedValue([]),
       getMonthSummary: vi.fn().mockResolvedValue({ categories: [] }),
+      getMonthSummaries: vi.fn().mockResolvedValue([]),
       getPayees: vi.fn().mockResolvedValue([]),
       getNameLookup: vi.fn().mockResolvedValue({
         accountById: new Map(),

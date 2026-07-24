@@ -63,14 +63,25 @@ export function registerIncomeExpenseTools(
           input.budget_id,
         );
 
-        // Fetch all month summaries in parallel
-        const monthSummaries = await Promise.all(
-          monthKeys.map((monthKey) =>
-            context.ynabClient.getMonthSummary(
-              input.budget_id,
-              `${monthKey}-01`,
-            ),
-          ),
+        // One delta-capable months-list call covers every requested month
+        // (aggregates only, which is all this summary needs). Months before
+        // the budget existed are filled with zeros.
+        const allMonths = await context.ynabClient.getMonthSummaries(
+          input.budget_id,
+        );
+        const byMonth = new Map(allMonths.map((m) => [m.month.slice(0, 7), m]));
+        const monthSummaries = monthKeys.map(
+          (monthKey) =>
+            byMonth.get(monthKey) ?? {
+              month: `${monthKey}-01`,
+              note: null,
+              income: 0,
+              budgeted: 0,
+              activity: 0,
+              to_be_budgeted: 0,
+              age_of_money: null,
+              deleted: false,
+            },
         );
 
         // The last month key is the current month; treat it as partial until
