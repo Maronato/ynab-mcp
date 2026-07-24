@@ -168,6 +168,36 @@ describe("split-phantom cleanup debris", () => {
   });
 });
 
+describe("rate limiting", () => {
+  it("intercepts 429s and blocks subsequent calls locally", async () => {
+    harness = await createIntegrationHarness({ seed: seedStandardBudget });
+
+    harness.fake.injectFault({
+      status: 429,
+      body: {
+        error: {
+          id: "429",
+          name: "too_many_requests",
+          detail: "Too many requests",
+        },
+      },
+    });
+
+    // The 429 surfaces as the client's rate-limit message (not the SDK's
+    // generic FetchError wrapper), and marks the window exhausted.
+    await expect(harness.callTool("get_accounts", {})).rejects.toThrow(
+      /rate limit exceeded \(429\)/,
+    );
+
+    // Follow-up calls are refused locally without touching the API.
+    const requestsAfterFirst = harness.fake.stats.totalRequests;
+    await expect(harness.callTool("get_accounts", {})).rejects.toThrow(
+      /rate limit/i,
+    );
+    expect(harness.fake.stats.totalRequests).toBe(requestsAfterFirst);
+  });
+});
+
 describe("read retries", () => {
   it("retries transient 5xx failures on reads", async () => {
     harness = await createIntegrationHarness({

@@ -269,13 +269,26 @@ export interface FakeYnabServer {
   stats: {
     /** Requests whose client went away before a response was written. */
     abortedRequests: number;
+    /** Total requests received, including faulted and aborted ones. */
+    totalRequests: number;
   };
 }
 
 // ── Public API ──
 
+export interface FakeYnabServerOptions {
+  /**
+   * Emit an X-Rate-Limit "used/limit" header on responses. The live API
+   * stopped sending this header (verified 2026-07); the default mirrors
+   * that. Enable to exercise the client's header-reconciliation path,
+   * which is kept in case the header returns.
+   */
+  sendRateLimitHeader?: boolean;
+}
+
 export async function createFakeYnabServer(
   state: FakeYnabState,
+  options?: FakeYnabServerOptions,
 ): Promise<FakeYnabServer> {
   let requestCount = 0;
   const faults: Array<{
@@ -283,7 +296,7 @@ export async function createFakeYnabServer(
     remaining: number;
     skipRemaining: number;
   }> = [];
-  const stats = { abortedRequests: 0 };
+  const stats = { abortedRequests: 0, totalRequests: 0 };
 
   const takeMatchingFault = (
     method: string,
@@ -306,6 +319,7 @@ export async function createFakeYnabServer(
 
   const httpServer = createServer(
     async (req: IncomingMessage, res: ServerResponse) => {
+      stats.totalRequests += 1;
       res.once("close", () => {
         if (!res.writableEnded) stats.abortedRequests += 1;
       });
@@ -385,13 +399,13 @@ export async function createFakeYnabServer(
           body,
         );
 
-        // Like the live API: an X-Rate-Limit "used/limit" header on
-        // responses, omitted on 429s.
+        // The live API no longer sends X-Rate-Limit (and never sent it on
+        // 429s); emit it only when explicitly enabled for header tests.
         requestCount += 1;
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
-        if (result.status !== 429) {
+        if (options?.sendRateLimitHeader && result.status !== 429) {
           headers["X-Rate-Limit"] = `${Math.min(requestCount, 200)}/200`;
         }
         res.writeHead(result.status, headers);

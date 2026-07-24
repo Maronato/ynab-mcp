@@ -5,10 +5,12 @@ const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 /**
  * Client-side tracker for YNAB's 200-requests-per-rolling-hour limit.
  *
- * Local call timestamps are the primary signal. Because the counter resets
- * when the process restarts, it is reconciled against the server's
- * `X-Rate-Limit: used/limit` response header whenever one is seen, and a 429
- * from the server marks the window as exhausted outright.
+ * Local call timestamps are the primary signal. A 429 from the server
+ * marks the window as exhausted outright. The `X-Rate-Limit: used/limit`
+ * reconciliation path remains for compatibility, but the live API stopped
+ * sending that header (verified 2026-07), so in practice the local counter
+ * stands alone — which also means a restarted process starts blind until
+ * it either re-accumulates calls or hits a 429.
  */
 export class RateLimiter {
   private readonly timestamps: number[] = [];

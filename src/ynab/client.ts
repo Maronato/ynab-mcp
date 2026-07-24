@@ -166,8 +166,14 @@ const DEFAULT_CATEGORIES_OPTIONS: Required<
 /**
  * ynab.API subclass whose Configuration routes requests through a custom
  * fetch. This is the only clean hook the SDK offers for reading response
- * headers (X-Rate-Limit) and intercepting 429s — its error path otherwise
- * throws the parsed JSON body with no access to status or headers.
+ * headers and intercepting 429s — its error path otherwise throws the
+ * parsed JSON body with no access to status or headers. It also owns the
+ * per-request abort timer (see below).
+ *
+ * Note on X-Rate-Limit: the live API stopped sending this header entirely
+ * (verified 2026-07 against spec 1.86), so the local call tracker is the
+ * primary budget signal. The reconciliation path is kept and harmless —
+ * it simply never fires unless the header returns.
  */
 class RateLimitTrackingApi extends ynab.API {
   constructor(

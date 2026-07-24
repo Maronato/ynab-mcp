@@ -8,6 +8,7 @@ import { FakeBudgetBuilder } from "./fake-ynab/builder.js";
 import {
   createFakeYnabServer,
   type FakeYnabServer,
+  type FakeYnabServerOptions,
 } from "./fake-ynab/server.js";
 import { FakeYnabState } from "./fake-ynab/state.js";
 
@@ -27,6 +28,7 @@ export async function createIntegrationHarness(options?: {
   seed?: (builder: FakeBudgetBuilder) => void;
   timeoutMs?: number;
   maxRetries?: number;
+  fakeServerOptions?: FakeYnabServerOptions;
 }): Promise<IntegrationHarness> {
   // 1. Create state
   const state = new FakeYnabState();
@@ -38,7 +40,10 @@ export async function createIntegrationHarness(options?: {
   }
 
   // 3. Start fake YNAB HTTP server
-  const fakeServer = await createFakeYnabServer(state);
+  const fakeServer = await createFakeYnabServer(
+    state,
+    options?.fakeServerOptions,
+  );
 
   // 4. Create temp directory for undo store persistence
   const tempDir = await mkdtemp(join(tmpdir(), "ynab-integration-"));
