@@ -90,6 +90,7 @@ export function registerUndoTools(
             id: op.id,
             timestamp: op.timestamp,
             description: op.description,
+            ...(op.note !== undefined && { note: op.note }),
           }));
         }
 

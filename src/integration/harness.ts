@@ -5,7 +5,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createYnabMcpServer } from "../server.js";
 import { FakeBudgetBuilder } from "./fake-ynab/builder.js";
-import { createFakeYnabServer } from "./fake-ynab/server.js";
+import {
+  createFakeYnabServer,
+  type FakeYnabServer,
+} from "./fake-ynab/server.js";
 import { FakeYnabState } from "./fake-ynab/state.js";
 
 export { FakeBudgetBuilder, FakeYnabState };
@@ -13,6 +16,8 @@ export { FakeBudgetBuilder, FakeYnabState };
 export interface IntegrationHarness {
   state: FakeYnabState;
   client: Client;
+  /** The fake YNAB HTTP server, for fault injection and abort stats. */
+  fake: FakeYnabServer;
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
   close(): Promise<void>;
 }
@@ -20,6 +25,8 @@ export interface IntegrationHarness {
 export async function createIntegrationHarness(options?: {
   readOnly?: boolean;
   seed?: (builder: FakeBudgetBuilder) => void;
+  timeoutMs?: number;
+  maxRetries?: number;
 }): Promise<IntegrationHarness> {
   // 1. Create state
   const state = new FakeYnabState();
@@ -42,6 +49,8 @@ export async function createIntegrationHarness(options?: {
     endpointUrl: fakeServer.url,
     dataDirectory: tempDir,
     readOnly: options?.readOnly,
+    timeoutMs: options?.timeoutMs,
+    maxRetries: options?.maxRetries,
   });
 
   // 6. Create linked transports
@@ -94,5 +103,5 @@ export async function createIntegrationHarness(options?: {
     await rm(tempDir, { recursive: true, force: true });
   };
 
-  return { state, client, callTool, close };
+  return { state, client, fake: fakeServer, callTool, close };
 }

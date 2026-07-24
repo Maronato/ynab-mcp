@@ -18,6 +18,8 @@ export interface CreateServerOptions {
   cacheTtlMs?: number;
   pastMonthCacheTtlMs?: number;
   undoHistoryLimit?: number;
+  timeoutMs?: number;
+  maxRetries?: number;
 }
 
 export function createYnabMcpServer(options: CreateServerOptions): {
@@ -28,6 +30,8 @@ export function createYnabMcpServer(options: CreateServerOptions): {
     readOnly: options.readOnly,
     cacheTtlMs: options.cacheTtlMs,
     pastMonthCacheTtlMs: options.pastMonthCacheTtlMs,
+    timeoutMs: options.timeoutMs,
+    maxRetries: options.maxRetries,
   });
   const undoStore = new UndoStore(
     options.dataDirectory,

@@ -39,6 +39,9 @@ export interface PendingOperation {
   budget_id: string;
   timestamp: string;
   description: string;
+  /** Set when the operation failed ambiguously (e.g. a timeout): explains
+   * why the marker was left behind and what the user should check. */
+  note?: string;
 }
 
 export interface UndoHistoryFile {

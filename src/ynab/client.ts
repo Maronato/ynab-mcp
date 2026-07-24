@@ -1,6 +1,11 @@
 import * as ynab from "ynab";
 import { CacheManager, type MoneyMovementsSnapshot } from "./cache.js";
-import { extractErrorMessage, isNotFoundError } from "./errors.js";
+import {
+  extractErrorMessage,
+  isNotFoundError,
+  unwrapSdkError,
+  YnabApiTimeoutError,
+} from "./errors.js";
 import {
   asCurrency,
   asMilliunits,
@@ -31,17 +36,26 @@ const FULL_HISTORY_SINCE_DATE = "2000-01-01";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Extra headroom for the promise-race backstop over the fetch-level abort.
+ * The abort in {@link RateLimitTrackingApi} is the authoritative timeout —
+ * it kills the underlying HTTP request. The race only exists to catch
+ * hangs the abort can't reach (e.g. response-body parsing), so it fires
+ * strictly later to guarantee the abort path wins when both apply.
+ */
+const TIMEOUT_BACKSTOP_GRACE_MS = 5_000;
+
 /** Maximum number of retries for transient failures on read operations. */
 const DEFAULT_MAX_RETRIES = 2;
 
 function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
-  message: string,
+  makeError: () => Error,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout>;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+    timeoutId = setTimeout(() => reject(makeError()), ms);
   });
   return Promise.race([promise, timeoutPromise]).finally(() =>
     clearTimeout(timeoutId),
@@ -49,6 +63,9 @@ function withTimeout<T>(
 }
 
 function isTransientError(error: unknown): boolean {
+  if (error instanceof YnabApiTimeoutError) {
+    return true;
+  }
   // Timeout errors from our own wrapper
   if (error instanceof Error && error.message.includes("timed out")) {
     return true;
@@ -141,13 +158,53 @@ class RateLimitTrackingApi extends ynab.API {
     accessToken: string,
     endpointUrl: string | undefined,
     rateLimiter: RateLimiter,
+    timeoutMs: number,
   ) {
     super(accessToken, endpointUrl);
+
+    // Abort the underlying HTTP request when it exceeds the time budget.
+    // Racing a timer against the SDK promise is not enough on its own: an
+    // abandoned-but-still-running write can be applied server-side after
+    // the client has already reported failure, leaving no undo entry for a
+    // change that actually happened.
+    const fetchWithAbortableTimeout = async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const controller = new AbortController();
+      let timedOut = false;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      // Compose with any caller-provided signal by forwarding its abort.
+      // (AbortSignal.any would be cleaner but needs Node >= 20.3, and the
+      // package only requires >= 20.)
+      const upstreamSignal = init?.signal ?? undefined;
+      const forwardAbort = () => controller.abort(upstreamSignal?.reason);
+      if (upstreamSignal) {
+        if (upstreamSignal.aborted) forwardAbort();
+        else
+          upstreamSignal.addEventListener("abort", forwardAbort, {
+            once: true,
+          });
+      }
+      try {
+        return await fetch(input, { ...init, signal: controller.signal });
+      } catch (error) {
+        if (timedOut) throw new YnabApiTimeoutError(timeoutMs);
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+        upstreamSignal?.removeEventListener("abort", forwardAbort);
+      }
+    };
+
     this._configuration = new ynab.Configuration({
       accessToken,
       basePath: endpointUrl ?? ynab.BASE_PATH,
       fetchApi: async (input: string | URL | Request, init?: RequestInit) => {
-        const response = await fetch(input, init);
+        const response = await fetchWithAbortableTimeout(input, init);
         const header = response.headers.get("X-Rate-Limit");
         if (header) {
           const used = Number(header.split("/")[0]);
@@ -201,7 +258,12 @@ export class YnabClient {
     });
     const rateLimiter = new RateLimiter();
     this.api = this.withRateLimitAndResilience(
-      new RateLimitTrackingApi(accessToken, endpointUrl, rateLimiter),
+      new RateLimitTrackingApi(
+        accessToken,
+        endpointUrl,
+        rateLimiter,
+        this.timeoutMs,
+      ),
       rateLimiter,
     );
     this.readOnly = options?.readOnly ?? false;
@@ -244,9 +306,13 @@ export class YnabClient {
                 );
                 if (result instanceof Promise) {
                   return withTimeout(
-                    result,
-                    timeoutMs,
-                    `YNAB API request timed out after ${timeoutMs / 1000} seconds.`,
+                    // Surface our own timeout / rate-limit errors instead of
+                    // the SDK runtime's generic FetchError wrapper.
+                    result.catch((error) => {
+                      throw unwrapSdkError(error);
+                    }),
+                    timeoutMs + TIMEOUT_BACKSTOP_GRACE_MS,
+                    () => new YnabApiTimeoutError(timeoutMs),
                   );
                 }
                 return result;

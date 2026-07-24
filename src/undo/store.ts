@@ -152,6 +152,22 @@ export class UndoStore {
     return id;
   }
 
+  async annotatePending(
+    budgetId: string,
+    pendingId: string,
+    note: string,
+  ): Promise<void> {
+    await this.withBudgetLock(budgetId, async () => {
+      const history = await this.readBudgetHistoryUnsafe(budgetId);
+      const operation = (history.pending_operations ?? []).find(
+        (op) => op.id === pendingId,
+      );
+      if (!operation) return;
+      operation.note = note;
+      await this.writeBudgetHistoryUnsafe(budgetId, history);
+    });
+  }
+
   async clearPending(budgetId: string, pendingId: string): Promise<void> {
     await this.withBudgetLock(budgetId, async () => {
       const history = await this.readBudgetHistoryUnsafe(budgetId);

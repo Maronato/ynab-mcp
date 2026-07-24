@@ -230,19 +230,103 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-// ── Public API ──
+// ── Fault injection ──
 
-export async function createFakeYnabServer(state: FakeYnabState): Promise<{
+/**
+ * A fault to inject into matching requests, for exercising the client's
+ * failure paths (timeouts, retries, rate limiting) end-to-end.
+ */
+export interface FaultRule {
+  /** Only match this HTTP method (e.g. "POST"). Matches all when omitted. */
+  method?: string;
+  /** Only match paths containing this substring. Matches all when omitted. */
+  pathIncludes?: string;
+  /** Delay before responding (or before applying `status`), in ms. */
+  delayMs?: number;
+  /** Respond with this status instead of routing to a handler. */
+  status?: number;
+  /** Response body for `status`; a YNAB-style error body by default. */
+  body?: unknown;
+  /** Apply to at most this many matching requests. Unlimited when omitted. */
+  times?: number;
+}
+
+export interface FakeYnabServer {
   server: ReturnType<typeof createServer>;
   url: string;
   close: () => Promise<void>;
-}> {
+  /** Inject a fault for subsequent matching requests. */
+  injectFault: (rule: FaultRule) => void;
+  /** Remove all injected faults. */
+  clearFaults: () => void;
+  stats: {
+    /** Requests whose client went away before a response was written. */
+    abortedRequests: number;
+  };
+}
+
+// ── Public API ──
+
+export async function createFakeYnabServer(
+  state: FakeYnabState,
+): Promise<FakeYnabServer> {
   let requestCount = 0;
+  const faults: Array<{ rule: FaultRule; remaining: number }> = [];
+  const stats = { abortedRequests: 0 };
+
+  const takeMatchingFault = (
+    method: string,
+    pathname: string,
+  ): FaultRule | undefined => {
+    const entry = faults.find(
+      ({ rule, remaining }) =>
+        remaining > 0 &&
+        (!rule.method || rule.method === method) &&
+        (!rule.pathIncludes || pathname.includes(rule.pathIncludes)),
+    );
+    if (!entry) return undefined;
+    entry.remaining -= 1;
+    return entry.rule;
+  };
+
   const httpServer = createServer(
     async (req: IncomingMessage, res: ServerResponse) => {
+      res.once("close", () => {
+        if (!res.writableEnded) stats.abortedRequests += 1;
+      });
       try {
         const parsedUrl = new URL(req.url ?? "/", "http://localhost");
         const method = req.method ?? "GET";
+
+        const fault = takeMatchingFault(method, parsedUrl.pathname);
+        if (fault?.delayMs) {
+          // Sleep, but wake early if the client aborts so the test's
+          // event loop isn't held open by orphaned timers.
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, fault.delayMs);
+            res.once("close", () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+          if (res.destroyed || req.destroyed) return;
+        }
+        if (fault?.status) {
+          res.writeHead(fault.status, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify(
+              fault.body ?? {
+                error: {
+                  id: String(fault.status),
+                  name: "injected_error",
+                  detail: "Injected fault",
+                },
+              },
+            ),
+          );
+          return;
+        }
+
         const pathSegments = parsedUrl.pathname
           .split("/")
           .filter((s) => s.length > 0);
@@ -298,6 +382,7 @@ export async function createFakeYnabServer(state: FakeYnabState): Promise<{
         res.writeHead(result.status, headers);
         res.end(JSON.stringify(result.body));
       } catch (err) {
+        if (res.destroyed || res.headersSent) return;
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
@@ -325,5 +410,16 @@ export async function createFakeYnabServer(state: FakeYnabState): Promise<{
       httpServer.close((err) => (err ? reject(err) : resolve()));
     });
 
-  return { server: httpServer, url, close };
+  return {
+    server: httpServer,
+    url,
+    close,
+    injectFault: (rule: FaultRule) => {
+      faults.push({ rule, remaining: rule.times ?? Number.POSITIVE_INFINITY });
+    },
+    clearFaults: () => {
+      faults.length = 0;
+    },
+    stats,
+  };
 }

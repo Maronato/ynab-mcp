@@ -79,6 +79,14 @@ export class UndoEngine {
     return this.store.clearPending(budgetId, pendingId);
   }
 
+  async annotatePending(
+    budgetId: string,
+    pendingId: string,
+    note: string,
+  ): Promise<void> {
+    return this.store.annotatePending(budgetId, pendingId, note);
+  }
+
   async listHistory(
     budgetId: string,
     limit: number,
