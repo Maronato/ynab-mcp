@@ -32,6 +32,7 @@ describe("list_undo_history", () => {
   it("resolves the default budget before listing history", async () => {
     ctx.undoEngine.listHistory.mockResolvedValue({
       entries: [createMockUndoEntry()],
+      total: 1,
       pendingOperations: [],
     });
 
@@ -47,9 +48,11 @@ describe("list_undo_history", () => {
       "budget-1",
       20,
       false,
+      0,
     );
     expect(result.budget_id).toBe("budget-1");
     expect(result.count).toBe(1);
+    expect(result.total_matching).toBe(1);
   });
 });
 

@@ -21,6 +21,12 @@ export function registerUndoTools(
       .max(500)
       .default(20)
       .describe("Maximum entries to return. Defaults to 20."),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe("Entries to skip before returning results, for paging."),
     include_undone: z.boolean().default(false),
   });
 
@@ -51,19 +57,23 @@ export function registerUndoTools(
       try {
         const includeUndone = input.include_undone ?? false;
         const limit = input.limit ?? 20;
+        const offset = input.offset ?? 0;
         const resolvedBudgetId = await context.ynabClient.resolveRealBudgetId(
           input.budget_id,
         );
-        const { entries, pendingOperations } =
+        const { entries, total, pendingOperations } =
           await context.undoEngine.listHistory(
             resolvedBudgetId,
             limit,
             includeUndone,
+            offset,
           );
 
         const result: Record<string, unknown> = {
           budget_id: resolvedBudgetId,
           count: entries.length,
+          total_matching: total,
+          offset,
           entries: entries.map((entry) => ({
             id: entry.id,
             timestamp: entry.timestamp,

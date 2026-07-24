@@ -12,7 +12,7 @@ function createMockStore() {
     appendEntries: vi
       .fn<(budgetId: string, entries: UndoEntry[]) => Promise<void>>()
       .mockResolvedValue(undefined),
-    listEntries: vi.fn().mockResolvedValue([]),
+    listEntries: vi.fn().mockResolvedValue({ entries: [], total: 0 }),
     getEntriesByIds: vi.fn().mockResolvedValue([]),
     markEntriesUndone: vi.fn().mockResolvedValue(undefined),
     resolveMappedId: vi
@@ -88,14 +88,15 @@ describe("recordEntries", () => {
 
 describe("listHistory", () => {
   it("delegates to store.listEntries with correct params", async () => {
-    const result = await engine.listHistory("budget-1", 10, true);
+    const result = await engine.listHistory("budget-1", 10, true, 5);
 
     expect(mockStore.listEntries).toHaveBeenCalledWith("budget-1", {
       limit: 10,
+      offset: 5,
       includeUndone: true,
     });
     expect(mockStore.getPendingOperations).toHaveBeenCalledWith("budget-1");
-    expect(result).toEqual({ entries: [], pendingOperations: [] });
+    expect(result).toEqual({ entries: [], total: 0, pendingOperations: [] });
   });
 });
 

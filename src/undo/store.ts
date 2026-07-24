@@ -10,6 +10,7 @@ const DEFAULT_HISTORY: UndoHistoryFile = {
 
 interface ListHistoryOptions {
   limit: number;
+  offset?: number;
   includeUndone: boolean;
 }
 
@@ -62,7 +63,7 @@ export class UndoStore {
   async listEntries(
     budgetId: string,
     options: ListHistoryOptions,
-  ): Promise<UndoEntry[]> {
+  ): Promise<{ entries: UndoEntry[]; total: number }> {
     const history = await this.readBudgetHistory(budgetId);
     const filtered = history.entries.filter((entry) => {
       if (!options.includeUndone && entry.status !== "active") {
@@ -72,7 +73,11 @@ export class UndoStore {
       return true;
     });
 
-    return filtered.slice(0, options.limit);
+    const offset = options.offset ?? 0;
+    return {
+      entries: filtered.slice(offset, offset + options.limit),
+      total: filtered.length,
+    };
   }
 
   async getEntriesByIds(
