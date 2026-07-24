@@ -19,6 +19,8 @@ export interface IntegrationHarness {
   client: Client;
   /** The fake YNAB HTTP server, for fault injection and abort stats. */
   fake: FakeYnabServer;
+  /** The server's data directory (undo history lives in `history/`). */
+  dataDirectory: string;
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
   close(): Promise<void>;
 }
@@ -108,5 +110,12 @@ export async function createIntegrationHarness(options?: {
     await rm(tempDir, { recursive: true, force: true });
   };
 
-  return { state, client, fake: fakeServer, callTool, close };
+  return {
+    state,
+    client,
+    fake: fakeServer,
+    dataDirectory: tempDir,
+    callTool,
+    close,
+  };
 }

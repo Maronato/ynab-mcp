@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createIntegrationHarness,
@@ -165,6 +167,42 @@ describe("split-phantom cleanup debris", () => {
       result_sets: Array<{ transactions: Array<{ id: string }> }>;
     };
     expect(searchAfter.result_sets[0].transactions).toHaveLength(0);
+  });
+});
+
+describe("crash recovery", () => {
+  it("surfaces pending operations left behind by a crashed process", async () => {
+    harness = await createIntegrationHarness({ seed: seedStandardBudget });
+
+    // Simulate a server that died mid-write: its pending marker is still on
+    // disk when this (fresh) server reads the shared data directory.
+    const historyDir = join(harness.dataDirectory, "history");
+    await mkdir(historyDir, { recursive: true });
+    await writeFile(
+      join(historyDir, "budget-1.json"),
+      JSON.stringify({
+        entries: [],
+        id_mappings: {},
+        pending_operations: [
+          {
+            id: "budget-1::pending::12345",
+            budget_id: "budget-1",
+            timestamp: new Date().toISOString(),
+            description: "Creating 2 transactions",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const history = (await harness.callTool("list_undo_history", {})) as {
+      warning?: string;
+      pending_operations?: Array<{ description: string }>;
+    };
+    expect(history.warning).toMatch(/interrupted/);
+    expect(history.pending_operations?.[0].description).toBe(
+      "Creating 2 transactions",
+    );
   });
 });
 
