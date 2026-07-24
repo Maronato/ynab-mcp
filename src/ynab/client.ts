@@ -141,6 +141,21 @@ const DEFAULT_ACCOUNT_OPTIONS: Required<
   includeClosed: false,
 };
 
+/**
+ * Callback for recording workaround debris that could not be cleaned up:
+ * a temporary flush transaction (see {@link YnabClient.flushSplitPhantoms})
+ * whose delete failed and which therefore remains in the user's budget.
+ * Wired to the undo engine in server.ts so the leftover transaction shows
+ * up in undo history as an undoable create.
+ */
+export interface OrphanedCleanupRecorder {
+  recordOrphanedCleanupTransaction(
+    budgetId: string,
+    transaction: ynab.TransactionDetail,
+    error: unknown,
+  ): Promise<void>;
+}
+
 const DEFAULT_CATEGORIES_OPTIONS: Required<
   Pick<GetCategoriesOptions, "includeHidden">
 > = {
@@ -232,6 +247,8 @@ export class YnabClient {
   private readonly cache: CacheManager;
 
   private resolvedLastUsedId: string | null = null;
+
+  private orphanedCleanupRecorder: OrphanedCleanupRecorder | undefined;
 
   readonly readOnly: boolean;
 
@@ -331,6 +348,10 @@ export class YnabClient {
         });
       },
     });
+  }
+
+  setOrphanedCleanupRecorder(recorder: OrphanedCleanupRecorder): void {
+    this.orphanedCleanupRecorder = recorder;
   }
 
   private assertWriteAllowed(): void {
@@ -966,10 +987,36 @@ export class YnabClient {
       })),
     );
 
+    // A failed delete here would leave a stray -0.01 transaction in the
+    // user's budget. Deleting is idempotent (a repeat delete 404s and maps
+    // to null), so retry transient failures; if the delete still fails,
+    // record the leftover transaction as an undoable create so it is
+    // visible in undo history and removable via undo_operations. A failure
+    // must not reject the caller: the primary operation already succeeded.
     await Promise.all(
-      created.map((t) =>
-        this.deleteTransaction(budgetId, t.id, { skipPhantomFlush: true }),
-      ),
+      created.map(async (t) => {
+        try {
+          await withRetry(
+            () =>
+              this.deleteTransaction(budgetId, t.id, {
+                skipPhantomFlush: true,
+              }),
+            this.maxRetries,
+            isTransientError,
+          );
+        } catch (error) {
+          try {
+            await this.orphanedCleanupRecorder?.recordOrphanedCleanupTransaction(
+              budgetId,
+              t,
+              error,
+            );
+          } catch {
+            // Best-effort: recording failed, but the primary operation
+            // succeeded and must not be reported as failed.
+          }
+        }
+      }),
     );
   }
 

@@ -99,6 +99,75 @@ describe("write timeouts", () => {
   });
 });
 
+describe("split-phantom cleanup debris", () => {
+  it("records undoable entries for flush transactions whose delete fails", async () => {
+    harness = await createIntegrationHarness({
+      seed: seedStandardBudget,
+      maxRetries: 0,
+    });
+
+    const created = (await harness.callTool("create_transactions", {
+      transactions: [
+        {
+          account_id: "acct-checking",
+          date: "2025-01-15",
+          amount: -100.0,
+          memo: "Debris test split",
+          subtransactions: [
+            { amount: -60.0, category_id: "cat-groceries" },
+            { amount: -40.0, category_id: "cat-dining" },
+          ],
+        },
+      ],
+    })) as { transactions: Array<{ id: string }> };
+    const splitId = created.transactions[0].id;
+
+    // Let the primary delete through, then fail the flush-transaction
+    // deletes (the -0.01 workaround cleanups) persistently.
+    harness.fake.injectFault({
+      method: "DELETE",
+      pathIncludes: "/transactions/",
+      status: 500,
+      skip: 1,
+    });
+
+    // The tool call itself must succeed: the split was deleted.
+    await harness.callTool("delete_transactions", {
+      transaction_ids: [splitId],
+    });
+
+    // Both stray cents remain in the budget...
+    const search = (await harness.callTool("search_transactions", {
+      queries: [{ amount_max: -0.005, amount_min: -0.015 }],
+    })) as {
+      result_sets: Array<{ transactions: Array<{ id: string }> }>;
+    };
+    expect(search.result_sets[0].transactions).toHaveLength(2);
+
+    // ...and each is recorded as an undoable create.
+    const history = (await harness.callTool("list_undo_history", {})) as {
+      entries: Array<{ id: string; description: string }>;
+    };
+    const debrisEntries = history.entries.filter((e) =>
+      /cleanup transaction .* could not be deleted/.test(e.description),
+    );
+    expect(debrisEntries).toHaveLength(2);
+
+    // Undoing the recorded entries removes the debris once the API recovers.
+    harness.fake.clearFaults();
+    await harness.callTool("undo_operations", {
+      undo_history_ids: debrisEntries.map((e) => e.id),
+    });
+
+    const searchAfter = (await harness.callTool("search_transactions", {
+      queries: [{ amount_max: -0.005, amount_min: -0.015 }],
+    })) as {
+      result_sets: Array<{ transactions: Array<{ id: string }> }>;
+    };
+    expect(searchAfter.result_sets[0].transactions).toHaveLength(0);
+  });
+});
+
 describe("read retries", () => {
   it("retries transient 5xx failures on reads", async () => {
     harness = await createIntegrationHarness({

@@ -8,6 +8,7 @@ import { registerTools } from "./tools/index.js";
 import { UndoEngine } from "./undo/engine.js";
 import { UndoStore } from "./undo/store.js";
 import { YnabClient } from "./ynab/client.js";
+import { extractErrorMessage } from "./ynab/errors.js";
 
 export interface CreateServerOptions {
   accessToken: string;
@@ -38,6 +39,31 @@ export function createYnabMcpServer(options: CreateServerOptions): {
     options.undoHistoryLimit,
   );
   const undoEngine = new UndoEngine(ynabClient, undoStore);
+
+  // A split-deletion workaround transaction whose cleanup delete failed
+  // stays in the budget; record it as an undoable create so it surfaces in
+  // undo history and can be removed with undo_operations.
+  ynabClient.setOrphanedCleanupRecorder({
+    recordOrphanedCleanupTransaction: async (budgetId, transaction, error) => {
+      await undoEngine.recordEntries(budgetId, [
+        {
+          operation: "create_transaction",
+          description:
+            `Temporary -0.01 cleanup transaction ${transaction.id} (from the ` +
+            "split-deletion workaround) could not be deleted and remains in " +
+            "the budget. Undo this entry to remove it. Reason: " +
+            extractErrorMessage(error),
+          undo_action: {
+            type: "delete",
+            entity_type: "transaction",
+            entity_id: transaction.id,
+            expected_state: ynabClient.snapshotTransaction(transaction),
+            restore_state: {},
+          },
+        },
+      ]);
+    },
+  });
 
   const server = new McpServer(
     {

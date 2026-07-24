@@ -249,6 +249,8 @@ export interface FaultRule {
   body?: unknown;
   /** Apply to at most this many matching requests. Unlimited when omitted. */
   times?: number;
+  /** Let this many matching requests through unharmed before applying. */
+  skip?: number;
 }
 
 export interface FakeYnabServer {
@@ -271,7 +273,11 @@ export async function createFakeYnabServer(
   state: FakeYnabState,
 ): Promise<FakeYnabServer> {
   let requestCount = 0;
-  const faults: Array<{ rule: FaultRule; remaining: number }> = [];
+  const faults: Array<{
+    rule: FaultRule;
+    remaining: number;
+    skipRemaining: number;
+  }> = [];
   const stats = { abortedRequests: 0 };
 
   const takeMatchingFault = (
@@ -285,6 +291,10 @@ export async function createFakeYnabServer(
         (!rule.pathIncludes || pathname.includes(rule.pathIncludes)),
     );
     if (!entry) return undefined;
+    if (entry.skipRemaining > 0) {
+      entry.skipRemaining -= 1;
+      return undefined;
+    }
     entry.remaining -= 1;
     return entry.rule;
   };
@@ -415,7 +425,11 @@ export async function createFakeYnabServer(
     url,
     close,
     injectFault: (rule: FaultRule) => {
-      faults.push({ rule, remaining: rule.times ?? Number.POSITIVE_INFINITY });
+      faults.push({
+        rule,
+        remaining: rule.times ?? Number.POSITIVE_INFINITY,
+        skipRemaining: rule.skip ?? 0,
+      });
     },
     clearFaults: () => {
       faults.length = 0;
