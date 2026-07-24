@@ -131,7 +131,12 @@ export function createMockNameLookup(
       new Map([
         [
           "cat-1",
-          { name: "Groceries", group_id: "group-1", group_name: "Everyday" },
+          {
+            name: "Groceries",
+            group_id: "group-1",
+            group_name: "Everyday",
+            internal: false,
+          },
         ],
       ]),
     payeeById: overrides.payeeById ?? new Map([["payee-1", "Supermarket"]]),

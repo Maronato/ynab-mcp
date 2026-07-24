@@ -63,6 +63,7 @@ export interface CategoryData {
   category_group_name: string | null;
   name: string;
   hidden: boolean;
+  internal: boolean;
   original_category_group_id: string | null;
   note: string | null;
   budgeted: number;
@@ -90,6 +91,7 @@ export interface CategoryGroupData {
   id: string;
   name: string;
   hidden: boolean;
+  internal: boolean;
   deleted: boolean;
   categories: CategoryData[];
 }

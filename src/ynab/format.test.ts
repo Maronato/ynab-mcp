@@ -452,11 +452,21 @@ describe("formatTransactionForOutput", () => {
       categoryById: new Map([
         [
           "cat-1",
-          { name: "Groceries", group_id: "group-1", group_name: "Everyday" },
+          {
+            name: "Groceries",
+            group_id: "group-1",
+            group_name: "Everyday",
+            internal: false,
+          },
         ],
         [
           "cat-2",
-          { name: "Entertainment", group_id: "group-2", group_name: "Fun" },
+          {
+            name: "Entertainment",
+            group_id: "group-2",
+            group_name: "Fun",
+            internal: false,
+          },
         ],
       ]),
     });

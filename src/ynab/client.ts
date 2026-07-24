@@ -18,6 +18,7 @@ import { RateLimiter } from "./rate-limiter.js";
 import { filterAndSortTransactions } from "./search.js";
 import type {
   CategoryBudgetAssignment,
+  CategoryLookupEntry,
   CreateScheduledTransactionInput,
   CreateTransactionInput,
   NameLookup,
@@ -643,10 +644,7 @@ export class YnabClient {
     const accountById = new Map(
       accounts.map((account) => [account.id, account.name]),
     );
-    const categoryById = new Map<
-      string,
-      { name: string; group_id: string; group_name: string }
-    >();
+    const categoryById = new Map<string, CategoryLookupEntry>();
 
     for (const group of categories) {
       for (const category of group.categories) {
@@ -654,6 +652,7 @@ export class YnabClient {
           name: category.name,
           group_id: group.id,
           group_name: group.name,
+          internal: category.internal === true,
         });
       }
     }

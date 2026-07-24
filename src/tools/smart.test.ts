@@ -99,15 +99,30 @@ function setupDefaultMocks(context: ReturnType<typeof createMockContext>) {
       categoryById: new Map([
         [
           "cat-groceries",
-          { name: "Groceries", group_id: "group-2", group_name: "Everyday" },
+          {
+            name: "Groceries",
+            group_id: "group-2",
+            group_name: "Everyday",
+            internal: false,
+          },
         ],
         [
           "cat-dining",
-          { name: "Dining Out", group_id: "group-2", group_name: "Everyday" },
+          {
+            name: "Dining Out",
+            group_id: "group-2",
+            group_name: "Everyday",
+            internal: false,
+          },
         ],
         [
           "cat-electric",
-          { name: "Electric", group_id: "group-1", group_name: "Bills" },
+          {
+            name: "Electric",
+            group_id: "group-1",
+            group_name: "Bills",
+            internal: false,
+          },
         ],
       ]),
     }),

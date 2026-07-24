@@ -137,9 +137,18 @@ export class FakeBudgetBuilder {
         activity?: number;
         balance?: number;
         hidden?: boolean;
+        internal?: boolean;
       } & Record<string, unknown>
     >,
+    options?: { internal?: boolean },
   ): this {
+    // Mirror the live API's flags for the system groups: the master group
+    // and its categories are internal, the credit-card payments group is
+    // internal while its payment categories are not.
+    const groupInternal =
+      options?.internal ??
+      (name === "Internal Master Category" || name === "Credit Card Payments");
+    const categoryInternalDefault = name === "Internal Master Category";
     const cats: CategoryData[] = categories.map((c) => {
       const budgeted = (c.budgeted as number) ?? 0;
       const activity = (c.activity as number) ?? 0;
@@ -150,6 +159,7 @@ export class FakeBudgetBuilder {
         category_group_name: name,
         name: c.name,
         hidden: c.hidden ?? false,
+        internal: c.internal ?? categoryInternalDefault,
         original_category_group_id: null,
         note: null,
         budgeted,
@@ -177,6 +187,7 @@ export class FakeBudgetBuilder {
       id,
       name,
       hidden: false,
+      internal: groupInternal,
       deleted: false,
       categories: cats,
     };
@@ -411,6 +422,7 @@ export class FakeBudgetBuilder {
         category_group_name: null,
         name: "",
         hidden: false,
+        internal: false,
         original_category_group_id: null,
         note: null,
         budgeted: 0,
