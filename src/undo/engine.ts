@@ -359,6 +359,10 @@ export class UndoEngine {
       return this.applyScheduledTransactionUndo(entry, resolvedEntityId);
     }
 
+    if (entry.undo_action.entity_type === "category_target") {
+      return this.applyCategoryTargetUndo(entry);
+    }
+
     return this.applyCategoryBudgetUndo(entry);
   }
 
@@ -551,6 +555,28 @@ export class UndoEngine {
     return "Re-created deleted scheduled transaction.";
   }
 
+  private async applyCategoryTargetUndo(entry: UndoEntry): Promise<string> {
+    const restore = entry.undo_action.restore_state;
+    await this.client.updateCategory(
+      entry.budget_id,
+      asRequiredString(restore.category_id),
+      {
+        goal_target:
+          restore.goal_target == null ? null : asNumber(restore.goal_target),
+        goal_target_date: asOptionalNullableString(restore.goal_target_date),
+        ...("goal_needs_whole_amount" in restore
+          ? {
+              goal_needs_whole_amount:
+                restore.goal_needs_whole_amount == null
+                  ? null
+                  : Boolean(restore.goal_needs_whole_amount),
+            }
+          : {}),
+      },
+    );
+    return "Restored category target.";
+  }
+
   private async applyCategoryBudgetUndo(entry: UndoEntry): Promise<string> {
     const restore = entry.undo_action.restore_state;
     await this.client.setCategoryBudget(entry.budget_id, {
@@ -589,6 +615,29 @@ export class UndoEngine {
       }
 
       return this.client.snapshotScheduledTransaction(transaction);
+    }
+
+    if (entry.undo_action.entity_type === "category_target") {
+      const categoryId = asRequiredString(
+        entry.undo_action.restore_state.category_id,
+      );
+      const category = await this.client.getCategoryById(
+        entry.budget_id,
+        categoryId,
+      );
+
+      if (!category) {
+        return null;
+      }
+
+      // Conflict detection only compares keys present in expected_state,
+      // so entries recorded before a field existed stay compatible.
+      return {
+        category_id: category.id,
+        goal_target: category.goal_target ?? null,
+        goal_target_date: category.goal_target_date ?? null,
+        goal_needs_whole_amount: category.goal_needs_whole_amount ?? null,
+      };
     }
 
     const categoryId = asRequiredString(

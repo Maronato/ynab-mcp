@@ -1234,7 +1234,11 @@ export class YnabClient {
   async updateCategory(
     budgetId: string,
     categoryId: string,
-    updates: { goal_target?: number | null; goal_target_date?: string | null },
+    updates: {
+      goal_target?: number | null;
+      goal_target_date?: string | null;
+      goal_needs_whole_amount?: boolean | null;
+    },
   ): Promise<ynab.Category> {
     this.assertWriteAllowed();
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);

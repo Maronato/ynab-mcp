@@ -140,6 +140,8 @@ export function handlePatchCategory(
       "goal_type",
       "goal_target",
       "goal_target_month",
+      "goal_target_date",
+      "goal_needs_whole_amount",
       "goal_day",
       "goal_cadence",
       "goal_cadence_frequency",

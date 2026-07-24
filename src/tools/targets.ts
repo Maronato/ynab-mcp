@@ -35,6 +35,16 @@ const setCategoryTargetsSchema = z.object({
           .nullable()
           .optional()
           .describe("Target date in YYYY-MM-DD format. Set to null to clear."),
+        goal_needs_whole_amount: z
+          .boolean()
+          .nullable()
+          .optional()
+          .describe(
+            "For 'NEED' targets only: true configures 'Set aside another…' " +
+              "(the full target amount each period), false configures " +
+              "'Refill up to…'. Set to null to reset to the default. Omit " +
+              "to leave unchanged.",
+          ),
       }),
     )
     .min(1)
@@ -97,6 +107,7 @@ export function registerTargetTools(
                   const updates: {
                     goal_target?: number | null;
                     goal_target_date?: string | null;
+                    goal_needs_whole_amount?: boolean | null;
                   } = {};
 
                   if (target.goal_target !== undefined) {
@@ -108,6 +119,11 @@ export function registerTargetTools(
 
                   if (target.goal_target_date !== undefined) {
                     updates.goal_target_date = target.goal_target_date;
+                  }
+
+                  if (target.goal_needs_whole_amount !== undefined) {
+                    updates.goal_needs_whole_amount =
+                      target.goal_needs_whole_amount;
                   }
 
                   const updated = await context.ynabClient.updateCategory(
@@ -136,11 +152,15 @@ export function registerTargetTools(
                         goal_type: before.goal_type ?? null,
                         goal_target: beforeTarget,
                         goal_target_date: before.goal_target_date ?? null,
+                        goal_needs_whole_amount:
+                          before.goal_needs_whole_amount ?? null,
                       },
                       after: {
                         goal_type: updated.goal_type ?? null,
                         goal_target: afterTarget,
                         goal_target_date: updated.goal_target_date ?? null,
+                        goal_needs_whole_amount:
+                          updated.goal_needs_whole_amount ?? null,
                       },
                     } as Record<string, unknown>,
                     undoEntry: {
@@ -154,11 +174,15 @@ export function registerTargetTools(
                           category_id: target.category_id,
                           goal_target: updated.goal_target ?? null,
                           goal_target_date: updated.goal_target_date ?? null,
+                          goal_needs_whole_amount:
+                            updated.goal_needs_whole_amount ?? null,
                         },
                         restore_state: {
                           category_id: target.category_id,
                           goal_target: before.goal_target ?? null,
                           goal_target_date: before.goal_target_date ?? null,
+                          goal_needs_whole_amount:
+                            before.goal_needs_whole_amount ?? null,
                         },
                       },
                     },
