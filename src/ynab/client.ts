@@ -249,6 +249,16 @@ export class YnabClient {
 
   private resolvedLastUsedId: string | null = null;
 
+  /**
+   * In-flight collection refreshes, keyed by `${budgetId}:${collection}`.
+   * Overlapping reads join the same promise instead of double-fetching and
+   * double-applying deltas. (This dedups concurrent *reads*; a write's
+   * optimistic cache update can still race a full fetch that started
+   * earlier — coalescing narrows that window but a delta refresh after the
+   * next TTL remains the backstop.)
+   */
+  private readonly inFlightRefreshes = new Map<string, Promise<unknown>>();
+
   private orphanedCleanupRecorder: OrphanedCleanupRecorder | undefined;
 
   readonly readOnly: boolean;
@@ -1371,22 +1381,39 @@ export class YnabClient {
   // Collection refresh methods (with freshness short-circuit)
   // ---------------------------------------------------------------------------
 
+  /**
+   * Join an already-in-flight refresh for `key` or start `fn` as the new
+   * in-flight refresh. Every joiner receives the same settled result.
+   */
+  private coalesceRefresh<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const existing = this.inFlightRefreshes.get(key);
+    if (existing) return existing as Promise<T>;
+
+    const promise = fn().finally(() => {
+      this.inFlightRefreshes.delete(key);
+    });
+    this.inFlightRefreshes.set(key, promise);
+    return promise;
+  }
+
   private async refreshAccounts(budgetId: string): Promise<ynab.Account[]> {
     const budgetCache = this.cache.getBudgetCache(budgetId);
     if (!this.cache.needsRefresh(budgetCache.accounts)) {
       return [...budgetCache.accounts.byId.values()];
     }
 
-    const response = await this.api.accounts.getAccounts(
-      budgetId,
-      budgetCache.accounts.serverKnowledge,
-    );
+    return this.coalesceRefresh(`${budgetId}:accounts`, async () => {
+      const response = await this.api.accounts.getAccounts(
+        budgetId,
+        budgetCache.accounts.serverKnowledge,
+      );
 
-    return this.cache.applyAccountDeltas(
-      budgetId,
-      response.data.accounts,
-      response.data.server_knowledge,
-    );
+      return this.cache.applyAccountDeltas(
+        budgetId,
+        response.data.accounts,
+        response.data.server_knowledge,
+      );
+    });
   }
 
   private async refreshCategories(
@@ -1397,16 +1424,18 @@ export class YnabClient {
       return [...budgetCache.categoryGroups.values()];
     }
 
-    const response = await this.api.categories.getCategories(
-      budgetId,
-      budgetCache.categories.serverKnowledge,
-    );
+    return this.coalesceRefresh(`${budgetId}:categories`, async () => {
+      const response = await this.api.categories.getCategories(
+        budgetId,
+        budgetCache.categories.serverKnowledge,
+      );
 
-    return this.cache.applyCategoryDeltas(
-      budgetId,
-      response.data.category_groups,
-      response.data.server_knowledge,
-    );
+      return this.cache.applyCategoryDeltas(
+        budgetId,
+        response.data.category_groups,
+        response.data.server_knowledge,
+      );
+    });
   }
 
   private async refreshPayees(budgetId: string): Promise<ynab.Payee[]> {
@@ -1415,16 +1444,18 @@ export class YnabClient {
       return [...budgetCache.payees.byId.values()];
     }
 
-    const response = await this.api.payees.getPayees(
-      budgetId,
-      budgetCache.payees.serverKnowledge,
-    );
+    return this.coalesceRefresh(`${budgetId}:payees`, async () => {
+      const response = await this.api.payees.getPayees(
+        budgetId,
+        budgetCache.payees.serverKnowledge,
+      );
 
-    return this.cache.applyPayeeDeltas(
-      budgetId,
-      response.data.payees,
-      response.data.server_knowledge,
-    );
+      return this.cache.applyPayeeDeltas(
+        budgetId,
+        response.data.payees,
+        response.data.server_knowledge,
+      );
+    });
   }
 
   private async refreshMonths(budgetId: string): Promise<ynab.MonthSummary[]> {
@@ -1433,16 +1464,18 @@ export class YnabClient {
       return [...budgetCache.months.byId.values()];
     }
 
-    const response = await this.api.months.getPlanMonths(
-      budgetId,
-      budgetCache.months.serverKnowledge,
-    );
+    return this.coalesceRefresh(`${budgetId}:months`, async () => {
+      const response = await this.api.months.getPlanMonths(
+        budgetId,
+        budgetCache.months.serverKnowledge,
+      );
 
-    return this.cache.applyMonthDeltas(
-      budgetId,
-      response.data.months,
-      response.data.server_knowledge,
-    );
+      return this.cache.applyMonthDeltas(
+        budgetId,
+        response.data.months,
+        response.data.server_knowledge,
+      );
+    });
   }
 
   private async refreshScheduledTransactions(
@@ -1453,17 +1486,19 @@ export class YnabClient {
       return [...budgetCache.scheduledTransactions.byId.values()];
     }
 
-    const response =
-      await this.api.scheduledTransactions.getScheduledTransactions(
-        budgetId,
-        budgetCache.scheduledTransactions.serverKnowledge,
-      );
+    return this.coalesceRefresh(`${budgetId}:scheduled`, async () => {
+      const response =
+        await this.api.scheduledTransactions.getScheduledTransactions(
+          budgetId,
+          budgetCache.scheduledTransactions.serverKnowledge,
+        );
 
-    return this.cache.applyScheduledTransactionDeltas(
-      budgetId,
-      response.data.scheduled_transactions,
-      response.data.server_knowledge,
-    );
+      return this.cache.applyScheduledTransactionDeltas(
+        budgetId,
+        response.data.scheduled_transactions,
+        response.data.server_knowledge,
+      );
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1475,68 +1510,85 @@ export class YnabClient {
    * - If uncovered or requesting older data: full fetch (resets SK).
    * - If covered but stale/TTL-expired: delta refresh.
    * - If covered and fresh: no-op.
+   *
+   * An in-flight transaction refresh is joined first and the requirement is
+   * then re-evaluated: the joined refresh may have satisfied it (typical
+   * concurrent-read case) or may have covered a narrower date range, in
+   * which case this caller starts its own fetch.
    */
   private async ensureTransactionsCovered(
     budgetId: string,
     sinceDate?: string,
   ): Promise<void> {
-    const budgetCache = this.cache.getBudgetCache(budgetId);
-    const txCache = budgetCache.transactions;
     const effectiveSinceDate = sinceDate ?? "";
+    const refreshKey = `${budgetId}:transactions`;
 
-    const isCovered =
-      txCache.serverKnowledge != null &&
-      txCache.coveredSinceDate <= effectiveSinceDate;
+    for (;;) {
+      const inFlight = this.inFlightRefreshes.get(refreshKey);
+      if (inFlight) {
+        await inFlight;
+        continue;
+      }
 
-    if (!isCovered) {
-      // Full fetch: either first time, or requesting older data than cached
-      await this.fullFetchTransactions(budgetId, effectiveSinceDate);
+      const txCache = this.cache.getBudgetCache(budgetId).transactions;
+      const isCovered =
+        txCache.serverKnowledge != null &&
+        txCache.coveredSinceDate <= effectiveSinceDate;
+
+      if (!isCovered) {
+        // Full fetch: either first time, or requesting older data than cached
+        await this.fullFetchTransactions(budgetId, effectiveSinceDate);
+        return;
+      }
+
+      if (this.cache.needsRefresh(txCache)) {
+        await this.refreshTransactions(budgetId);
+      }
       return;
-    }
-
-    if (this.cache.needsRefresh(txCache)) {
-      await this.refreshTransactions(budgetId);
     }
   }
 
   /** Full fetch (no SK). Replaces the transaction cache entirely. */
-  private async fullFetchTransactions(
+  private fullFetchTransactions(
     budgetId: string,
     sinceDate: string,
   ): Promise<void> {
-    // Always pass an explicit since_date: the live API defaults a missing
-    // since_date to one year ago, which would silently truncate a "full
-    // history" fetch while the cache still claims full coverage.
-    const response = await this.api.transactions.getTransactions(
-      budgetId,
-      sinceDate || FULL_HISTORY_SINCE_DATE,
-    );
+    return this.coalesceRefresh(`${budgetId}:transactions`, async () => {
+      // Always pass an explicit since_date: the live API defaults a missing
+      // since_date to one year ago, which would silently truncate a "full
+      // history" fetch while the cache still claims full coverage.
+      const response = await this.api.transactions.getTransactions(
+        budgetId,
+        sinceDate || FULL_HISTORY_SINCE_DATE,
+      );
 
-    this.cache.applyFullTransactionFetch(
-      budgetId,
-      response.data.transactions,
-      sinceDate,
-      response.data.server_knowledge,
-    );
+      this.cache.applyFullTransactionFetch(
+        budgetId,
+        response.data.transactions,
+        sinceDate,
+        response.data.server_knowledge,
+      );
+    });
   }
 
   /** Delta refresh using stored SK + coveredSinceDate. */
-  private async refreshTransactions(budgetId: string): Promise<void> {
-    const budgetCache = this.cache.getBudgetCache(budgetId);
-    const txCache = budgetCache.transactions;
+  private refreshTransactions(budgetId: string): Promise<void> {
+    return this.coalesceRefresh(`${budgetId}:transactions`, async () => {
+      const txCache = this.cache.getBudgetCache(budgetId).transactions;
 
-    const response = await this.api.transactions.getTransactions(
-      budgetId,
-      txCache.coveredSinceDate || FULL_HISTORY_SINCE_DATE,
-      undefined,
-      undefined,
-      txCache.serverKnowledge,
-    );
+      const response = await this.api.transactions.getTransactions(
+        budgetId,
+        txCache.coveredSinceDate || FULL_HISTORY_SINCE_DATE,
+        undefined,
+        undefined,
+        txCache.serverKnowledge,
+      );
 
-    this.cache.applyTransactionDeltas(
-      budgetId,
-      response.data.transactions,
-      response.data.server_knowledge,
-    );
+      this.cache.applyTransactionDeltas(
+        budgetId,
+        response.data.transactions,
+        response.data.server_knowledge,
+      );
+    });
   }
 }

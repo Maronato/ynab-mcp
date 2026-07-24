@@ -2624,3 +2624,80 @@ describe("getTransactionById freshness", () => {
     expect(result?.id).toBe("t-deleted");
   });
 });
+
+describe("concurrent refresh coalescing", () => {
+  it("joins concurrent account refreshes into one fetch", async () => {
+    let resolveFetch!: (value: unknown) => void;
+    mockApi.accounts.getAccounts.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+
+    const first = client.getAccounts("b");
+    const second = client.getAccounts("b");
+    await vi.waitFor(() => {
+      expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(1);
+    });
+    resolveFetch({ data: { accounts: [account()], server_knowledge: 1 } });
+
+    const [resultA, resultB] = await Promise.all([first, second]);
+    expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(1);
+    expect(resultA).toEqual(resultB);
+  });
+
+  it("joins concurrent transaction fetches with identical coverage", async () => {
+    let resolveFetch!: (value: unknown) => void;
+    mockApi.transactions.getTransactions.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+
+    const first = client.searchTransactions("b", { since_date: "2024-06-01" });
+    const second = client.searchTransactions("b", { since_date: "2024-06-01" });
+    await vi.waitFor(() => {
+      expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(1);
+    });
+    resolveFetch({ data: { transactions: [tx()], server_knowledge: 1 } });
+
+    await Promise.all([first, second]);
+    expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-fetches when a joined refresh does not cover an older since_date", async () => {
+    let resolveFirst!: (value: unknown) => void;
+    mockApi.transactions.getTransactions
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        data: { transactions: [], server_knowledge: 2 },
+      });
+
+    const first = client.searchTransactions("b", { since_date: "2024-06-01" });
+    const second = client.searchTransactions("b", { since_date: "2020-01-01" });
+    await vi.waitFor(() => {
+      expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(1);
+    });
+    resolveFirst({ data: { transactions: [], server_knowledge: 1 } });
+
+    await Promise.all([first, second]);
+    expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(2);
+    expect(mockApi.transactions.getTransactions).toHaveBeenNthCalledWith(
+      1,
+      "b",
+      "2024-06-01",
+    );
+    expect(mockApi.transactions.getTransactions).toHaveBeenNthCalledWith(
+      2,
+      "b",
+      "2020-01-01",
+    );
+  });
+});

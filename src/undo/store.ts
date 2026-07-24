@@ -1,4 +1,12 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 
 import type { PendingOperation, UndoEntry, UndoHistoryFile } from "./types.js";
@@ -7,6 +15,21 @@ const DEFAULT_HISTORY: UndoHistoryFile = {
   entries: [],
   id_mappings: {},
 };
+
+/**
+ * Pending-operation markers describe an interrupted (or ambiguous) write
+ * and are only actionable while the user can still meaningfully verify the
+ * budget's state; after this age they expire on read and are dropped from
+ * the file on the next persisted write.
+ */
+const PENDING_OPERATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** Leftover atomic-write temp files older than this are deleted; younger
+ * ones might belong to a live writer (possibly another process). */
+const TMP_FILE_MAX_AGE_MS = 60 * 60 * 1000;
+
+/** Quarantined corrupt history files are kept a while for debugging. */
+const CORRUPT_FILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface ListHistoryOptions {
   limit: number;
@@ -25,6 +48,8 @@ export class UndoStore {
   private readonly maxEntriesPerBudget: number;
 
   private readonly budgetLocks = new Map<string, Promise<void>>();
+
+  private housekeepingStarted = false;
 
   // The history file is reparsed and rewritten whole on every write
   // operation (up to three times per tool call, counting pending markers),
@@ -238,9 +263,10 @@ export class UndoStore {
           parsed.id_mappings && typeof parsed.id_mappings === "object"
             ? parsed.id_mappings
             : {},
-        pending_operations: Array.isArray(parsed.pending_operations)
+        pending_operations: (Array.isArray(parsed.pending_operations)
           ? parsed.pending_operations
-          : [],
+          : []
+        ).filter((op) => !this.isExpiredPendingOperation(op)),
       };
     } catch (error) {
       const nodeError = error as NodeJS.ErrnoException;
@@ -286,8 +312,48 @@ export class UndoStore {
     }
   }
 
+  private isExpiredPendingOperation(op: PendingOperation): boolean {
+    const timestamp = Date.parse(op.timestamp);
+    if (!Number.isFinite(timestamp)) return true;
+    return Date.now() - timestamp > PENDING_OPERATION_MAX_AGE_MS;
+  }
+
   private async ensureHistoryDirectory(): Promise<void> {
     await mkdir(this.historyDirectory, { recursive: true });
+    if (!this.housekeepingStarted) {
+      this.housekeepingStarted = true;
+      // Best-effort, off the hot path: stale artifacts are only ever noise.
+      void this.cleanupStaleArtifacts().catch(() => {});
+    }
+  }
+
+  /**
+   * Delete leftover `.tmp` files (from atomic writes that never renamed)
+   * and aged-out `.corrupt-*` quarantine files. Age thresholds keep live
+   * writers' temp files and recent corruption evidence intact.
+   */
+  private async cleanupStaleArtifacts(): Promise<void> {
+    const names = await readdir(this.historyDirectory);
+    const now = Date.now();
+
+    await Promise.all(
+      names.map(async (name) => {
+        const isTmp = name.endsWith(".tmp");
+        const isCorrupt = name.includes(".corrupt-");
+        if (!isTmp && !isCorrupt) return;
+
+        const maxAge = isTmp ? TMP_FILE_MAX_AGE_MS : CORRUPT_FILE_MAX_AGE_MS;
+        const filePath = join(this.historyDirectory, name);
+        try {
+          const info = await stat(filePath);
+          if (now - info.mtimeMs > maxAge) {
+            await unlink(filePath);
+          }
+        } catch {
+          // Raced with another cleaner or writer; nothing to do.
+        }
+      }),
+    );
   }
 
   private getBudgetHistoryPath(budgetId: string): string {
@@ -306,6 +372,18 @@ export class UndoStore {
     }
   }
 
+  /**
+   * Serialize read-modify-write cycles per budget WITHIN THIS PROCESS.
+   *
+   * The lock is deliberately in-process only. Two server processes sharing
+   * the same data directory cannot corrupt a history file (writes go
+   * through an atomic temp-file rename), but they can lose each other's
+   * updates: both read, both modify, last rename wins. Advisory file locks
+   * were considered and rejected — they hang on some network filesystems,
+   * need stale-lock recovery after crashes, and the multi-process case
+   * (several MCP servers pointed at one YNAB_MCP_DATA_DIR) is explicitly
+   * unsupported. Run one server per data directory instead.
+   */
   private async withBudgetLock<T>(
     budgetId: string,
     callback: () => Promise<T>,
