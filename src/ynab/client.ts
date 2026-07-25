@@ -34,6 +34,33 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 /** Maximum number of retries for transient failures on read operations. */
 const DEFAULT_MAX_RETRIES = 2;
 
+/**
+ * Untransformed money-movement payloads. The SDK's generated models drop the
+ * `deleted` flag the live API sends, so these endpoints are read from the raw
+ * response body.
+ */
+interface RawMovementsBody {
+  data: {
+    money_movements?: Array<ynab.MoneyMovement & { deleted?: boolean }>;
+  };
+}
+
+interface RawGroupsBody {
+  data: {
+    money_movement_groups?: Array<
+      ynab.MoneyMovementGroup & { deleted?: boolean }
+    >;
+  };
+}
+
+/**
+ * True when an API entity is not soft-deleted. Accepts entities whose SDK
+ * model omits the `deleted` flag even though the live API sends it.
+ */
+function isNotDeleted<T extends { deleted?: boolean }>(item: T): boolean {
+  return !item.deleted;
+}
+
 function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
@@ -519,24 +546,38 @@ export class YnabClient {
       return cached.data;
     }
 
-    const [movementsResponse, groupsResponse] = await Promise.all([
-      options.month
-        ? this.api.money_movements.getMoneyMovementsByMonth(
-            resolvedBudgetId,
-            options.month,
-          )
-        : this.api.money_movements.getMoneyMovements(resolvedBudgetId),
-      options.month
-        ? this.api.money_movements.getMoneyMovementGroupsByMonth(
-            resolvedBudgetId,
-            options.month,
-          )
-        : this.api.money_movements.getMoneyMovementGroups(resolvedBudgetId),
+    // The live API returns a `deleted` flag on movements and groups (verified
+    // 2026-07), but SDK 4.5.0's deserializers whitelist fields and drop it, so
+    // soft-deleted entries would be indistinguishable from live ones. Read the
+    // untransformed body from the raw response instead and filter there.
+    const [movementsBody, groupsBody] = await Promise.all([
+      (options.month
+        ? this.api.money_movements.getMoneyMovementsByMonthRaw({
+            planId: resolvedBudgetId,
+            month: options.month,
+          })
+        : this.api.money_movements.getMoneyMovementsRaw({
+            planId: resolvedBudgetId,
+          })
+      ).then((response) => response.raw.json() as Promise<RawMovementsBody>),
+      (options.month
+        ? this.api.money_movements.getMoneyMovementGroupsByMonthRaw({
+            planId: resolvedBudgetId,
+            month: options.month,
+          })
+        : this.api.money_movements.getMoneyMovementGroupsRaw({
+            planId: resolvedBudgetId,
+          })
+      ).then((response) => response.raw.json() as Promise<RawGroupsBody>),
     ]);
 
     const data: MoneyMovementsSnapshot = {
-      movements: movementsResponse.data.money_movements,
-      groups: groupsResponse.data.money_movement_groups,
+      movements: (movementsBody.data.money_movements ?? []).filter(
+        isNotDeleted,
+      ),
+      groups: (groupsBody.data.money_movement_groups ?? []).filter(
+        isNotDeleted,
+      ),
     };
     budgetCache.moneyMovements.set(cacheKey, {
       data,
