@@ -434,13 +434,19 @@ function buildTimeBuckets(
     insights: {
       highest_bucket: highestBucket
         ? {
+            key: highestBucket.key,
             label: highestBucket.label,
+            total: highestBucket.total,
+            transaction_count: highestBucket.transaction_count,
             percentage: highestBucket.percentage,
           }
         : null,
       lowest_bucket: lowestBucket
         ? {
+            key: lowestBucket.key,
             label: lowestBucket.label,
+            total: lowestBucket.total,
+            transaction_count: lowestBucket.transaction_count,
             percentage: lowestBucket.percentage,
           }
         : null,

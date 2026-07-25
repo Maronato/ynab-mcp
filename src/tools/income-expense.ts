@@ -46,7 +46,10 @@ export function registerIncomeExpenseTools(
         "Monthly income vs expense breakdown with savings rate calculation and " +
         "trend detection across months. The in-progress current month is listed " +
         "marked partial, and months predating the budget are listed marked " +
-        "no_data; both are excluded from averages and the trend.",
+        "no_data; both are excluded from averages and the trend. trend is " +
+        "null when fewer than two complete months are available (e.g. " +
+        "months=2 mid-month, or a budget younger than the window) rather " +
+        "than reporting a fabricated flat rate.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -91,11 +94,12 @@ export function registerIncomeExpenseTools(
             },
         );
 
-        // The last month key is the current month; treat it as partial until
-        // its final day and keep it out of averages and the trend windows so
-        // an incomplete month does not read as a spending drop.
+        // The last month key is the current month. It stays partial for the
+        // whole month *including its final day* — spending can still land at
+        // 23:59 — and is kept out of averages and trend windows so an
+        // incomplete month never reads as a spending drop.
         const currentMonthPartial =
-          todayString() <
+          todayString() <=
           endOfMonthString(`${monthKeys[monthKeys.length - 1]}-01`);
 
         // Build per-month breakdown
@@ -149,9 +153,16 @@ export function registerIncomeExpenseTools(
               ) / 100
             : 0;
 
-        // Compute trend: recent months avg savings rate vs prior months,
-        // over complete months only
-        const recentWindow = Math.min(3, Math.floor(completeCount / 2));
+        // Trend compares a recent window of complete months against the
+        // earlier ones, so it needs at least two complete months to exist.
+        // With fewer (e.g. months=2 mid-month, where only one month is
+        // complete) the trend is reported as null rather than falling through
+        // to a fabricated 0% — an empty window would otherwise claim a flat
+        // 0% savings rate for a month that actually saved.
+        const canComputeTrend = completeCount >= 2;
+        const recentWindow = canComputeTrend
+          ? Math.max(1, Math.min(3, Math.floor(completeCount / 2)))
+          : 0;
         const recentMonths =
           recentWindow > 0 ? completeMonths.slice(-recentWindow) : [];
         const priorMonths =
@@ -200,6 +211,14 @@ export function registerIncomeExpenseTools(
           direction = "stable";
         }
 
+        const trend = canComputeTrend
+          ? {
+              direction,
+              recent_savings_rate: recentSavingsRate,
+              prior_savings_rate: priorSavingsRate,
+            }
+          : null;
+
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
           currency: settings.currency_format?.iso_code ?? null,
@@ -211,11 +230,8 @@ export function registerIncomeExpenseTools(
             avg_net: toCurrency(avgNet),
             avg_savings_rate: avgSavingsRate,
           },
-          trend: {
-            direction,
-            recent_savings_rate: recentSavingsRate,
-            prior_savings_rate: priorSavingsRate,
-          },
+          complete_month_count: completeCount,
+          trend,
         });
       } catch (error) {
         return errorToolResult(

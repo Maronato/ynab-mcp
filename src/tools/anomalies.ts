@@ -11,6 +11,20 @@ import {
   milliunitsToCurrency,
 } from "../ynab/format.js";
 
+/**
+ * Floor for the deviation comparison scale, in milliunits. Payees with a
+ * near-constant history have a tiny (or zero) standard deviation, which would
+ * otherwise make any difference at all look infinitely significant.
+ */
+const MIN_DEVIATION_SCALE = 500;
+
+/**
+ * Minimum absolute deviation, in milliunits, before an anomaly can reach the
+ * top severity. Keeps sub-dollar wobble on cheap recurring payees from
+ * outranking genuinely large surprises in the sorted output.
+ */
+const ALERT_MIN_DEVIATION = 25_000;
+
 const sensitivityLevels = ["low", "medium", "high"] as const;
 type Sensitivity = (typeof sensitivityLevels)[number];
 
@@ -84,8 +98,12 @@ export function registerAnomalyTools(
       title: "Detect Anomalies",
       description:
         "Find unusual transactions: abnormal amounts for known payees, " +
-        "large charges from new payees, and potential duplicates. " +
-        "Uses statistical analysis (mean/stddev) against transaction history.",
+        "large charges from new payees, and potential duplicates. Compares " +
+        "each transaction against a baseline built from that payee's other " +
+        "transactions (the transaction itself is excluded). For payees whose " +
+        "history is near-constant the comparison scale is floored, in which " +
+        'case scale_basis is "floor" and scale_multiple is a multiple of ' +
+        "that floor rather than a standard deviation.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -191,21 +209,34 @@ export function registerAnomalyTools(
             const stats = payeeHistory.get(tx.payee_id);
             const baseline = stats ? baselineExcluding(stats, absAmount) : null;
             if (baseline && baseline.n >= 5 && baseline.mean > 0) {
-              // Floor the deviation scale so a perfectly consistent history
+              // Floor the comparison scale so a perfectly consistent history
               // (stddev 0, e.g. a fixed subscription) still flags meaningful
-              // deviations instead of being skipped.
+              // deviations instead of being skipped. When the floor binds,
+              // the resulting multiple is NOT a standard deviation, so it is
+              // reported and described as a scale multiple instead.
               const scale = Math.max(
                 baseline.stddev,
                 baseline.mean * 0.05,
-                500,
+                MIN_DEVIATION_SCALE,
               );
+              const usedStddev = scale === baseline.stddev;
               const deviation = Math.abs(absAmount - baseline.mean);
               if (deviation > sigma * scale) {
                 const key = `unusual_amount:${tx.id}`;
                 if (!seenAnomalyKeys.has(key)) {
                   seenAnomalyKeys.add(key);
-                  const sigmas = Math.round((deviation / scale) * 10) / 10;
-                  const severity: Severity = sigmas >= 3 ? "alert" : "warning";
+                  const multiple = Math.round((deviation / scale) * 10) / 10;
+                  // Severity needs both a large relative multiple and a
+                  // materially large absolute deviation: without the amount
+                  // gate a sub-dollar overage on a cheap recurring payee
+                  // outranked a several-hundred-unit surprise.
+                  const severity: Severity =
+                    multiple >= 3 && deviation >= ALERT_MIN_DEVIATION
+                      ? "alert"
+                      : "warning";
+                  const scaleDescription = usedStddev
+                    ? `${multiple} standard deviations`
+                    : `${multiple}x the expected variation (${formatCurrency(asMilliunits(Math.round(scale)), currencyFormat)}, a floor applied because this payee's history is near-constant)`;
                   anomalies.push({
                     transaction_id: tx.id,
                     date: tx.date,
@@ -215,7 +246,7 @@ export function registerAnomalyTools(
                     anomaly_type: "unusual_amount",
                     severity,
                     detail:
-                      `Amount ${formatCurrency(asMilliunits(absAmount), currencyFormat)} is ${sigmas} standard deviations ` +
+                      `Amount ${formatCurrency(asMilliunits(absAmount), currencyFormat)} is ${scaleDescription} ` +
                       `from the mean of ${formatCurrency(asMilliunits(Math.round(baseline.mean)), currencyFormat)} ` +
                       `for ${payeeName ?? "this payee"} (${baseline.n} other transactions).`,
                     reference: {
@@ -225,7 +256,16 @@ export function registerAnomalyTools(
                       payee_stddev: milliunitsToCurrency(
                         asMilliunits(Math.round(baseline.stddev)),
                       ),
-                      sigma_distance: sigmas,
+                      deviation: milliunitsToCurrency(
+                        asMilliunits(Math.round(deviation)),
+                      ),
+                      // The scale the multiple is measured against, and
+                      // whether it is the real stddev or the floor.
+                      comparison_scale: milliunitsToCurrency(
+                        asMilliunits(Math.round(scale)),
+                      ),
+                      scale_basis: usedStddev ? "stddev" : "floor",
+                      scale_multiple: multiple,
                     },
                   });
                 }

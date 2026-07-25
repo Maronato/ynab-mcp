@@ -83,7 +83,137 @@ beforeEach(() => {
 
 describe("detect_anomalies", () => {
   describe("unusual_amount detection", () => {
-    it("flags a transaction that is >2 sigma from the payee mean (medium sensitivity)", async () => {
+    it("reports a real sigma when the payee history has variance", async () => {
+      const today = new Date();
+      const start = new Date(today);
+      start.setMonth(start.getMonth() - 5);
+
+      // Varied history: mean $100, genuine spread, so stddev — not the
+      // floor — is the comparison scale.
+      const amounts = [-80000, -120000, -90000, -110000, -100000, -95000];
+      const txs = amounts.map((amount, i) => {
+        const d = new Date(start);
+        d.setDate(d.getDate() + i * 14);
+        return createMockTransaction({
+          id: `varied-${i}`,
+          payee_id: "payee-grocery",
+          account_id: "acc-1",
+          category_id: "cat-groceries",
+          amount,
+          date: d.toISOString().slice(0, 10),
+        });
+      });
+
+      const recent = new Date(today);
+      recent.setDate(recent.getDate() - 3);
+      txs.push(
+        createMockTransaction({
+          id: "varied-outlier",
+          payee_id: "payee-grocery",
+          account_id: "acc-1",
+          category_id: "cat-groceries",
+          amount: -400000,
+          date: recent.toISOString().slice(0, 10),
+        }),
+      );
+      ctx.ynabClient.getTransactionsInRange.mockResolvedValue(txs);
+
+      const result = parseResult(
+        await handler({ sensitivity: "medium", history_months: 6 }),
+      );
+      const unusual = result.anomalies.find(
+        (a: { transaction_id: string }) =>
+          a.transaction_id === "varied-outlier",
+      );
+
+      expect(unusual).toBeDefined();
+      expect(unusual.reference.scale_basis).toBe("stddev");
+      expect(unusual.reference.payee_stddev).toBeGreaterThan(0);
+      expect(unusual.detail).toContain("standard deviations");
+    });
+
+    it("excludes the tested transaction from its own baseline", async () => {
+      const today = new Date();
+      const start = new Date(today);
+      start.setMonth(start.getMonth() - 5);
+
+      // Five $50 charges plus one enormous outlier. Including the outlier in
+      // its own baseline would drag the mean toward it and inflate the
+      // stddev enough to hide it; leave-one-out keeps the baseline at $50.
+      const txs = buildPayeeHistory({
+        payeeId: "payee-grocery",
+        normalAmount: -50000,
+        count: 6,
+        startDate: start.toISOString().slice(0, 10),
+      });
+      const recent = new Date(today);
+      recent.setDate(recent.getDate() - 2);
+      txs.push(
+        createMockTransaction({
+          id: "huge-outlier",
+          payee_id: "payee-grocery",
+          account_id: "acc-1",
+          category_id: "cat-groceries",
+          amount: -5000000,
+          date: recent.toISOString().slice(0, 10),
+        }),
+      );
+      ctx.ynabClient.getTransactionsInRange.mockResolvedValue(txs);
+
+      const result = parseResult(
+        await handler({ sensitivity: "low", history_months: 6 }),
+      );
+      const unusual = result.anomalies.find(
+        (a: { transaction_id: string }) => a.transaction_id === "huge-outlier",
+      );
+
+      expect(unusual).toBeDefined();
+      // Baseline mean stays at the $50 the other transactions establish
+      expect(unusual.reference.payee_mean).toBe(50);
+      expect(unusual.severity).toBe("alert");
+    });
+
+    it("does not give top severity to a sub-dollar deviation", async () => {
+      const today = new Date();
+      const start = new Date(today);
+      start.setMonth(start.getMonth() - 5);
+
+      // Constant $4.00 payee, then $5.55: a large multiple of the floor but
+      // a trivial absolute deviation, so it must not outrank real surprises.
+      const txs = buildPayeeHistory({
+        payeeId: "payee-grocery",
+        normalAmount: -4000,
+        count: 8,
+        startDate: start.toISOString().slice(0, 10),
+      });
+      const recent = new Date(today);
+      recent.setDate(recent.getDate() - 2);
+      txs.push(
+        createMockTransaction({
+          id: "small-overage",
+          payee_id: "payee-grocery",
+          account_id: "acc-1",
+          category_id: "cat-groceries",
+          amount: -5550,
+          date: recent.toISOString().slice(0, 10),
+        }),
+      );
+      ctx.ynabClient.getTransactionsInRange.mockResolvedValue(txs);
+
+      const result = parseResult(
+        await handler({ sensitivity: "medium", history_months: 6 }),
+      );
+      const unusual = result.anomalies.find(
+        (a: { transaction_id: string }) => a.transaction_id === "small-overage",
+      );
+
+      expect(unusual).toBeDefined();
+      // Multiple is large, but $1.55 is not an alert
+      expect(unusual.reference.scale_multiple).toBeGreaterThanOrEqual(3);
+      expect(unusual.severity).toBe("warning");
+    });
+
+    it("flags an outlier for a constant-amount payee via the scale floor", async () => {
       // Build 8 consistent transactions of -$50 each, then one outlier of -$200
       const today = new Date();
       const historyStart = new Date(today);
@@ -126,8 +256,13 @@ describe("detect_anomalies", () => {
       expect(unusual).toBeDefined();
       expect(unusual.payee_name).toBe("Whole Foods");
       expect(unusual.severity).toMatch(/warning|alert/);
-      expect(unusual.detail).toContain("standard deviations");
-      expect(unusual.reference.sigma_distance).toBeGreaterThanOrEqual(2);
+      // Eight identical $50 charges: the leave-one-out stddev is exactly 0,
+      // so the floor binds and the multiple is explicitly not a sigma.
+      expect(unusual.reference.payee_stddev).toBe(0);
+      expect(unusual.reference.scale_basis).toBe("floor");
+      expect(unusual.detail).not.toContain("standard deviations");
+      expect(unusual.detail).toContain("expected variation");
+      expect(unusual.reference.scale_multiple).toBeGreaterThanOrEqual(2);
     });
 
     it("does not flag amounts within normal range", async () => {

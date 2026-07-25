@@ -34,6 +34,11 @@ const WRITE_TOOLS = new Set([
  * In read-only mode write tools are not registered at all, so MCP clients
  * only ever see tools they can actually use. The client layer additionally
  * refuses writes (belt and suspenders).
+ *
+ * Contract: callers must not use registerTool's return value. Filtered
+ * registrations return undefined, so `server.registerTool(...).enable()`
+ * would throw in read-only mode only — the configuration least likely to be
+ * exercised during development.
  */
 function withWriteToolFilter(server: McpServer, readOnly: boolean): McpServer {
   if (!readOnly) return server;

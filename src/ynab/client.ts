@@ -29,12 +29,12 @@ import type {
   UpdateTransactionInput,
 } from "./types.js";
 
-/** Default timeout for individual YNAB API requests. */
 // Explicit floor for "all history" transaction fetches. The live API
 // defaults a missing since_date to one year ago (spec 1.85+), so omitting
 // the parameter must never be used to mean "everything".
 const FULL_HISTORY_SINCE_DATE = "2000-01-01";
 
+/** Default timeout for individual YNAB API requests. */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**

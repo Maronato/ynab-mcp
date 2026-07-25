@@ -104,8 +104,8 @@ All configuration is done through environment variables.
 | `list_categories`      | Category group hierarchy with IDs and names                                          |
 | `get_targets`          | Target details: type, amounts, underfunded, percent complete, cadence, and deadlines |
 | `get_monthly_budget`   | Month-level budgeted/activity/balance per category                                   |
-| `set_category_budgets` | Batch set budgeted amounts (one API call per category/month pair, max 50)            |
-| `set_category_targets` | Create or update category targets (monthly, weekly, by-date, etc.)                   |
+| `set_category_budgets` | Batch set budgeted amounts (up to two API calls per category/month pair, max 50)     |
+| `set_category_targets` | Set or clear a category's target amount and date (the API does not expose target type) |
 
 ### Spending Analysis & Diagnostics
 
@@ -170,7 +170,7 @@ Knowledge base resources for YNAB methodology. Workflow prompts reference these 
 
 ## Key Concepts
 
-**Currency units** — All monetary amounts in tool inputs and outputs use standard currency units (e.g., `12.50`), not YNAB's native milliunits. Responses include a top-level `currency` ISO code.
+**Currency units** — All monetary amounts in tool inputs and outputs use standard currency units (e.g., `12.50`), not YNAB's native milliunits. Most tools also echo a top-level `currency` ISO code; `get_spending_analysis` additionally reports raw `*_milliunits` totals alongside them.
 
 **`budget_id`** — Most tools accept an optional `budget_id`. Omit it or pass `"last-used"` to target the most recently accessed budget.
 
