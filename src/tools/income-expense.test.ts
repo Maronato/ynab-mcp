@@ -298,3 +298,29 @@ describe("get_income_expense_summary", () => {
     });
   });
 });
+
+describe("budgets younger than the requested window", () => {
+  it("marks pre-budget months no_data and excludes them from averages and trend", async () => {
+    // Only the two most recent months exist (a 2-month-old budget).
+    setupMonthSummaries([
+      { offset: -1, income: 5000000, activity: -3500000 },
+      { offset: 0, income: 5000000, activity: -3500000 },
+    ]);
+
+    const result = parseResult(await handler({ months: 6 }));
+
+    // Synthetic months are flagged and distinguishable from real zeros.
+    const syntheticMonths = result.months.filter(
+      (m: { no_data?: boolean }) => m.no_data === true,
+    );
+    expect(syntheticMonths).toHaveLength(4);
+    expect(result.months).toHaveLength(6);
+
+    // Averages divide by the months that exist, not the window length.
+    expect(result.averages.avg_income).toBe(5000);
+    expect(result.averages.avg_expenses).toBe(3500);
+
+    // The trend cannot be fabricated from zero-filled prior months.
+    expect(result.trend.direction).toBe("stable");
+  });
+});

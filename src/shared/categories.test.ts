@@ -90,6 +90,50 @@ describe("isCreditCardPaymentsGroup", () => {
     expect(isCreditCardPaymentsGroup(ccpGroup, creditAccounts)).toBe(true);
   });
 
+  it("requires EVERY active category to pair with a credit account", () => {
+    // A polluted-internal user group with one category that coincides
+    // with a card name (e.g. an annual-fee category) must not qualify.
+    expect(
+      isCreditCardPaymentsGroup(
+        {
+          name: "Annual card fees",
+          internal: true,
+          categories: [
+            { name: "Visa", internal: false },
+            { name: "Misc fees", internal: false },
+          ],
+        },
+        creditAccounts,
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores hidden and deleted categories when pairing", () => {
+    expect(
+      isCreditCardPaymentsGroup(
+        {
+          name: "Kreditkarten-Zahlungen",
+          internal: true,
+          categories: [
+            { name: "Visa", internal: false },
+            { name: "Old Card", internal: false, hidden: true },
+            { name: "Closed Card", internal: false, deleted: true },
+          ],
+        },
+        creditAccounts,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects groups with no active categories", () => {
+    expect(
+      isCreditCardPaymentsGroup(
+        { name: "Empty internal group", internal: true, categories: [] },
+        creditAccounts,
+      ),
+    ).toBe(false);
+  });
+
   it("rejects internal-flagged user groups without account pairings", () => {
     expect(isCreditCardPaymentsGroup(pollutedUserGroup, creditAccounts)).toBe(
       false,

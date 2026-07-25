@@ -21,6 +21,8 @@
 interface CategoryLike {
   name: string;
   internal?: boolean;
+  hidden?: boolean;
+  deleted?: boolean;
 }
 
 interface CategoryGroupLike {
@@ -35,7 +37,12 @@ const CREDIT_CARD_PAYMENTS_GROUP_NAME = "Credit Card Payments";
 /**
  * Whether a category is one of YNAB's internal system categories
  * ("Inflow: Ready to Assign", "Uncategorized"). The category-level flag is
- * reliable; the group name is kept as a fallback for flag-less data.
+ * trusted without corroboration: unlike the group-level flag, it was
+ * verified clean against a live budget (spec 1.86, 2026-07) — set on
+ * exactly the two system categories and nothing else. If that ever
+ * regresses the failure mode is a category silently dropping out of
+ * spending totals, so re-verify before weakening this. The group name is
+ * kept as a fallback for flag-less data.
  */
 export function isInternalCategory(
   category: CategoryLike,
@@ -55,8 +62,13 @@ export function isInternalMasterGroup(group: CategoryGroupLike): boolean {
 
 /**
  * Whether a group is YNAB's credit-card payments group. Payment categories
- * are not flagged internal themselves, so the corroborating signal is a
- * category named after a credit-card account (`creditAccountNames`).
+ * are not flagged internal themselves, so the corroborating signal is the
+ * account-name pairing (`creditAccountNames`): a real payments group holds
+ * exactly one category per credit account, named after it, so EVERY active
+ * category must pair. A weaker any-match test would misclassify a user
+ * group that carries the polluted internal flag and happens to contain one
+ * category named after a card (e.g. an "Annual card fees" group), silently
+ * dropping its overspending from health reports.
  */
 export function isCreditCardPaymentsGroup(
   group: CategoryGroupLike,
@@ -65,8 +77,12 @@ export function isCreditCardPaymentsGroup(
   if (group.name === CREDIT_CARD_PAYMENTS_GROUP_NAME) return true;
   if (group.internal !== true) return false;
   if (!creditAccountNames || creditAccountNames.size === 0) return false;
-  return (group.categories ?? []).some((category) =>
-    creditAccountNames.has(category.name),
+  const activeCategories = (group.categories ?? []).filter(
+    (category) => !category.hidden && !category.deleted,
+  );
+  return (
+    activeCategories.length > 0 &&
+    activeCategories.every((category) => creditAccountNames.has(category.name))
   );
 }
 

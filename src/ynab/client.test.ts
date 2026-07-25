@@ -2701,3 +2701,58 @@ describe("concurrent refresh coalescing", () => {
     );
   });
 });
+
+describe("write-vs-refresh invalidation epoch", () => {
+  it("re-marks a collection stale when a write lands during its refresh", async () => {
+    // Prime the accounts cache (fetch 1).
+    mockApi.accounts.getAccounts.mockResolvedValueOnce({
+      data: {
+        accounts: [account({ id: "acc-1", balance: 999 })],
+        server_knowledge: 1,
+      },
+    });
+    await client.getAccounts("b");
+
+    // A write marks accounts stale.
+    await client.createTransactions("b", [
+      { account_id: "acc-1", date: "2024-01-15", amount: -1 },
+    ]);
+
+    // Fetch 2 starts (deferred) — then another write lands mid-flight.
+    let resolveRefresh!: (value: unknown) => void;
+    mockApi.accounts.getAccounts.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
+    const inFlight = client.getAccounts("b");
+    await vi.waitFor(() => {
+      expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(2);
+    });
+    await client.createTransactions("b", [
+      { account_id: "acc-1", date: "2024-01-16", amount: -2 },
+    ]);
+
+    // The refresh resolves with a PRE-write snapshot.
+    resolveRefresh({
+      data: {
+        accounts: [account({ id: "acc-1", balance: 999 })],
+        server_knowledge: 2,
+      },
+    });
+    await inFlight;
+
+    // Because the epoch advanced mid-flight, the collection stayed stale:
+    // the next read reconciles instead of serving pre-write data for a TTL.
+    mockApi.accounts.getAccounts.mockResolvedValueOnce({
+      data: {
+        accounts: [account({ id: "acc-1", balance: 100 })],
+        server_knowledge: 3,
+      },
+    });
+    const after = await client.getAccounts("b");
+    expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(3);
+    expect(after[0].balance).toBe(100);
+  });
+});

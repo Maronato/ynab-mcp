@@ -45,7 +45,8 @@ export function registerIncomeExpenseTools(
       description:
         "Monthly income vs expense breakdown with savings rate calculation and " +
         "trend detection across months. The in-progress current month is listed " +
-        "marked partial, but excluded from averages and the trend.",
+        "marked partial, and months predating the budget are listed marked " +
+        "no_data; both are excluded from averages and the trend.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -65,11 +66,17 @@ export function registerIncomeExpenseTools(
 
         // One delta-capable months-list call covers every requested month
         // (aggregates only, which is all this summary needs). Months before
-        // the budget existed are filled with zeros.
+        // the budget existed are filled with zeros, marked no_data, and
+        // excluded from averages and trend windows — counting fabricated
+        // zero months would understate averages and invent trends for
+        // budgets younger than the requested window.
         const allMonths = await context.ynabClient.getMonthSummaries(
           input.budget_id,
         );
         const byMonth = new Map(allMonths.map((m) => [m.month.slice(0, 7), m]));
+        const missingMonths = new Set(
+          monthKeys.filter((monthKey) => !byMonth.has(monthKey)),
+        );
         const monthSummaries = monthKeys.map(
           (monthKey) =>
             byMonth.get(monthKey) ?? {
@@ -107,13 +114,16 @@ export function registerIncomeExpenseTools(
             savings_rate: savingsRate,
             ...(currentMonthPartial &&
               idx === monthSummaries.length - 1 && { partial: true }),
+            ...(missingMonths.has(monthKeys[idx]) && { no_data: true }),
           };
         });
 
-        // Averages and trend use complete months only
-        const completeMonths = currentMonthPartial
-          ? months.slice(0, -1)
-          : months;
+        // Averages and trend use complete months that actually exist:
+        // the in-progress current month and synthetic no_data months are
+        // both excluded, and divisors use the surviving count.
+        const completeMonths = (
+          currentMonthPartial ? months.slice(0, -1) : months
+        ).filter((m) => !m.no_data);
         const completeCount = completeMonths.length;
         const totalIncome = completeMonths.reduce(
           (sum, m) => sum + currencyToMilliunits(asCurrency(m.income)),

@@ -106,19 +106,29 @@ export function registerHealthTools(
         );
 
         // --- Build credit card payment category lookup ---
-        // YNAB puts one category per credit card in its payments group.
-        // The category name matches the account name.
-        const creditCardAccountNames = new Set(
-          creditCardAccounts.map((a) => a.name),
+        // YNAB puts one category per credit account in its payments group.
+        // The category name matches the account name. Lines of credit get
+        // payment categories too, so include them in the pairing set even
+        // though gap detection below focuses on cards.
+        const creditAccountNames = new Set(
+          openAccounts
+            .filter((a) => a.type === "creditCard" || a.type === "lineOfCredit")
+            .map((a) => a.name),
         );
         const paymentCategoryByName = new Map<
           string,
           { id: string; balance: number }
         >();
         for (const group of categoryGroups) {
-          if (isCreditCardPaymentsGroup(group, creditCardAccountNames)) {
+          if (isCreditCardPaymentsGroup(group, creditAccountNames)) {
             for (const cat of group.categories) {
-              if (!cat.hidden && !cat.deleted) {
+              // First qualifying group wins a name: a user category must
+              // never overwrite a real payment category's balance.
+              if (
+                !cat.hidden &&
+                !cat.deleted &&
+                !paymentCategoryByName.has(cat.name)
+              ) {
                 paymentCategoryByName.set(cat.name, {
                   id: cat.id,
                   balance: cat.balance,
@@ -147,7 +157,7 @@ export function registerHealthTools(
         let totalUnderfunded = 0;
 
         for (const group of categoryGroups) {
-          if (isSystemCategoryGroup(group, creditCardAccountNames)) continue;
+          if (isSystemCategoryGroup(group, creditAccountNames)) continue;
 
           for (const cat of group.categories) {
             if (cat.hidden || cat.deleted) continue;

@@ -27,6 +27,11 @@ export interface CollectionCache<T> {
   stale: boolean;
   lastRefreshedAt: number;
   lastDeltas?: SyncDeltas;
+  /** Bumped on every local invalidation (write-driven staleness or
+   * optimistic update). A refresh snapshots this before fetching and
+   * re-marks the collection stale if it advanced mid-flight, so a fetch
+   * that raced a write cannot pin pre-write data for a full TTL. */
+  epoch: number;
 }
 
 export interface TransactionCache {
@@ -36,6 +41,8 @@ export interface TransactionCache {
   stale: boolean;
   lastRefreshedAt: number;
   lastDeltas?: SyncDeltas;
+  /** See {@link CollectionCache.epoch}. */
+  epoch: number;
 }
 
 export interface SimpleCache<T> {
@@ -106,21 +113,28 @@ export class CacheManager {
     }
 
     const cache: BudgetCache = {
-      accounts: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
-      categories: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
-      payees: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
+      accounts: { byId: new Map(), stale: false, lastRefreshedAt: 0, epoch: 0 },
+      categories: {
+        byId: new Map(),
+        stale: false,
+        lastRefreshedAt: 0,
+        epoch: 0,
+      },
+      payees: { byId: new Map(), stale: false, lastRefreshedAt: 0, epoch: 0 },
       scheduledTransactions: {
         byId: new Map(),
         stale: false,
         lastRefreshedAt: 0,
+        epoch: 0,
       },
       transactions: {
         byId: new Map(),
         coveredSinceDate: "",
         stale: false,
         lastRefreshedAt: 0,
+        epoch: 0,
       },
-      months: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
+      months: { byId: new Map(), stale: false, lastRefreshedAt: 0, epoch: 0 },
       categoryGroups: new Map(),
       monthSummaries: new Map(),
       monthCategories: new Map(),
@@ -140,6 +154,7 @@ export class CacheManager {
     const cache = this.getBudgetCache(budgetId);
     for (const key of keys) {
       cache[key].stale = true;
+      cache[key].epoch += 1;
     }
   }
 
@@ -150,6 +165,7 @@ export class CacheManager {
     // The months collection is delta-capable, so a cheap delta refresh
     // (rather than a full drop) picks up the write's effects.
     cache.months.stale = true;
+    cache.months.epoch += 1;
     // Budget writes create money movements server-side
     cache.moneyMovements.clear();
   }
@@ -204,11 +220,13 @@ export class CacheManager {
         txCache.byId.set(tx.id, tx);
       }
     }
+    txCache.epoch += 1;
   }
 
   optimisticRemoveTransaction(budgetId: string, transactionId: string): void {
     const cache = this.getBudgetCache(budgetId);
     cache.transactions.byId.delete(transactionId);
+    cache.transactions.epoch += 1;
   }
 
   optimisticUpdateScheduledTransaction(
@@ -218,6 +236,7 @@ export class CacheManager {
     const cache = this.getBudgetCache(budgetId);
     if (cache.scheduledTransactions.serverKnowledge == null) return;
     cache.scheduledTransactions.byId.set(transaction.id, transaction);
+    cache.scheduledTransactions.epoch += 1;
   }
 
   optimisticRemoveScheduledTransaction(
@@ -226,6 +245,7 @@ export class CacheManager {
   ): void {
     const cache = this.getBudgetCache(budgetId);
     cache.scheduledTransactions.byId.delete(scheduledTransactionId);
+    cache.scheduledTransactions.epoch += 1;
   }
 
   // -------------------------------------------------------------------------

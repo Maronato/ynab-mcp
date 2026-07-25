@@ -1431,16 +1431,23 @@ export class YnabClient {
     }
 
     return this.coalesceRefresh(`${budgetId}:accounts`, async () => {
+      const epochAtStart = budgetCache.accounts.epoch;
       const response = await this.api.accounts.getAccounts(
         budgetId,
         budgetCache.accounts.serverKnowledge,
       );
 
-      return this.cache.applyAccountDeltas(
+      const applied = this.cache.applyAccountDeltas(
         budgetId,
         response.data.accounts,
         response.data.server_knowledge,
       );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.accounts.epoch !== epochAtStart) {
+        budgetCache.accounts.stale = true;
+      }
+      return applied;
     });
   }
 
@@ -1453,16 +1460,23 @@ export class YnabClient {
     }
 
     return this.coalesceRefresh(`${budgetId}:categories`, async () => {
+      const epochAtStart = budgetCache.categories.epoch;
       const response = await this.api.categories.getCategories(
         budgetId,
         budgetCache.categories.serverKnowledge,
       );
 
-      return this.cache.applyCategoryDeltas(
+      const applied = this.cache.applyCategoryDeltas(
         budgetId,
         response.data.category_groups,
         response.data.server_knowledge,
       );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.categories.epoch !== epochAtStart) {
+        budgetCache.categories.stale = true;
+      }
+      return applied;
     });
   }
 
@@ -1473,16 +1487,23 @@ export class YnabClient {
     }
 
     return this.coalesceRefresh(`${budgetId}:payees`, async () => {
+      const epochAtStart = budgetCache.payees.epoch;
       const response = await this.api.payees.getPayees(
         budgetId,
         budgetCache.payees.serverKnowledge,
       );
 
-      return this.cache.applyPayeeDeltas(
+      const applied = this.cache.applyPayeeDeltas(
         budgetId,
         response.data.payees,
         response.data.server_knowledge,
       );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.payees.epoch !== epochAtStart) {
+        budgetCache.payees.stale = true;
+      }
+      return applied;
     });
   }
 
@@ -1493,16 +1514,23 @@ export class YnabClient {
     }
 
     return this.coalesceRefresh(`${budgetId}:months`, async () => {
+      const epochAtStart = budgetCache.months.epoch;
       const response = await this.api.months.getPlanMonths(
         budgetId,
         budgetCache.months.serverKnowledge,
       );
 
-      return this.cache.applyMonthDeltas(
+      const applied = this.cache.applyMonthDeltas(
         budgetId,
         response.data.months,
         response.data.server_knowledge,
       );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.months.epoch !== epochAtStart) {
+        budgetCache.months.stale = true;
+      }
+      return applied;
     });
   }
 
@@ -1515,17 +1543,24 @@ export class YnabClient {
     }
 
     return this.coalesceRefresh(`${budgetId}:scheduled`, async () => {
+      const epochAtStart = budgetCache.scheduledTransactions.epoch;
       const response =
         await this.api.scheduledTransactions.getScheduledTransactions(
           budgetId,
           budgetCache.scheduledTransactions.serverKnowledge,
         );
 
-      return this.cache.applyScheduledTransactionDeltas(
+      const applied = this.cache.applyScheduledTransactionDeltas(
         budgetId,
         response.data.scheduled_transactions,
         response.data.server_knowledge,
       );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.scheduledTransactions.epoch !== epochAtStart) {
+        budgetCache.scheduledTransactions.stale = true;
+      }
+      return applied;
     });
   }
 
@@ -1582,6 +1617,8 @@ export class YnabClient {
     sinceDate: string,
   ): Promise<void> {
     return this.coalesceRefresh(`${budgetId}:transactions`, async () => {
+      const txCache = this.cache.getBudgetCache(budgetId).transactions;
+      const epochAtStart = txCache.epoch;
       // Always pass an explicit since_date: the live API defaults a missing
       // since_date to one year ago, which would silently truncate a "full
       // history" fetch while the cache still claims full coverage.
@@ -1596,6 +1633,12 @@ export class YnabClient {
         sinceDate,
         response.data.server_knowledge,
       );
+      // A write landed while the fetch was in flight (its optimistic update
+      // may just have been clobbered by the full snapshot); keep the cache
+      // stale so the next read reconciles via delta.
+      if (txCache.epoch !== epochAtStart) {
+        txCache.stale = true;
+      }
     });
   }
 
@@ -1603,6 +1646,7 @@ export class YnabClient {
   private refreshTransactions(budgetId: string): Promise<void> {
     return this.coalesceRefresh(`${budgetId}:transactions`, async () => {
       const txCache = this.cache.getBudgetCache(budgetId).transactions;
+      const epochAtStart = txCache.epoch;
 
       const response = await this.api.transactions.getTransactions(
         budgetId,
@@ -1617,6 +1661,9 @@ export class YnabClient {
         response.data.transactions,
         response.data.server_knowledge,
       );
+      if (txCache.epoch !== epochAtStart) {
+        txCache.stale = true;
+      }
     });
   }
 }

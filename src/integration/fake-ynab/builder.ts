@@ -138,6 +138,8 @@ export class FakeBudgetBuilder {
         balance?: number;
         hidden?: boolean;
         internal?: boolean;
+        goal_type?: string | null;
+        goal_under_funded?: number | null;
       } & Record<string, unknown>
     >,
     options?: { internal?: boolean },
@@ -165,7 +167,7 @@ export class FakeBudgetBuilder {
         budgeted,
         activity,
         balance,
-        goal_type: null,
+        goal_type: c.goal_type ?? null,
         goal_needs_whole_amount: null,
         goal_day: null,
         goal_cadence: null,
@@ -176,7 +178,7 @@ export class FakeBudgetBuilder {
         goal_target_date: null,
         goal_percentage_complete: null,
         goal_months_to_budget: null,
-        goal_under_funded: null,
+        goal_under_funded: c.goal_under_funded ?? null,
         goal_overall_funded: null,
         goal_overall_left: null,
         goal_snoozed_at: null,
