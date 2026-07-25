@@ -205,6 +205,29 @@ export type QueryParams = Record<string, string>;
 
 // ── State container ──
 
+export interface MoneyMovementData {
+  id: string;
+  month: string;
+  moved_at: string;
+  note: string | null;
+  money_movement_group_id: string | null;
+  performed_by_user_id: string | null;
+  from_category_id: string | null;
+  to_category_id: string | null;
+  amount: number;
+  /** The live API sends this even though the SDK model omits it. */
+  deleted: boolean;
+}
+
+export interface MoneyMovementGroupData {
+  id: string;
+  group_created_at: string;
+  month: string;
+  note: string | null;
+  performed_by_user_id: string | null;
+  deleted: boolean;
+}
+
 export class FakeYnabState {
   serverKnowledge = 1;
 
@@ -226,6 +249,11 @@ export class FakeYnabState {
   readonly monthDetails = new Map<string, Map<string, MonthDetailData>>();
   /** planId → "month::catId" → CategoryData */
   readonly monthCategories = new Map<string, Map<string, CategoryData>>();
+
+  /** planId → MoneyMovementData[] */
+  readonly moneyMovements = new Map<string, MoneyMovementData[]>();
+  /** planId → MoneyMovementGroupData[] */
+  readonly moneyMovementGroups = new Map<string, MoneyMovementGroupData[]>();
 
   readonly changeLog: ChangeLogEntry[] = [];
 
@@ -304,5 +332,8 @@ export class FakeYnabState {
       this.monthDetails.set(planId, new Map());
     if (!this.monthCategories.has(planId))
       this.monthCategories.set(planId, new Map());
+    if (!this.moneyMovements.has(planId)) this.moneyMovements.set(planId, []);
+    if (!this.moneyMovementGroups.has(planId))
+      this.moneyMovementGroups.set(planId, []);
   }
 }

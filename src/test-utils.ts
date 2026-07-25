@@ -197,7 +197,6 @@ export function createMockContext(): MockAppContext {
       resolveRealBudgetId: vi.fn(async (id?: string) => id ?? "budget-1"),
       listBudgets: vi.fn().mockResolvedValue([]),
       getBudgetSettings: vi.fn().mockResolvedValue({ currency_format: {} }),
-      getBudgetSummary: vi.fn().mockResolvedValue({}),
       getAccounts: vi.fn().mockResolvedValue([]),
       getCategories: vi.fn().mockResolvedValue([]),
       getMonthSummary: vi.fn().mockResolvedValue({ categories: [] }),

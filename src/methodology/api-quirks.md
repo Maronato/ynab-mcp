@@ -4,30 +4,27 @@ Known limitations of the YNAB API that affect what you can do through this MCP s
 
 ## Scheduled Transaction Frequencies
 
-### Only 5 frequency values are supported for create and update
+The current YNAB API spec accepts the full 13-value frequency enum on create
+and update — the same values it returns on reads: `never`, `daily`, `weekly`,
+`everyOtherWeek`, `twiceAMonth`, `every4Weeks`, `monthly`, `everyOtherMonth`,
+`every3Months`, `every4Months`, `twiceAYear`, `yearly`, `everyOtherYear`.
 
-When creating or updating scheduled transactions, you can only use these frequency values:
+Earlier API versions rejected compound values (like `everyOtherWeek`) on
+writes and refused any update to a compound-frequency scheduled transaction.
+That restriction is no longer in the spec — but note the evidence differs in
+kind: the old restriction was observed against the live API, while its
+removal is so far only established from the published spec (write access was
+not available to re-verify it). If the live API still rejects a compound
+value, the per-item error result of the create/update tool reports it
+without failing the rest of the batch; fall back to a simple frequency plus
+a memo naming the real cadence in that case.
 
-- `never`
-- `daily`
-- `weekly`
-- `monthly`
-- `yearly`
+Two constraints that do still apply:
 
-All other values (e.g., `everyOtherWeek`, `twiceAMonth`, `every4Months`) will be rejected.
-
-### Compound-frequency transactions are read-only
-
-Scheduled transactions created through the YNAB app can use compound frequencies like `every4Months` or `twiceAMonth`. These appear normally when reading scheduled transactions, but **cannot be modified through the API at all** — not even to change unrelated fields like memo or amount. The API rejects the entire update.
-
-These transactions must be edited directly in the YNAB app.
-
-| Operation | Compound frequency | Simple frequency |
-|-----------|-------------------|-----------------|
-| Create | Rejected | Works |
-| Read | Works | Works |
-| Update (any field) | **Rejected** | Works |
-| Delete | Works | Works |
+- The scheduled transaction `date` must be in the future and no more than
+  5 years out.
+- Scheduled transactions cannot have splits (subtransactions) through the
+  API; split scheduled transactions can only be managed in the YNAB app.
 
 ## Split (Multi-Category) Transactions
 

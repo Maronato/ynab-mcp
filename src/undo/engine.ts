@@ -83,15 +83,21 @@ export class UndoEngine {
     budgetId: string,
     limit: number,
     includeUndone = false,
-  ): Promise<{ entries: UndoEntry[]; pendingOperations: PendingOperation[] }> {
-    const [entries, pendingOperations] = await Promise.all([
+    offset = 0,
+  ): Promise<{
+    entries: UndoEntry[];
+    total: number;
+    pendingOperations: PendingOperation[];
+  }> {
+    const [{ entries, total }, pendingOperations] = await Promise.all([
       this.store.listEntries(budgetId, {
         limit,
+        offset,
         includeUndone,
       }),
       this.store.getPendingOperations(budgetId),
     ]);
-    return { entries, pendingOperations };
+    return { entries, total, pendingOperations };
   }
 
   async undoOperations(

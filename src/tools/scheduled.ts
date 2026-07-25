@@ -16,11 +16,24 @@ import type {
   UpdateScheduledTransactionInput,
 } from "../ynab/types.js";
 
-// The YNAB API only accepts these five frequency values.
-// The SDK enum includes compound values (everyOtherWeek, twiceAMonth, etc.)
-// but the API rejects them on both create and update. Scheduled transactions
-// with compound frequencies can only be created through the YNAB app.
-const frequencies = ["never", "daily", "weekly", "monthly", "yearly"] as const;
+// The full 13-value frequency enum from the current YNAB API spec, valid on
+// both create and update. If the live API still rejects a compound value the
+// per-item error result will surface it.
+const frequencies = [
+  "never",
+  "daily",
+  "weekly",
+  "everyOtherWeek",
+  "twiceAMonth",
+  "every4Weeks",
+  "monthly",
+  "everyOtherMonth",
+  "every3Months",
+  "every4Months",
+  "twiceAYear",
+  "yearly",
+  "everyOtherYear",
+] as const;
 
 const flagColors = [
   "red",
@@ -149,12 +162,12 @@ export function registerScheduledTransactionTools(
 
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
+          currency: settings.currency_format?.iso_code ?? null,
           count: transactions.length,
           transactions: transactions.map((transaction) =>
             formatScheduledTransactionForOutput(
               { ...transaction, amount: asMilliunits(transaction.amount) },
               lookups,
-              settings.currency_format,
             ),
           ),
         });
@@ -171,7 +184,8 @@ export function registerScheduledTransactionTools(
     {
       title: "Create Scheduled Transactions",
       description:
-        "Create one or more scheduled transactions. Each successful creation is undoable.",
+        "Create one or more scheduled transactions. Each successful creation is " +
+        "undoable and costs one YNAB API call (no bulk endpoint exists).",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -224,7 +238,6 @@ export function registerScheduledTransactionTools(
               const formatted = formatScheduledTransactionForOutput(
                 { ...created, amount: asMilliunits(created.amount) },
                 lookups,
-                settings.currency_format,
               );
 
               createdTransactions.push(formatted);
@@ -264,6 +277,7 @@ export function registerScheduledTransactionTools(
 
           return jsonToolResult({
             budget_id: resolvedBudgetId,
+            currency: settings.currency_format?.iso_code ?? null,
             created_count: createdTransactions.length,
             results,
             transactions: createdTransactions,
@@ -288,7 +302,8 @@ export function registerScheduledTransactionTools(
     {
       title: "Update Scheduled Transactions",
       description:
-        "Update one or more scheduled transactions. Each successful update is undoable.",
+        "Update one or more scheduled transactions. Each successful update is " +
+        "undoable and costs one YNAB API call (no bulk endpoint exists).",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -357,7 +372,6 @@ export function registerScheduledTransactionTools(
                 transaction: formatScheduledTransactionForOutput(
                   { ...updated, amount: asMilliunits(updated.amount) },
                   lookups,
-                  settings.currency_format,
                 ),
               });
 
@@ -392,6 +406,7 @@ export function registerScheduledTransactionTools(
 
           return jsonToolResult({
             budget_id: resolvedBudgetId,
+            currency: settings.currency_format?.iso_code ?? null,
             results,
             undo_history_ids: undoHistoryIds,
           });
@@ -414,7 +429,8 @@ export function registerScheduledTransactionTools(
     {
       title: "Delete Scheduled Transactions",
       description:
-        "Delete one or more scheduled transactions. Each deletion is undoable.",
+        "Delete one or more scheduled transactions. Each deletion is undoable " +
+        "and costs one YNAB API call (no bulk endpoint exists).",
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,

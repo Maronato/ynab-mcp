@@ -2,13 +2,18 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import {
+  addDaysToDateString,
+  dateMonthsAgo,
+  daysBetween,
+  todayString,
+} from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
   asCurrency,
   asMilliunits,
   currencyToMilliunits,
-  formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
 import type { ScheduledFrequency } from "../ynab/types.js";
@@ -57,13 +62,10 @@ interface DetectedSubscription {
   detected_frequency_label: string;
   occurrence_count: number;
   current_amount: number;
-  current_amount_display: string;
   previous_amount: number | null;
-  previous_amount_display: string | null;
   price_changed: boolean;
   price_change_percent: number | null;
   monthly_equivalent: number;
-  monthly_equivalent_display: string;
   last_charge_date: string;
   next_expected_date: string;
   is_overdue: boolean;
@@ -74,9 +76,7 @@ interface DetectedSubscription {
 }
 
 function getHistorySinceDate(months: number): string {
-  const date = new Date();
-  date.setMonth(date.getMonth() - months);
-  return date.toISOString().slice(0, 10);
+  return dateMonthsAgo(months);
 }
 
 function computeMedian(values: number[]): number {
@@ -110,30 +110,17 @@ function labelToScheduledFrequency(label: string): ScheduledFrequency {
   switch (label) {
     case "weekly":
       return "weekly";
-    case "monthly":
     case "biweekly":
-    case "quarterly":
+      return "everyOtherWeek";
+    case "monthly":
       return "monthly";
+    case "quarterly":
+      return "every3Months";
     case "annual":
       return "yearly";
     default:
       return "monthly";
   }
-}
-
-function addDays(dateStr: string, days: number): string {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + Math.round(days));
-  return d.toISOString().slice(0, 10);
-}
-
-function daysBetween(a: string, b: string): number {
-  const msPerDay = 1000 * 60 * 60 * 24;
-  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / msPerDay);
-}
-
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 export function registerRecurringTools(
@@ -177,8 +164,6 @@ export function registerRecurringTools(
             context.ynabClient.getNameLookup(resolvedBudgetId),
             context.ynabClient.getBudgetSettings(resolvedBudgetId),
           ]);
-
-        const currencyFormat = settings.currency_format;
 
         // Step 4: Group transactions by payee_id (outflows only, skip transfers)
         const payeeGroups = new Map<string, PayeeTransactionGroup>();
@@ -271,8 +256,11 @@ export function registerRecurringTools(
 
           // Compute next expected date and overdue status
           const lastChargeDate = sortedDates[sortedDates.length - 1];
-          const nextExpectedDate = addDays(lastChargeDate, medianInterval);
-          const today = todayStr();
+          const nextExpectedDate = addDaysToDateString(
+            lastChargeDate,
+            medianInterval,
+          );
+          const today = todayString();
           const daysOverdue = daysBetween(nextExpectedDate, today);
           const isOverdue = daysOverdue > 0;
 
@@ -311,26 +299,14 @@ export function registerRecurringTools(
             detected_frequency_label: frequencyLabel,
             occurrence_count: sortedAmounts.length,
             current_amount: milliunitsToCurrency(asMilliunits(absLast)),
-            current_amount_display: formatCurrency(
-              asMilliunits(absLast),
-              currencyFormat,
-            ),
             previous_amount:
               absPrev !== null
                 ? milliunitsToCurrency(asMilliunits(absPrev))
-                : null,
-            previous_amount_display:
-              absPrev !== null
-                ? formatCurrency(asMilliunits(absPrev), currencyFormat)
                 : null,
             price_changed: priceChanged,
             price_change_percent: priceChangePercent,
             monthly_equivalent: milliunitsToCurrency(
               asMilliunits(monthlyEquivalent),
-            ),
-            monthly_equivalent_display: formatCurrency(
-              asMilliunits(monthlyEquivalent),
-              currencyFormat,
             ),
             last_charge_date: lastChargeDate,
             next_expected_date: nextExpectedDate,
@@ -381,14 +357,11 @@ export function registerRecurringTools(
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
+          currency: settings.currency_format?.iso_code ?? null,
           subscription_count: subscriptions.length,
           unmatched_count: unmatchedCount,
           total_monthly_cost: milliunitsToCurrency(
             asMilliunits(totalMonthlyCostMilliunits),
-          ),
-          total_monthly_cost_display: formatCurrency(
-            asMilliunits(totalMonthlyCostMilliunits),
-            currencyFormat,
           ),
           subscriptions,
           create_scheduled_actions: createScheduledActions,

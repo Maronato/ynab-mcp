@@ -4,11 +4,7 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import {
-  asMilliunits,
-  formatCurrency,
-  milliunitsToCurrency,
-} from "../ynab/format.js";
+import { asMilliunits, milliunitsToCurrency } from "../ynab/format.js";
 
 const getAccountsSchema = z.object({
   budget_id: z
@@ -67,6 +63,8 @@ export function registerAccountTools(
         ]);
 
         return jsonToolResult({
+          budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
+          currency: settings.currency_format?.iso_code ?? null,
           count: accounts.length,
           accounts: accounts.map((account) => ({
             id: account.id,
@@ -75,23 +73,11 @@ export function registerAccountTools(
             on_budget: account.on_budget,
             closed: account.closed,
             balance: milliunitsToCurrency(asMilliunits(account.balance)),
-            balance_display: formatCurrency(
-              asMilliunits(account.balance),
-              settings.currency_format,
-            ),
             cleared_balance: milliunitsToCurrency(
               asMilliunits(account.cleared_balance),
             ),
-            cleared_balance_display: formatCurrency(
-              asMilliunits(account.cleared_balance),
-              settings.currency_format,
-            ),
             uncleared_balance: milliunitsToCurrency(
               asMilliunits(account.uncleared_balance),
-            ),
-            uncleared_balance_display: formatCurrency(
-              asMilliunits(account.uncleared_balance),
-              settings.currency_format,
             ),
           })),
         });

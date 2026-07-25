@@ -417,14 +417,12 @@ describe("formatTransactionForOutput", () => {
     expect(result.category_name).toBeNull();
   });
 
-  it("converts amount from milliunits and produces amount_display", () => {
+  it("converts amount from milliunits to currency units", () => {
     const tx = createMockTransaction({ amount: -50000 });
     const lookups = createMockNameLookup();
-    const format = createMockCurrencyFormat();
-    const result = formatTransactionForOutput(tx, lookups, format);
+    const result = formatTransactionForOutput(tx, lookups);
 
     expect(result.amount).toBe(-50);
-    expect(result.amount_display).toBe("-$50.00");
   });
 
   it("normalizes memo and flag_color undefined to null", () => {
@@ -462,8 +460,7 @@ describe("formatTransactionForOutput", () => {
         ],
       ]),
     });
-    const format = createMockCurrencyFormat();
-    const result = formatTransactionForOutput(tx, lookups, format);
+    const result = formatTransactionForOutput(tx, lookups);
 
     expect(result.is_split).toBe(true);
     expect(result.subtransactions).toHaveLength(2);
@@ -472,7 +469,6 @@ describe("formatTransactionForOutput", () => {
     const sub1 = subs[0];
     expect(sub1.id).toBe("sub-1");
     expect(sub1.amount).toBe(-30);
-    expect(sub1.amount_display).toBe("-$30.00");
     expect(sub1.category_id).toBe("cat-1");
     expect(sub1.category_name).toBe("Groceries");
     expect(sub1.category_group_id).toBe("group-1");
@@ -559,14 +555,12 @@ describe("formatScheduledTransactionForOutput", () => {
     expect(result.category_group_name).toBeNull();
   });
 
-  it("converts amount and produces amount_display", () => {
+  it("converts amount from milliunits to currency units", () => {
     const stx = createMockScheduledTransaction({ amount: -100000 });
     const lookups = createMockNameLookup();
-    const format = createMockCurrencyFormat();
-    const result = formatScheduledTransactionForOutput(stx, lookups, format);
+    const result = formatScheduledTransactionForOutput(stx, lookups);
 
     expect(result.amount).toBe(-100);
-    expect(result.amount_display).toBe("-$100.00");
   });
 
   it("falls back to null for missing lookup IDs", () => {

@@ -1,5 +1,5 @@
 import * as ynab from "ynab";
-import { CacheManager } from "./cache.js";
+import { CacheManager, type MoneyMovementsSnapshot } from "./cache.js";
 import { extractErrorMessage, isNotFoundError } from "./errors.js";
 import {
   asCurrency,
@@ -23,11 +23,43 @@ import type {
   UpdateTransactionInput,
 } from "./types.js";
 
+// Explicit floor for "all history" transaction fetches. The live API
+// defaults a missing since_date to one year ago (spec 1.85+), so omitting
+// the parameter must never be used to mean "everything".
+const FULL_HISTORY_SINCE_DATE = "2000-01-01";
+
 /** Default timeout for individual YNAB API requests. */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** Maximum number of retries for transient failures on read operations. */
 const DEFAULT_MAX_RETRIES = 2;
+
+/**
+ * Untransformed money-movement payloads. The SDK's generated models drop the
+ * `deleted` flag the live API sends, so these endpoints are read from the raw
+ * response body.
+ */
+interface RawMovementsBody {
+  data: {
+    money_movements?: Array<ynab.MoneyMovement & { deleted?: boolean }>;
+  };
+}
+
+interface RawGroupsBody {
+  data: {
+    money_movement_groups?: Array<
+      ynab.MoneyMovementGroup & { deleted?: boolean }
+    >;
+  };
+}
+
+/**
+ * True when an API entity is not soft-deleted. Accepts entities whose SDK
+ * model omits the `deleted` flag even though the live API sends it.
+ */
+function isNotDeleted<T extends { deleted?: boolean }>(item: T): boolean {
+  return !item.deleted;
+}
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -84,6 +116,7 @@ async function withRetry<T>(
 }
 
 const KNOWN_SUB_APIS = new Set([
+  "money_movements",
   "plans",
   "accounts",
   "categories",
@@ -124,10 +157,49 @@ const DEFAULT_CATEGORIES_OPTIONS: Required<
   includeHidden: false,
 };
 
+/**
+ * ynab.API subclass whose Configuration routes requests through a custom
+ * fetch. This is the only clean hook the SDK offers for reading response
+ * headers (X-Rate-Limit) and intercepting 429s — its error path otherwise
+ * throws the parsed JSON body with no access to status or headers.
+ */
+class RateLimitTrackingApi extends ynab.API {
+  constructor(
+    accessToken: string,
+    endpointUrl: string | undefined,
+    rateLimiter: RateLimiter,
+  ) {
+    super(accessToken, endpointUrl);
+    this._configuration = new ynab.Configuration({
+      accessToken,
+      basePath: endpointUrl ?? ynab.BASE_PATH,
+      fetchApi: async (input: string | URL | Request, init?: RequestInit) => {
+        const response = await fetch(input, init);
+        const header = response.headers.get("X-Rate-Limit");
+        if (header) {
+          const used = Number(header.split("/")[0]);
+          if (Number.isFinite(used)) {
+            rateLimiter.syncFromServer(used);
+          }
+        }
+        if (response.status === 429) {
+          // YNAB omits X-Rate-Limit (and Retry-After) on 429 responses, so
+          // the local window estimate is the only reset signal available.
+          rateLimiter.notifyServerLimited();
+          throw new Error(
+            `YNAB API rate limit exceeded (429). ${rateLimiter.describeReset()}`,
+          );
+        }
+        return response;
+      },
+    });
+  }
+}
+
 export class YnabClient {
   private readonly api: ynab.API;
 
-  private readonly cache = new CacheManager();
+  private readonly cache: CacheManager;
 
   private resolvedLastUsedId: string | null = null;
 
@@ -140,13 +212,24 @@ export class YnabClient {
   constructor(
     accessToken: string,
     endpointUrl?: string,
-    options?: { readOnly?: boolean; timeoutMs?: number; maxRetries?: number },
+    options?: {
+      readOnly?: boolean;
+      timeoutMs?: number;
+      maxRetries?: number;
+      cacheTtlMs?: number;
+      pastMonthCacheTtlMs?: number;
+    },
   ) {
     this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.cache = new CacheManager({
+      ttlMs: options?.cacheTtlMs,
+      pastMonthTtlMs: options?.pastMonthCacheTtlMs,
+    });
+    const rateLimiter = new RateLimiter();
     this.api = this.withRateLimitAndResilience(
-      new ynab.API(accessToken, endpointUrl),
-      new RateLimiter(),
+      new RateLimitTrackingApi(accessToken, endpointUrl, rateLimiter),
+      rateLimiter,
     );
     this.readOnly = options?.readOnly ?? false;
   }
@@ -280,64 +363,6 @@ export class YnabClient {
     return budgetCache.settings.data;
   }
 
-  async getBudgetSummary(budgetId?: string) {
-    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
-    const [accounts, month] = await Promise.all([
-      this.getAccounts(resolvedBudgetId, { includeClosed: true }),
-      this.getMonthSummary(resolvedBudgetId, "current"),
-    ]);
-
-    const netWorthMilliunits = accounts.reduce(
-      (sum, account) => sum + account.balance,
-      0,
-    );
-
-    const overspentCategoryCount = month.categories.filter(
-      (category) =>
-        category.balance < 0 && !category.hidden && !category.deleted,
-    ).length;
-
-    const accountsByType = new Map<
-      string,
-      { type: string; count: number; total_balance: number }
-    >();
-
-    for (const account of accounts) {
-      const current = accountsByType.get(account.type) ?? {
-        type: account.type,
-        count: 0,
-        total_balance: 0,
-      };
-
-      current.count += 1;
-      current.total_balance += account.balance;
-      accountsByType.set(account.type, current);
-    }
-
-    return {
-      budget_id: resolvedBudgetId,
-      month: month.month,
-      net_worth_milliunits: netWorthMilliunits,
-      net_worth: milliunitsToCurrency(asMilliunits(netWorthMilliunits)),
-      income_milliunits: month.income,
-      income: milliunitsToCurrency(asMilliunits(month.income)),
-      budgeted_milliunits: month.budgeted,
-      budgeted: milliunitsToCurrency(asMilliunits(month.budgeted)),
-      activity_milliunits: month.activity,
-      activity: milliunitsToCurrency(asMilliunits(month.activity)),
-      to_be_budgeted_milliunits: month.to_be_budgeted,
-      to_be_budgeted: milliunitsToCurrency(asMilliunits(month.to_be_budgeted)),
-      age_of_money: month.age_of_money ?? null,
-      overspent_category_count: overspentCategoryCount,
-      account_summary_by_type: [...accountsByType.values()].map((entry) => ({
-        type: entry.type,
-        count: entry.count,
-        total_balance_milliunits: entry.total_balance,
-        total_balance: milliunitsToCurrency(asMilliunits(entry.total_balance)),
-      })),
-    };
-  }
-
   async getAccounts(
     budgetId?: string,
     options: GetAccountsOptions = {},
@@ -440,7 +465,7 @@ export class YnabClient {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
     const cached = budgetCache.monthSummaries.get(month);
-    if (this.cache.isSimpleCacheValid(cached)) {
+    if (this.cache.isMonthCacheValid(cached, month)) {
       return cached.data;
     }
 
@@ -497,6 +522,68 @@ export class YnabClient {
     return payees
       .filter((payee) => !payee.deleted)
       .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  /**
+   * Money movements: the audit feed of moves between categories (or to/from
+   * Ready to Assign, represented by null category ids), including moves made
+   * in the YNAB apps. GET-only and full-fetch (no delta support in the API),
+   * so results are TTL-cached per month key.
+   */
+  async getMoneyMovements(
+    budgetId?: string,
+    options: { month?: string } = {},
+  ): Promise<MoneyMovementsSnapshot> {
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
+    const cacheKey = options.month ?? "all";
+
+    const cached = budgetCache.moneyMovements.get(cacheKey);
+    const isValid = options.month
+      ? this.cache.isMonthCacheValid(cached, options.month)
+      : this.cache.isSimpleCacheValid(cached);
+    if (isValid && cached) {
+      return cached.data;
+    }
+
+    // The live API returns a `deleted` flag on movements and groups (verified
+    // 2026-07), but SDK 4.5.0's deserializers whitelist fields and drop it, so
+    // soft-deleted entries would be indistinguishable from live ones. Read the
+    // untransformed body from the raw response instead and filter there.
+    const [movementsBody, groupsBody] = await Promise.all([
+      (options.month
+        ? this.api.money_movements.getMoneyMovementsByMonthRaw({
+            planId: resolvedBudgetId,
+            month: options.month,
+          })
+        : this.api.money_movements.getMoneyMovementsRaw({
+            planId: resolvedBudgetId,
+          })
+      ).then((response) => response.raw.json() as Promise<RawMovementsBody>),
+      (options.month
+        ? this.api.money_movements.getMoneyMovementGroupsByMonthRaw({
+            planId: resolvedBudgetId,
+            month: options.month,
+          })
+        : this.api.money_movements.getMoneyMovementGroupsRaw({
+            planId: resolvedBudgetId,
+          })
+      ).then((response) => response.raw.json() as Promise<RawGroupsBody>),
+    ]);
+
+    const data: MoneyMovementsSnapshot = {
+      movements: (movementsBody.data.money_movements ?? []).filter(
+        isNotDeleted,
+      ),
+      groups: (groupsBody.data.money_movement_groups ?? []).filter(
+        isNotDeleted,
+      ),
+    };
+    budgetCache.moneyMovements.set(cacheKey, {
+      data,
+      lastRefreshedAt: Date.now(),
+    });
+    return data;
   }
 
   async getNameLookup(budgetId?: string): Promise<NameLookup> {
@@ -1091,7 +1178,7 @@ export class YnabClient {
     const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
     const cacheKey = `${month}:${categoryId}`;
     const cached = budgetCache.monthCategories.get(cacheKey);
-    if (this.cache.isSimpleCacheValid(cached)) {
+    if (this.cache.isMonthCacheValid(cached, month)) {
       return cached.data;
     }
 
@@ -1311,9 +1398,12 @@ export class YnabClient {
     budgetId: string,
     sinceDate: string,
   ): Promise<void> {
+    // Always pass an explicit since_date: the live API defaults a missing
+    // since_date to one year ago, which would silently truncate a "full
+    // history" fetch while the cache still claims full coverage.
     const response = await this.api.transactions.getTransactions(
       budgetId,
-      sinceDate || undefined,
+      sinceDate || FULL_HISTORY_SINCE_DATE,
     );
 
     this.cache.applyFullTransactionFetch(
@@ -1331,7 +1421,8 @@ export class YnabClient {
 
     const response = await this.api.transactions.getTransactions(
       budgetId,
-      txCache.coveredSinceDate || undefined,
+      txCache.coveredSinceDate || FULL_HISTORY_SINCE_DATE,
+      undefined,
       undefined,
       txCache.serverKnowledge,
     );

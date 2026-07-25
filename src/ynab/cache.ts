@@ -3,6 +3,18 @@ import type * as ynab from "ynab";
 /** Default TTL: 1 hour. External changes are picked up after this period. */
 export const CACHE_TTL_MS = 60 * 60 * 1000;
 
+/**
+ * Default TTL for completed past months: 24 hours. Past-month summaries and
+ * category snapshots only change on retroactive edits, and refreshing them
+ * is a full re-fetch (no delta sync), so they get a much longer TTL.
+ */
+export const PAST_MONTH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+export interface CacheTtlOptions {
+  ttlMs?: number;
+  pastMonthTtlMs?: number;
+}
+
 export interface SyncDeltas {
   added: number;
   updated: number;
@@ -31,6 +43,11 @@ export interface SimpleCache<T> {
   lastRefreshedAt: number;
 }
 
+export interface MoneyMovementsSnapshot {
+  movements: ynab.MoneyMovement[];
+  groups: ynab.MoneyMovementGroup[];
+}
+
 export type StaleableCollectionKey =
   | "accounts"
   | "categories"
@@ -48,6 +65,9 @@ export interface BudgetCache {
   settings?: SimpleCache<ynab.PlanSettings>;
   monthSummaries: Map<string, SimpleCache<ynab.MonthDetail>>;
   monthCategories: Map<string, SimpleCache<ynab.Category>>;
+  /** Keyed by month (YYYY-MM-DD) or "all". Full-fetch only: the money
+   * movement endpoints accept no last_knowledge_of_server parameter. */
+  moneyMovements: Map<string, SimpleCache<MoneyMovementsSnapshot>>;
 }
 
 /**
@@ -60,7 +80,16 @@ export interface BudgetCache {
 export class CacheManager {
   private readonly budgetCaches = new Map<string, BudgetCache>();
 
+  private readonly ttlMs: number;
+
+  private readonly pastMonthTtlMs: number;
+
   plansCache: SimpleCache<ynab.PlanSummary[]> | undefined;
+
+  constructor(options: CacheTtlOptions = {}) {
+    this.ttlMs = options.ttlMs ?? CACHE_TTL_MS;
+    this.pastMonthTtlMs = options.pastMonthTtlMs ?? PAST_MONTH_CACHE_TTL_MS;
+  }
 
   // -------------------------------------------------------------------------
   // Budget cache lifecycle
@@ -90,6 +119,7 @@ export class CacheManager {
       categoryGroups: new Map(),
       monthSummaries: new Map(),
       monthCategories: new Map(),
+      moneyMovements: new Map(),
       settings: undefined,
     };
 
@@ -112,12 +142,31 @@ export class CacheManager {
     const cache = this.getBudgetCache(budgetId);
     cache.monthSummaries.clear();
     cache.monthCategories.clear();
+    // Budget writes create money movements server-side
+    cache.moneyMovements.clear();
   }
 
   isSimpleCacheValid<T>(
     cache: SimpleCache<T> | undefined,
   ): cache is SimpleCache<T> {
-    return cache != null && Date.now() - cache.lastRefreshedAt <= CACHE_TTL_MS;
+    return cache != null && Date.now() - cache.lastRefreshedAt <= this.ttlMs;
+  }
+
+  /**
+   * Validity check for month-keyed caches: completed past months use the
+   * longer past-month TTL, the current/future month (and the "current"
+   * alias) uses the standard TTL.
+   */
+  isMonthCacheValid<T>(
+    cache: SimpleCache<T> | undefined,
+    month: string,
+  ): cache is SimpleCache<T> {
+    if (cache == null) return false;
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const isPastMonth = /^\d{4}-\d{2}/.test(month) && month < currentMonth;
+    const ttl = isPastMonth ? this.pastMonthTtlMs : this.ttlMs;
+    return Date.now() - cache.lastRefreshedAt <= ttl;
   }
 
   needsRefresh(cache: {
@@ -127,7 +176,7 @@ export class CacheManager {
   }): boolean {
     if (cache.serverKnowledge == null) return true;
     if (cache.stale) return true;
-    return Date.now() - cache.lastRefreshedAt > CACHE_TTL_MS;
+    return Date.now() - cache.lastRefreshedAt > this.ttlMs;
   }
 
   // -------------------------------------------------------------------------

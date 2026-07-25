@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import { dateDaysAgo, dateMonthsAgo, daysBetween } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
 import {
@@ -9,6 +10,20 @@ import {
   formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
+
+/**
+ * Floor for the deviation comparison scale, in milliunits. Payees with a
+ * near-constant history have a tiny (or zero) standard deviation, which would
+ * otherwise make any difference at all look infinitely significant.
+ */
+const MIN_DEVIATION_SCALE = 500;
+
+/**
+ * Minimum absolute deviation, in milliunits, before an anomaly can reach the
+ * top severity. Keeps sub-dollar wobble on cheap recurring payees from
+ * outranking genuinely large surprises in the sorted output.
+ */
+const ALERT_MIN_DEVIATION = 25_000;
 
 const sensitivityLevels = ["low", "medium", "high"] as const;
 type Sensitivity = (typeof sensitivityLevels)[number];
@@ -47,7 +62,6 @@ interface AnomalyEntry {
   date: string;
   payee_name: string | null;
   amount: number;
-  amount_display: string;
   category_name: string | null;
   anomaly_type: AnomalyType;
   severity: Severity;
@@ -56,15 +70,11 @@ interface AnomalyEntry {
 }
 
 function getDefaultSinceDate(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 30);
-  return d.toISOString().slice(0, 10);
+  return dateDaysAgo(30);
 }
 
 function getHistorySinceDate(months: number): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - months);
-  return d.toISOString().slice(0, 10);
+  return dateMonthsAgo(months);
 }
 
 function sigmaThreshold(sensitivity: Sensitivity): number {
@@ -78,13 +88,6 @@ function sigmaThreshold(sensitivity: Sensitivity): number {
   }
 }
 
-function daysBetween(a: string, b: string): number {
-  const msPerDay = 1000 * 60 * 60 * 24;
-  return Math.abs(
-    Math.round((new Date(b).getTime() - new Date(a).getTime()) / msPerDay),
-  );
-}
-
 export function registerAnomalyTools(
   server: McpServer,
   context: AppContext,
@@ -95,8 +98,12 @@ export function registerAnomalyTools(
       title: "Detect Anomalies",
       description:
         "Find unusual transactions: abnormal amounts for known payees, " +
-        "large charges from new payees, and potential duplicates. " +
-        "Uses statistical analysis (mean/stddev) against transaction history.",
+        "large charges from new payees, and potential duplicates. Compares " +
+        "each transaction against a baseline built from that payee's other " +
+        "transactions (the transaction itself is excluded). For payees whose " +
+        "history is near-constant the comparison scale is floored, in which " +
+        'case scale_basis is "floor" and scale_multiple is a multiple of ' +
+        "that floor rather than a standard deviation.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -127,11 +134,12 @@ export function registerAnomalyTools(
 
         const currencyFormat = settings.currency_format;
 
-        // Build per-payee history from all transactions (outflows, non-transfers)
+        // Build per-payee history from all transactions (outflows, non-transfers).
+        // Sums and sums-of-squares allow O(1) leave-one-out statistics below.
         interface PayeeStats {
-          amounts: number[];
-          mean: number;
-          stddev: number;
+          count: number;
+          sum: number;
+          sumSq: number;
         }
         const payeeHistory = new Map<string, PayeeStats>();
         const allOutflowAmounts: number[] = [];
@@ -145,22 +153,28 @@ export function registerAnomalyTools(
           if (!tx.payee_id) continue;
           let stats = payeeHistory.get(tx.payee_id);
           if (!stats) {
-            stats = { amounts: [], mean: 0, stddev: 0 };
+            stats = { count: 0, sum: 0, sumSq: 0 };
             payeeHistory.set(tx.payee_id, stats);
           }
-          stats.amounts.push(absAmount);
+          stats.count += 1;
+          stats.sum += absAmount;
+          stats.sumSq += absAmount * absAmount;
         }
 
-        // Compute mean and stddev for each payee
-        for (const stats of payeeHistory.values()) {
-          const n = stats.amounts.length;
-          if (n === 0) continue;
-          stats.mean = stats.amounts.reduce((s, v) => s + v, 0) / n;
-          if (n >= 2) {
-            const variance =
-              stats.amounts.reduce((s, v) => s + (v - stats.mean) ** 2, 0) / n;
-            stats.stddev = Math.sqrt(variance);
-          }
+        // Leave-one-out mean/stddev: the tested transaction is excluded from
+        // its own baseline so a large outlier cannot mask itself.
+        function baselineExcluding(
+          stats: PayeeStats,
+          amount: number,
+        ): { n: number; mean: number; stddev: number } {
+          const n = stats.count - 1;
+          if (n < 1) return { n, mean: 0, stddev: 0 };
+          const mean = (stats.sum - amount) / n;
+          const variance = Math.max(
+            0,
+            (stats.sumSq - amount * amount) / n - mean * mean,
+          );
+          return { n, mean, stddev: Math.sqrt(variance) };
         }
 
         // Compute 75th percentile of all outflow amounts
@@ -193,39 +207,65 @@ export function registerAnomalyTools(
           // Check 1: Unusual amount for known payee
           if (tx.payee_id) {
             const stats = payeeHistory.get(tx.payee_id);
-            if (stats && stats.amounts.length >= 5 && stats.stddev > 0) {
-              const deviation = Math.abs(absAmount - stats.mean);
-              if (deviation > sigma * stats.stddev) {
+            const baseline = stats ? baselineExcluding(stats, absAmount) : null;
+            if (baseline && baseline.n >= 5 && baseline.mean > 0) {
+              // Floor the comparison scale so a perfectly consistent history
+              // (stddev 0, e.g. a fixed subscription) still flags meaningful
+              // deviations instead of being skipped. When the floor binds,
+              // the resulting multiple is NOT a standard deviation, so it is
+              // reported and described as a scale multiple instead.
+              const scale = Math.max(
+                baseline.stddev,
+                baseline.mean * 0.05,
+                MIN_DEVIATION_SCALE,
+              );
+              const usedStddev = scale === baseline.stddev;
+              const deviation = Math.abs(absAmount - baseline.mean);
+              if (deviation > sigma * scale) {
                 const key = `unusual_amount:${tx.id}`;
                 if (!seenAnomalyKeys.has(key)) {
                   seenAnomalyKeys.add(key);
-                  const sigmas =
-                    Math.round((deviation / stats.stddev) * 10) / 10;
-                  const severity: Severity = sigmas >= 3 ? "alert" : "warning";
+                  const multiple = Math.round((deviation / scale) * 10) / 10;
+                  // Severity needs both a large relative multiple and a
+                  // materially large absolute deviation: without the amount
+                  // gate a sub-dollar overage on a cheap recurring payee
+                  // outranked a several-hundred-unit surprise.
+                  const severity: Severity =
+                    multiple >= 3 && deviation >= ALERT_MIN_DEVIATION
+                      ? "alert"
+                      : "warning";
+                  const scaleDescription = usedStddev
+                    ? `${multiple} standard deviations`
+                    : `${multiple}x the expected variation (${formatCurrency(asMilliunits(Math.round(scale)), currencyFormat)}, a floor applied because this payee's history is near-constant)`;
                   anomalies.push({
                     transaction_id: tx.id,
                     date: tx.date,
                     payee_name: payeeName,
                     amount: milliunitsToCurrency(asMilliunits(tx.amount)),
-                    amount_display: formatCurrency(
-                      asMilliunits(tx.amount),
-                      currencyFormat,
-                    ),
                     category_name: catInfo?.name ?? null,
                     anomaly_type: "unusual_amount",
                     severity,
                     detail:
-                      `Amount ${formatCurrency(asMilliunits(absAmount), currencyFormat)} is ${sigmas} standard deviations ` +
-                      `from the mean of ${formatCurrency(asMilliunits(Math.round(stats.mean)), currencyFormat)} ` +
-                      `for ${payeeName ?? "this payee"} (${stats.amounts.length} historical transactions).`,
+                      `Amount ${formatCurrency(asMilliunits(absAmount), currencyFormat)} is ${scaleDescription} ` +
+                      `from the mean of ${formatCurrency(asMilliunits(Math.round(baseline.mean)), currencyFormat)} ` +
+                      `for ${payeeName ?? "this payee"} (${baseline.n} other transactions).`,
                     reference: {
                       payee_mean: milliunitsToCurrency(
-                        asMilliunits(Math.round(stats.mean)),
+                        asMilliunits(Math.round(baseline.mean)),
                       ),
                       payee_stddev: milliunitsToCurrency(
-                        asMilliunits(Math.round(stats.stddev)),
+                        asMilliunits(Math.round(baseline.stddev)),
                       ),
-                      sigma_distance: sigmas,
+                      deviation: milliunitsToCurrency(
+                        asMilliunits(Math.round(deviation)),
+                      ),
+                      // The scale the multiple is measured against, and
+                      // whether it is the real stddev or the floor.
+                      comparison_scale: milliunitsToCurrency(
+                        asMilliunits(Math.round(scale)),
+                      ),
+                      scale_basis: usedStddev ? "stddev" : "floor",
+                      scale_multiple: multiple,
                     },
                   });
                 }
@@ -236,10 +276,10 @@ export function registerAnomalyTools(
           // Check 2: New payee with large amount
           if (tx.payee_id) {
             const stats = payeeHistory.get(tx.payee_id);
-            const historyCount = stats?.amounts.length ?? 0;
+            const historyCount = stats?.count ?? 0;
             // "New" means all occurrences are in the recent window
             const allRecent = stats
-              ? stats.amounts.length <=
+              ? stats.count <=
                 recentTransactions.filter(
                   (r) => r.payee_id === tx.payee_id && r.amount < 0,
                 ).length
@@ -258,10 +298,6 @@ export function registerAnomalyTools(
                   date: tx.date,
                   payee_name: payeeName,
                   amount: milliunitsToCurrency(asMilliunits(tx.amount)),
-                  amount_display: formatCurrency(
-                    asMilliunits(tx.amount),
-                    currencyFormat,
-                  ),
                   category_name: catInfo?.name ?? null,
                   anomaly_type: "new_payee_large",
                   severity: "warning",
@@ -293,7 +329,8 @@ export function registerAnomalyTools(
               const amountDiff = Math.abs(absAmount - otherAbs);
               const maxAmt = Math.max(absAmount, otherAbs);
               const withinTolerance = maxAmt > 0 && amountDiff / maxAmt <= 0.05;
-              const withinDays = daysBetween(tx.date, other.date) <= 3;
+              const withinDays =
+                Math.abs(daysBetween(tx.date, other.date)) <= 3;
 
               if (withinTolerance && withinDays) {
                 const key = `potential_duplicate:${tx.id}:${other.id}`;
@@ -304,10 +341,6 @@ export function registerAnomalyTools(
                     date: tx.date,
                     payee_name: payeeName,
                     amount: milliunitsToCurrency(asMilliunits(tx.amount)),
-                    amount_display: formatCurrency(
-                      asMilliunits(tx.amount),
-                      currencyFormat,
-                    ),
                     category_name: catInfo?.name ?? null,
                     anomaly_type: "potential_duplicate",
                     severity: "info",

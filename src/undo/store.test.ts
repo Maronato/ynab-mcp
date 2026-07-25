@@ -34,7 +34,7 @@ describe("appendEntries and persistence", () => {
     const e = entry("budget-1::1::aaa");
     await store.appendEntries(BUDGET_ID, [e]);
 
-    const result = await store.listEntries(BUDGET_ID, {
+    const { entries: result } = await store.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: false,
     });
@@ -60,7 +60,7 @@ describe("appendEntries and persistence", () => {
       [{ sourceEntityId: "old-id", targetEntityId: "new-id" }],
     );
 
-    const entries = await store.listEntries(BUDGET_ID, {
+    const { entries } = await store.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: true,
     });
@@ -77,7 +77,7 @@ describe("appendEntries and persistence", () => {
     await store.appendEntries(BUDGET_ID, [e1]);
     await store.appendEntries(BUDGET_ID, [e2]);
 
-    const result = await store.listEntries(BUDGET_ID, {
+    const { entries: result } = await store.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: false,
     });
@@ -93,7 +93,7 @@ describe("appendEntries and persistence", () => {
       await smallStore.appendEntries(BUDGET_ID, [entry(`budget-1::${i}::e`)]);
     }
 
-    const result = await smallStore.listEntries(BUDGET_ID, {
+    const { entries: result } = await smallStore.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: true,
     });
@@ -104,6 +104,24 @@ describe("appendEntries and persistence", () => {
 });
 
 describe("listEntries", () => {
+  it("pages with offset and reports the total", async () => {
+    for (let i = 0; i < 5; i++) {
+      await store.appendEntries(BUDGET_ID, [entry(`budget-1::${i}::page`)]);
+    }
+
+    const page = await store.listEntries(BUDGET_ID, {
+      limit: 2,
+      offset: 2,
+      includeUndone: true,
+    });
+
+    expect(page.total).toBe(5);
+    expect(page.entries).toHaveLength(2);
+    // Entries are newest-first; offset 2 skips the two most recent
+    expect(page.entries[0].id).toBe("budget-1::2::page");
+    expect(page.entries[1].id).toBe("budget-1::1::page");
+  });
+
   it("excludes undone entries when includeUndone is false", async () => {
     await store.appendEntries(BUDGET_ID, [
       entry("budget-1::1::a"),
@@ -111,7 +129,7 @@ describe("listEntries", () => {
     ]);
     await store.markEntriesUndone(BUDGET_ID, ["budget-1::1::a"]);
 
-    const result = await store.listEntries(BUDGET_ID, {
+    const { entries: result } = await store.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: false,
     });
@@ -124,7 +142,7 @@ describe("listEntries", () => {
     await store.appendEntries(BUDGET_ID, [entry("budget-1::1::a")]);
     await store.markEntriesUndone(BUDGET_ID, ["budget-1::1::a"]);
 
-    const result = await store.listEntries(BUDGET_ID, {
+    const { entries: result } = await store.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: true,
     });
@@ -140,7 +158,7 @@ describe("listEntries", () => {
       entry("budget-1::3::c"),
     ]);
 
-    const result = await store.listEntries(BUDGET_ID, {
+    const { entries: result } = await store.listEntries(BUDGET_ID, {
       limit: 2,
       includeUndone: false,
     });
@@ -149,7 +167,7 @@ describe("listEntries", () => {
   });
 
   it("returns empty array for a budget with no history", async () => {
-    const result = await store.listEntries("nonexistent", {
+    const { entries: result } = await store.listEntries("nonexistent", {
       limit: 100,
       includeUndone: false,
     });
@@ -206,7 +224,7 @@ describe("markEntriesUndone", () => {
 
     await store.markEntriesUndone(BUDGET_ID, ["budget-1::1::a"]);
 
-    const all = await store.listEntries(BUDGET_ID, {
+    const { entries: all } = await store.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: true,
     });
@@ -222,7 +240,7 @@ describe("markEntriesUndone", () => {
     await store.appendEntries(BUDGET_ID, [entry("budget-1::1::a")]);
     await store.markEntriesUndone(BUDGET_ID, []);
 
-    const result = await store.listEntries(BUDGET_ID, {
+    const { entries: result } = await store.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: false,
     });
@@ -298,7 +316,7 @@ describe("concurrency", () => {
     // Append all concurrently
     await Promise.all(entries.map((e) => store.appendEntries(BUDGET_ID, [e])));
 
-    const result = await store.listEntries(BUDGET_ID, {
+    const { entries: result } = await store.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: true,
     });
@@ -310,7 +328,7 @@ describe("concurrency", () => {
 
 describe("error handling", () => {
   it("returns default empty history for missing file", async () => {
-    const result = await store.listEntries("no-such-budget", {
+    const { entries: result } = await store.listEntries("no-such-budget", {
       limit: 100,
       includeUndone: true,
     });
@@ -325,7 +343,7 @@ describe("error handling", () => {
     const filePath = join(historyDir, `${encodeURIComponent(BUDGET_ID)}.json`);
     await writeFile(filePath, "not valid json{{{");
 
-    const result = await store.listEntries(BUDGET_ID, {
+    const { entries: result } = await store.listEntries(BUDGET_ID, {
       limit: 100,
       includeUndone: true,
     });

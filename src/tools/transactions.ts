@@ -241,11 +241,7 @@ export function registerTransactionTools(
               query,
               count: transactions.length,
               transactions: transactions.map((transaction) =>
-                formatTransactionForOutput(
-                  brandAmounts(transaction),
-                  lookups,
-                  settings.currency_format,
-                ),
+                formatTransactionForOutput(brandAmounts(transaction), lookups),
               ),
             };
           }),
@@ -253,6 +249,7 @@ export function registerTransactionTools(
 
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(budgetId),
+          currency: settings.currency_format?.iso_code ?? null,
           result_sets: resultSets,
         });
       } catch (error) {
@@ -307,11 +304,7 @@ export function registerTransactionTools(
           }
 
           const formatted = created.map((transaction) =>
-            formatTransactionForOutput(
-              brandAmounts(transaction),
-              lookups,
-              settings.currency_format,
-            ),
+            formatTransactionForOutput(brandAmounts(transaction), lookups),
           );
 
           const undoEntries = created.map((transaction) => ({
@@ -334,6 +327,7 @@ export function registerTransactionTools(
 
           return jsonToolResult({
             budget_id: resolvedBudgetId,
+            currency: settings.currency_format?.iso_code ?? null,
             created_count: created.length,
             transactions: formatted,
             undo_history_ids: undoHistoryIds,
@@ -482,7 +476,6 @@ export function registerTransactionTools(
               transaction: formatTransactionForOutput(
                 brandAmounts(after),
                 lookups,
-                settings.currency_format,
               ),
             });
 
@@ -524,7 +517,6 @@ export function registerTransactionTools(
                 transaction: formatTransactionForOutput(
                   brandAmounts(after),
                   lookups,
-                  settings.currency_format,
                 ),
               });
 
@@ -576,6 +568,7 @@ export function registerTransactionTools(
 
           return jsonToolResult({
             budget_id: resolvedBudgetId,
+            currency: settings.currency_format?.iso_code ?? null,
             results,
             undo_history_ids: undoHistoryIds,
           });
@@ -595,7 +588,9 @@ export function registerTransactionTools(
     {
       title: "Delete Transactions",
       description:
-        "Delete one or more transactions. Each deletion is undoable by re-creating the transaction.",
+        "Delete one or more transactions. Each deletion is undoable by re-creating " +
+        "the transaction. Costs one YNAB API call per transaction against the " +
+        "200/hour rate limit.",
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,

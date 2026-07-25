@@ -7,13 +7,10 @@ import {
   type TargetTransaction,
 } from "../analysis/categorize.js";
 import type { AppContext } from "../context.js";
+import { dateDaysAgo } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import {
-  asMilliunits,
-  formatCurrency,
-  milliunitsToCurrency,
-} from "../ynab/format.js";
+import { asMilliunits, milliunitsToCurrency } from "../ynab/format.js";
 import type { NameLookup } from "../ynab/types.js";
 
 const autoCategorizeSchema = z.object({
@@ -39,7 +36,17 @@ const autoCategorizeSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "When true, update_actions will include approved: true so categorization and approval happen in one pass. Defaults to true.",
+      "When true, update_actions will include approved: true so categorization " +
+        "and approval happen in one pass. Defaults to false so applying " +
+        "suggestions never silently approves transactions.",
+    ),
+  action_confidence: z
+    .enum(["definitive", "high", "medium", "low"])
+    .optional()
+    .describe(
+      "Minimum confidence for a suggestion to be included in update_actions. " +
+        "Defaults to high. Lower-confidence suggestions still appear in " +
+        "suggestions for manual review.",
     ),
   limit: z
     .number()
@@ -66,9 +73,7 @@ interface TransactionLike {
 }
 
 function getDefaultSinceDate(): string {
-  const date = new Date();
-  date.setDate(date.getDate() - 30);
-  return date.toISOString().slice(0, 10);
+  return dateDaysAgo(30);
 }
 
 function toTarget(
@@ -106,7 +111,9 @@ export function registerCategorizationTools(
         "Analyze uncategorized (and optionally unapproved) transactions using payee history, " +
         "amount patterns, and scheduled transaction matching. " +
         "Returns categorization suggestions with confidence levels — does NOT apply changes. " +
-        "Use the returned update_actions with update_transactions to apply.",
+        "update_actions (for update_transactions) contains only suggestions at or above " +
+        "action_confidence (default high); review lower-confidence suggestions manually " +
+        "before applying them.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -125,7 +132,8 @@ export function registerCategorizationTools(
         const includeTransfers = input.include_transfers ?? false;
         const includeApprovedUncategorized =
           input.include_approved_uncategorized ?? true;
-        const shouldApprove = input.approve ?? true;
+        const shouldApprove = input.approve ?? false;
+        const actionConfidence = input.action_confidence ?? "high";
         const sinceDate = input.since_date ?? getDefaultSinceDate();
         const historyMonths = input.history_months;
 
@@ -288,10 +296,6 @@ export function registerCategorizationTools(
           date: s.date,
           payee_name: s.payee_name,
           amount: milliunitsToCurrency(asMilliunits(s.amount)),
-          amount_display: formatCurrency(
-            asMilliunits(s.amount),
-            settings.currency_format,
-          ),
           memo: s.memo,
           current_category_id: s.current_category_id,
           current_category_name: s.current_category_name,
@@ -316,8 +320,19 @@ export function registerCategorizationTools(
           signals: s.signals,
         }));
 
+        const confidenceRank: Record<string, number> = {
+          definitive: 3,
+          high: 2,
+          medium: 1,
+          low: 0,
+        };
+        const minRank = confidenceRank[actionConfidence];
         const updateActions = suggestions
-          .filter((s) => s.suggested_category_id)
+          .filter(
+            (s) =>
+              s.suggested_category_id &&
+              confidenceRank[s.confidence] >= minRank,
+          )
           .map((s) => ({
             transaction_id: s.transaction_id,
             category_id: s.suggested_category_id,
@@ -326,6 +341,7 @@ export function registerCategorizationTools(
 
         return jsonToolResult({
           budget_id: resolvedBudgetId,
+          currency: settings.currency_format?.iso_code ?? null,
           suggestion_count: suggestions.length,
           confidence_summary: confidenceSummary,
           suggestions: formattedSuggestions,

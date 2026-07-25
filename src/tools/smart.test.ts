@@ -174,8 +174,10 @@ describe("suggest_transaction_categories", () => {
       "Everyday",
     );
     expect(content.suggestions[0].confidence).toBe("definitive");
+    // approve now defaults to false: applying suggestions must not
+    // silently approve transactions.
     expect(content.update_actions).toEqual([
-      { transaction_id: "tx-1", category_id: "cat-groceries", approved: true },
+      { transaction_id: "tx-1", category_id: "cat-groceries" },
     ]);
   });
 
@@ -252,6 +254,141 @@ describe("suggest_transaction_categories", () => {
 
     expect(content.suggestion_count).toBe(1);
     expect(content.suggestions[0].confidence).toBe("low");
+  });
+
+  it("gates update_actions by action_confidence (default high)", async () => {
+    const { context, handlers } = setup();
+    const tx = createMockTransaction({
+      id: "tx-low",
+      category_id: null,
+      payee_id: "payee-1",
+    });
+    // An ambiguous payee history: the dominant category holds only 2 of 5
+    // (40%), which is below the medium threshold, so the analyzer emits a
+    // low-confidence weak_signal suggestion that still names a category.
+    // (A no-signal payee would yield an empty suggested_category_id, which
+    // the pre-existing truthiness filter drops regardless of the gate — so
+    // it cannot exercise this behavior.)
+    const ambiguousProfile = new Map([
+      [
+        "payee-1",
+        makeProfile({
+          payee_id: "payee-1",
+          payee_name: "Corner Store",
+          category_counts: new Map([
+            ["cat-groceries", 2],
+            ["cat-dining", 2],
+            ["cat-electric", 1],
+          ]),
+          recency_weighted: new Map([
+            ["cat-groceries", 2],
+            ["cat-dining", 1.5],
+            ["cat-electric", 1],
+          ]),
+          total_count: 5,
+        }),
+      ],
+    ]);
+
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([tx])
+      .mockResolvedValueOnce([]);
+    setupDefaultMocks(context);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(
+      ambiguousProfile,
+    );
+
+    // Default (high): the suggestion is present but withheld from actions
+    const gated = JSON.parse(
+      (
+        await handlers.suggest_transaction_categories({
+          budget_id: "budget-1",
+        })
+      ).content[0].text,
+    );
+    expect(gated.suggestions[0].confidence).toBe("low");
+    expect(gated.suggestions[0].suggested_category_id).toBeTruthy();
+    expect(gated.update_actions).toEqual([]);
+
+    // Opting in to low confidence yields the action for that same suggestion
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([tx])
+      .mockResolvedValueOnce([]);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(
+      ambiguousProfile,
+    );
+    const opted = JSON.parse(
+      (
+        await handlers.suggest_transaction_categories({
+          budget_id: "budget-1",
+          action_confidence: "low",
+        })
+      ).content[0].text,
+    );
+    expect(opted.update_actions).toEqual([
+      {
+        transaction_id: "tx-low",
+        category_id: gated.suggestions[0].suggested_category_id,
+      },
+    ]);
+  });
+
+  it("includes medium suggestions only at or below the medium threshold", async () => {
+    const { context, handlers } = setup();
+    const tx = createMockTransaction({
+      id: "tx-medium",
+      category_id: null,
+      payee_id: "payee-1",
+    });
+    // 3 of 5 (60%) clears the medium bar but not high.
+    const mediumProfile = new Map([
+      [
+        "payee-1",
+        makeProfile({
+          payee_id: "payee-1",
+          payee_name: "Corner Store",
+          category_counts: new Map([
+            ["cat-groceries", 3],
+            ["cat-dining", 2],
+          ]),
+          recency_weighted: new Map([
+            ["cat-groceries", 3],
+            ["cat-dining", 2],
+          ]),
+          total_count: 5,
+        }),
+      ],
+    ]);
+
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([tx])
+      .mockResolvedValueOnce([]);
+    setupDefaultMocks(context);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(mediumProfile);
+
+    const gated = JSON.parse(
+      (
+        await handlers.suggest_transaction_categories({
+          budget_id: "budget-1",
+        })
+      ).content[0].text,
+    );
+    expect(gated.suggestions[0].confidence).toBe("medium");
+    expect(gated.update_actions).toEqual([]);
+
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([tx])
+      .mockResolvedValueOnce([]);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(mediumProfile);
+    const opted = JSON.parse(
+      (
+        await handlers.suggest_transaction_categories({
+          budget_id: "budget-1",
+          action_confidence: "medium",
+        })
+      ).content[0].text,
+    );
+    expect(opted.update_actions).toHaveLength(1);
   });
 
   it("excludes transfers by default", async () => {
@@ -454,86 +591,5 @@ describe("suggest_transaction_categories", () => {
     const content = JSON.parse(result.content[0].text);
 
     expect(content.suggestion_count).toBe(1);
-  });
-});
-
-describe("suggest_overspending_coverage", () => {
-  it("returns early when no overspent categories", async () => {
-    const { context, handlers } = setup();
-    const groups = makeCategoryGroups();
-    groups[0].categories[0].balance = 0;
-    context.ynabClient.getCategories.mockResolvedValue(groups);
-    context.ynabClient.getBudgetSettings.mockResolvedValue({
-      currency_format: createMockCurrencyFormat(),
-    });
-
-    const result = await handlers.suggest_overspending_coverage({
-      budget_id: "budget-1",
-    });
-    const content = JSON.parse(result.content[0].text);
-
-    expect(content.overspent_count).toBe(0);
-    expect(content.message).toContain("No overspent");
-  });
-
-  it("returns deterministic suggestions for overspent categories", async () => {
-    const { context, handlers } = setup();
-    context.ynabClient.getCategories.mockResolvedValue(makeCategoryGroups());
-    context.ynabClient.getBudgetSettings.mockResolvedValue({
-      currency_format: createMockCurrencyFormat(),
-    });
-    context.ynabClient.getMonthCategoryById.mockImplementation(
-      async (_budgetId: string, _month: string, catId: string) => {
-        const cats: Record<string, { id: string; budgeted: number }> = {
-          "cat-groceries": { id: "cat-groceries", budgeted: 500000 },
-          "cat-electric": { id: "cat-electric", budgeted: 100000 },
-        };
-        return cats[catId] ?? null;
-      },
-    );
-
-    const result = await handlers.suggest_overspending_coverage({
-      budget_id: "budget-1",
-    });
-    const content = JSON.parse(result.content[0].text);
-
-    expect(content.suggestion_count).toBeGreaterThan(0);
-    expect(content.suggestions[0].from_category_id).toBe("cat-groceries");
-    expect(content.suggestions[0].to_category_id).toBe("cat-electric");
-    expect(content.suggestions[0].amount).toBe(50);
-    expect(content.set_budget_actions).toBeDefined();
-    expect(content.set_budget_actions.length).toBeGreaterThan(0);
-  });
-
-  it("returns suggestions with set_budget_actions (read-only)", async () => {
-    const { context, handlers } = setup();
-    context.ynabClient.getCategories.mockResolvedValue(makeCategoryGroups());
-    context.ynabClient.getBudgetSettings.mockResolvedValue({
-      currency_format: createMockCurrencyFormat(),
-    });
-    context.ynabClient.getMonthCategoryById.mockImplementation(
-      async (_budgetId: string, _month: string, catId: string) => {
-        const cats: Record<string, { id: string; budgeted: number }> = {
-          "cat-groceries": { id: "cat-groceries", budgeted: 500000 },
-          "cat-electric": { id: "cat-electric", budgeted: 100000 },
-        };
-        return cats[catId] ?? null;
-      },
-    );
-
-    const result = await handlers.suggest_overspending_coverage({
-      budget_id: "budget-1",
-    });
-    const content = JSON.parse(result.content[0].text);
-
-    expect(content.suggestion_count).toBe(1);
-    expect(content.suggestions[0].from_category_name).toBe("Groceries");
-    expect(content.suggestions[0].to_category_name).toBe("Electric");
-    expect(content.set_budget_actions).toBeDefined();
-    expect(content.set_budget_actions.length).toBeGreaterThan(0);
-
-    // Should NOT have mutated anything
-    expect(context.ynabClient.setCategoryBudget).not.toHaveBeenCalled();
-    expect(context.undoEngine.recordEntries).not.toHaveBeenCalled();
   });
 });

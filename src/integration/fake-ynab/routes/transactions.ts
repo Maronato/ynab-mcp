@@ -10,6 +10,13 @@ import type {
 
 // ── Helpers ──
 
+/** Mirror of the live API's default: since_date falls back to one year ago. */
+function defaultSinceDate(): string {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function notFound(detail: string): RouteResult {
   return {
     status: 404,
@@ -168,11 +175,11 @@ export function listTransactions(
     transactions = transactions.filter((tx) => !tx.approved);
   }
 
-  // Filter by since_date
-  const sinceDate = query.since_date;
-  if (sinceDate) {
-    transactions = transactions.filter((tx) => tx.date >= sinceDate);
-  }
+  // Filter by since_date. Like the live API (spec 1.85+), a missing
+  // since_date defaults to one year ago — clients wanting full history must
+  // pass an explicit early date.
+  const sinceDate = query.since_date ?? defaultSinceDate();
+  transactions = transactions.filter((tx) => tx.date >= sinceDate);
 
   return {
     status: 200,

@@ -203,6 +203,60 @@ describe("detect_recurring_charges", () => {
       expect(result.subscription_count).toBe(1);
       expect(result.subscriptions[0].detected_frequency_label).toBe("annual");
     });
+
+    it("maps biweekly detections to the everyOtherWeek scheduled frequency", async () => {
+      // Build biweekly transactions (every 14 days)
+      const txs = [];
+      const start = new Date("2025-11-01");
+      for (let i = 0; i < 6; i++) {
+        const d = new Date(start);
+        d.setDate(d.getDate() + i * 14);
+        txs.push(
+          createMockTransaction({
+            id: `biweekly-${i}`,
+            payee_id: "payee-spotify",
+            account_id: "acc-1",
+            category_id: "cat-subs",
+            amount: -5000,
+            date: d.toISOString().slice(0, 10),
+          }),
+        );
+      }
+      ctx.ynabClient.getTransactionsInRange.mockResolvedValue(txs);
+
+      const result = parseResult(
+        await handler({ history_months: 6, min_occurrences: 3 }),
+      );
+
+      expect(result.subscriptions[0].detected_frequency_label).toBe("biweekly");
+      expect(result.create_scheduled_actions[0].frequency).toBe(
+        "everyOtherWeek",
+      );
+    });
+
+    it("maps quarterly detections to the every3Months scheduled frequency", async () => {
+      const txs = ["2025-01-05", "2025-04-05", "2025-07-05", "2025-10-05"].map(
+        (date, i) =>
+          createMockTransaction({
+            id: `quarterly-${i}`,
+            payee_id: "payee-spotify",
+            account_id: "acc-1",
+            category_id: "cat-subs",
+            amount: -30000,
+            date,
+          }),
+      );
+      ctx.ynabClient.getTransactionsInRange.mockResolvedValue(txs);
+
+      const result = parseResult(
+        await handler({ history_months: 24, min_occurrences: 3 }),
+      );
+
+      expect(result.subscriptions[0].detected_frequency_label).toBe(
+        "quarterly",
+      );
+      expect(result.create_scheduled_actions[0].frequency).toBe("every3Months");
+    });
   });
 
   describe("price changes", () => {

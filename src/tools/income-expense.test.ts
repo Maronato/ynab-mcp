@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockAppContext } from "../test-utils.js";
 import {
   captureToolHandlers,
@@ -57,9 +57,19 @@ function setupMonthSummaries(
 }
 
 beforeEach(() => {
+  // Pin "now" to the last day of a month so the current month counts as
+  // complete and averages/trends behave deterministically. Individual tests
+  // that exercise the partial-month path re-pin to a mid-month date.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 5, 30, 12, 0, 0)); // 2026-06-30, 30-day month
+
   ctx = createMockContext();
   const tools = captureToolHandlers(registerIncomeExpenseTools, ctx);
   handler = tools.get_income_expense_summary;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("get_income_expense_summary", () => {
@@ -113,14 +123,20 @@ describe("get_income_expense_summary", () => {
   });
 
   describe("averages", () => {
-    it("computes averages across all months correctly", async () => {
+    it("computes averages across complete months only", async () => {
+      // The current month is always partial, so request one extra month:
+      // offsets -3..-1 are the three complete months under test and the
+      // current month (offset 0) must not influence the averages.
       setupMonthSummaries([
-        { offset: -2, income: 4000000, activity: -2000000 },
-        { offset: -1, income: 5000000, activity: -3000000 },
-        { offset: 0, income: 6000000, activity: -4000000 },
+        { offset: -3, income: 4000000, activity: -2000000 },
+        { offset: -2, income: 5000000, activity: -3000000 },
+        { offset: -1, income: 6000000, activity: -4000000 },
+        { offset: 0, income: 9999000, activity: -9999000 },
       ]);
 
-      const result = parseResult(await handler({ months: 3 }));
+      const result = parseResult(await handler({ months: 4 }));
+
+      expect(result.complete_month_count).toBe(3);
 
       // Avg income: (4000 + 5000 + 6000) / 3 = 5000
       expect(result.averages.avg_income).toBe(5000);
@@ -205,11 +221,12 @@ describe("get_income_expense_summary", () => {
 
     it("handles all months with zero income", async () => {
       setupMonthSummaries([
-        { offset: -1, income: 0, activity: -500000 },
-        { offset: 0, income: 0, activity: -300000 },
+        { offset: -2, income: 0, activity: -500000 },
+        { offset: -1, income: 0, activity: -300000 },
+        { offset: 0, income: 0, activity: -100000 },
       ]);
 
-      const result = parseResult(await handler({ months: 2 }));
+      const result = parseResult(await handler({ months: 3 }));
 
       expect(result.averages.avg_savings_rate).toBe(0);
       expect(result.trend.recent_savings_rate).toBe(0);
@@ -263,6 +280,51 @@ describe("get_income_expense_summary", () => {
       const result = parseResult(await handler({}));
 
       expect(result.months).toHaveLength(6);
+    });
+  });
+
+  describe("partial current month", () => {
+    it("excludes the partial current month from averages and trend", async () => {
+      // Mid-month: the current month is incomplete
+      vi.setSystemTime(new Date(2026, 5, 15, 12, 0, 0)); // 2026-06-15
+      setupMonthSummaries([
+        { offset: -2, income: 5000000, activity: -3000000 },
+        { offset: -1, income: 5000000, activity: -3000000 },
+        // Current month has almost no activity yet
+        { offset: 0, income: 0, activity: -500000 },
+      ]);
+
+      const result = parseResult(await handler({ months: 3 }));
+
+      expect(result.current_month_partial).toBe(true);
+      expect(result.months).toHaveLength(3);
+      expect(result.months[2].partial).toBe(true);
+      expect(result.months[0].partial).toBeUndefined();
+
+      // Averages must cover only the two complete months: income $5000,
+      // expenses $3000 — unaffected by the nearly-empty current month.
+      expect(result.averages.avg_income).toBe(5000);
+      expect(result.averages.avg_expenses).toBe(3000);
+      expect(result.averages.avg_savings_rate).toBe(40);
+    });
+
+    it("reports a null trend rather than a fabricated 0% for months=2", async () => {
+      // The review's exact repro: months=2 mid-month leaves a single
+      // complete month, so there is nothing to compare. Previously both
+      // trend windows collapsed to [] and each rate fell through to 0,
+      // producing "you saved 40%" and "savings rate 0%, flat" in one payload.
+      vi.setSystemTime(new Date(2026, 5, 15, 12, 0, 0)); // 2026-06-15
+      setupMonthSummaries([
+        { offset: -1, income: 5000000, activity: -3000000 },
+        { offset: 0, income: 0, activity: -500000 },
+      ]);
+
+      const result = parseResult(await handler({ months: 2 }));
+
+      expect(result.complete_month_count).toBe(1);
+      expect(result.trend).toBeNull();
+      // The averages still describe the one complete month honestly
+      expect(result.averages.avg_savings_rate).toBe(40);
     });
   });
 });

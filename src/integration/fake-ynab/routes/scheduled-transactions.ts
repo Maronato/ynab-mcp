@@ -6,7 +6,21 @@ import type {
   ScheduledTransactionData,
 } from "../state.js";
 
-const VALID_FREQUENCIES = ["never", "daily", "weekly", "monthly", "yearly"];
+const VALID_FREQUENCIES = [
+  "never",
+  "daily",
+  "weekly",
+  "everyOtherWeek",
+  "twiceAMonth",
+  "every4Weeks",
+  "monthly",
+  "everyOtherMonth",
+  "every3Months",
+  "every4Months",
+  "twiceAYear",
+  "yearly",
+  "everyOtherYear",
+];
 
 function validateFrequency(frequency: string): RouteResult | null {
   if (!VALID_FREQUENCIES.includes(frequency)) {

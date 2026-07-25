@@ -250,9 +250,11 @@ describe("default budget resolution", () => {
 
     await client.searchTransactions(undefined, {});
 
+    // A search without since_date fetches full history with an explicit
+    // early date (the live API defaults a missing since_date to 1 year ago)
     expect(mockApi.transactions.getTransactions).toHaveBeenCalledWith(
       "budget-b",
-      undefined,
+      "2000-01-01",
     );
   });
 });
@@ -1740,94 +1742,6 @@ describe("getScheduledTransactionById cache behavior", () => {
   });
 });
 
-describe("getBudgetSummary", () => {
-  beforeEach(() => {
-    mockApi.accounts.getAccounts.mockResolvedValue({
-      data: {
-        accounts: [
-          account({
-            id: "a1",
-            name: "Checking",
-            type: "checking",
-            balance: 500000,
-          }),
-          account({
-            id: "a2",
-            name: "Savings",
-            type: "savings",
-            balance: 1000000,
-          }),
-          account({
-            id: "a3",
-            name: "Credit",
-            type: "creditCard",
-            balance: -200000,
-          }),
-        ],
-        server_knowledge: 1,
-      },
-    });
-    mockApi.months.getPlanMonth.mockResolvedValue({
-      data: {
-        month: {
-          month: "2024-01-01",
-          income: 600000,
-          budgeted: 500000,
-          activity: -400000,
-          to_be_budgeted: 100000,
-          age_of_money: 30,
-          categories: [
-            { id: "c1", balance: 10000, hidden: false, deleted: false },
-            { id: "c2", balance: -5000, hidden: false, deleted: false },
-            { id: "c3", balance: -3000, hidden: true, deleted: false },
-            { id: "c4", balance: -1000, hidden: false, deleted: true },
-          ],
-        },
-      },
-    });
-  });
-
-  it("computes net worth as sum of all account balances", async () => {
-    const summary = await client.getBudgetSummary("b");
-    // 500000 + 1000000 + (-200000) = 1300000
-    expect(summary.net_worth_milliunits).toBe(1300000);
-    expect(summary.net_worth).toBe(1300);
-  });
-
-  it("counts overspent categories (balance < 0, not hidden, not deleted)", async () => {
-    const summary = await client.getBudgetSummary("b");
-    // c2 is overspent (balance < 0, not hidden, not deleted)
-    // c3 is hidden, c4 is deleted — excluded
-    expect(summary.overspent_category_count).toBe(1);
-  });
-
-  it("groups accounts by type with count and total_balance", async () => {
-    const summary = await client.getBudgetSummary("b");
-    const byType = summary.account_summary_by_type;
-
-    const checking = byType.find(
-      (e: { type: string }) => e.type === "checking",
-    );
-    expect(checking).toBeDefined();
-    expect(checking?.count).toBe(1);
-    expect(checking?.total_balance_milliunits).toBe(500000);
-
-    const savings = byType.find((e: { type: string }) => e.type === "savings");
-    expect(savings).toBeDefined();
-    expect(savings?.count).toBe(1);
-    expect(savings?.total_balance).toBe(1000);
-  });
-
-  it("returns month summary fields", async () => {
-    const summary = await client.getBudgetSummary("b");
-    expect(summary.income).toBe(600);
-    expect(summary.budgeted).toBe(500);
-    expect(summary.activity).toBe(-400);
-    expect(summary.to_be_budgeted).toBe(100);
-    expect(summary.age_of_money).toBe(30);
-  });
-});
-
 describe("getCategories with month parameter", () => {
   beforeEach(() => {
     // Base category tree (fetched without month)
@@ -2157,6 +2071,7 @@ describe("transaction cache window expansion", () => {
       "b",
       "2024-01-01",
       undefined,
+      undefined,
       10,
     );
 
@@ -2181,7 +2096,7 @@ describe("transaction cache window expansion", () => {
 
     expect(mockApi.transactions.getTransactions).toHaveBeenCalledWith(
       "b",
-      undefined,
+      "2000-01-01",
     );
   });
 });
@@ -2415,6 +2330,7 @@ describe("TTL expiration", () => {
       "b",
       "2024-01-01",
       undefined,
+      undefined,
       5,
     );
 
@@ -2502,8 +2418,9 @@ describe("TTL expiration", () => {
         },
       });
 
+    // 2024-01 is a completed past month, so it uses the longer 24h TTL
     const first = await client.getMonthSummary("b", "2024-01-01");
-    vi.advanceTimersByTime(59 * 60 * 1000);
+    vi.advanceTimersByTime(23 * 60 * 60 * 1000);
     const second = await client.getMonthSummary("b", "2024-01-01");
 
     expect(mockApi.months.getPlanMonth).toHaveBeenCalledTimes(1);
@@ -2541,8 +2458,9 @@ describe("TTL expiration", () => {
         },
       });
 
+    // 2024-01 is a completed past month, so it uses the longer 24h TTL
     const first = await client.getMonthCategoryById("b", "2024-01-01", "c1");
-    vi.advanceTimersByTime(59 * 60 * 1000);
+    vi.advanceTimersByTime(23 * 60 * 60 * 1000);
     const second = await client.getMonthCategoryById("b", "2024-01-01", "c1");
 
     expect(mockApi.categories.getMonthCategoryById).toHaveBeenCalledTimes(1);

@@ -174,7 +174,6 @@ export function formatTransactionForOutput(
     subtransactions?: SubtransactionLike[];
   },
   lookups: NameLookup,
-  currencyFormat?: CurrencyFormatLike,
 ) {
   const subs = transaction.subtransactions?.filter((s) => !s.deleted) ?? [];
   const isSplit = subs.length > 0;
@@ -183,7 +182,6 @@ export function formatTransactionForOutput(
     id: transaction.id,
     date: transaction.date,
     amount: milliunitsToCurrency(transaction.amount),
-    amount_display: formatCurrency(transaction.amount, currencyFormat),
     memo: transaction.memo ?? null,
     cleared: transaction.cleared,
     approved: transaction.approved,
@@ -213,7 +211,6 @@ export function formatTransactionForOutput(
         return {
           id: sub.id,
           amount: milliunitsToCurrency(sub.amount),
-          amount_display: formatCurrency(sub.amount, currencyFormat),
           memo: sub.memo ?? null,
           payee_id: sub.payee_id ?? null,
           payee_name: sub.payee_id
@@ -245,7 +242,6 @@ export function formatScheduledTransactionForOutput(
     flag_color?: string | null;
   },
   lookups: NameLookup,
-  currencyFormat?: CurrencyFormatLike,
 ) {
   return {
     id: transaction.id,
@@ -253,7 +249,6 @@ export function formatScheduledTransactionForOutput(
     date_next: transaction.date_next,
     frequency: transaction.frequency,
     amount: milliunitsToCurrency(transaction.amount),
-    amount_display: formatCurrency(transaction.amount, currencyFormat),
     memo: transaction.memo ?? null,
     flag_color: transaction.flag_color ?? null,
     account_id: transaction.account_id,

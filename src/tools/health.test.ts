@@ -78,6 +78,9 @@ describe("get_budget_health", () => {
 
       expect(result).toHaveProperty("budget_id");
       expect(result).toHaveProperty("month", "2024-06-01");
+      expect(result).toHaveProperty("net_worth");
+      expect(result).toHaveProperty("accounts_by_type");
+      expect(result).toHaveProperty("month_totals");
       expect(result).toHaveProperty("ready_to_assign");
       expect(result).toHaveProperty("overspending");
       expect(result).toHaveProperty("underfunded_targets");
@@ -88,7 +91,7 @@ describe("get_budget_health", () => {
       expect(result).toHaveProperty("issues");
     });
 
-    it("returns ready_to_assign with amount, display, and status", async () => {
+    it("returns ready_to_assign with amount and status", async () => {
       ctx.ynabClient.getMonthSummary.mockResolvedValue({
         to_be_budgeted: 150000,
         age_of_money: 30,
@@ -97,8 +100,47 @@ describe("get_budget_health", () => {
       const result = parseResult(await handler({ month: "2024-06-01" }));
 
       expect(result.ready_to_assign.amount).toBe(150);
-      expect(result.ready_to_assign.display).toBe("$150.00");
       expect(result.ready_to_assign.status).toBe("positive");
+    });
+  });
+
+  describe("net worth and account totals", () => {
+    it("computes net worth across all accounts, including closed ones", async () => {
+      ctx.ynabClient.getAccounts.mockResolvedValue([
+        {
+          id: "a1",
+          name: "Checking",
+          type: "checking",
+          balance: 500000,
+          closed: false,
+        },
+        {
+          id: "a2",
+          name: "Old Savings",
+          type: "savings",
+          balance: 250000,
+          closed: true,
+        },
+        {
+          id: "a3",
+          name: "Visa",
+          type: "creditCard",
+          balance: -100000,
+          closed: false,
+        },
+      ]);
+
+      const result = parseResult(await handler({ month: "2024-06-01" }));
+
+      expect(result.net_worth.amount).toBe(650);
+      const checking = result.accounts_by_type.find(
+        (e: Record<string, unknown>) => e.type === "checking",
+      );
+      expect(checking.count).toBe(1);
+      expect(checking.total_balance).toBe(500);
+      expect(ctx.ynabClient.getAccounts.mock.calls[0][1]).toMatchObject({
+        includeClosed: true,
+      });
     });
   });
 
@@ -136,7 +178,7 @@ describe("get_budget_health", () => {
   });
 
   describe("overspent categories", () => {
-    it("detects overspent categories as cash type by default", async () => {
+    it("detects overspent categories and sums the total", async () => {
       ctx.ynabClient.getCategories.mockResolvedValue([
         makeGroup("Everyday", [
           { id: "cat-groceries", name: "Groceries", balance: -35000 },
@@ -147,19 +189,20 @@ describe("get_budget_health", () => {
       const result = parseResult(await handler({ month: "2024-06-01" }));
 
       expect(result.overspending.categories).toHaveLength(2);
-      expect(result.overspending.total_cash).toBe(50);
-      expect(result.overspending.total_credit).toBe(0);
+      expect(result.overspending.total).toBe(50);
+      expect(result.overspending.count).toBe(2);
 
       const groceries = result.overspending.categories.find(
         (c: Record<string, unknown>) => c.name === "Groceries",
       );
       expect(groceries.balance).toBe(-35);
-      expect(groceries.type).toBe("cash");
       expect(groceries.group_name).toBe("Everyday");
+      // The API cannot attribute overspending to cash vs credit, so the
+      // tool must not fabricate a classification.
+      expect(groceries).not.toHaveProperty("type");
     });
 
-    it("reclassifies overspending as credit when credit card gaps exist", async () => {
-      // A credit card with a gap triggers credit reclassification
+    it("reports overspending and credit card gaps independently", async () => {
       ctx.ynabClient.getAccounts.mockResolvedValue([
         {
           id: "cc-acc-1",
@@ -187,14 +230,9 @@ describe("get_budget_health", () => {
       expect(result.credit_card_gaps[0].gap).toBe(100);
       expect(result.credit_card_gaps[0].account_name).toBe("Visa Card");
 
-      // The $50 overspend should be reclassified as credit since
-      // the credit card gap pool ($100) covers it entirely
-      const groceries = result.overspending.categories.find(
-        (c: Record<string, unknown>) => c.name === "Groceries",
-      );
-      expect(groceries.type).toBe("credit");
-      expect(result.overspending.total_credit).toBe(50);
-      expect(result.overspending.total_cash).toBe(0);
+      // Overspending stays a plain total; no cash/credit reclassification
+      expect(result.overspending.total).toBe(50);
+      expect(result.overspending.categories[0].name).toBe("Groceries");
     });
 
     it("skips hidden and deleted categories", async () => {
@@ -407,7 +445,7 @@ describe("get_budget_health", () => {
       expect(critical[0].message).toContain("-$100.00");
     });
 
-    it("generates critical issue for cash overspending", async () => {
+    it("generates critical issue for overspending", async () => {
       ctx.ynabClient.getCategories.mockResolvedValue([
         makeGroup("Everyday", [
           { id: "cat-1", name: "Groceries", balance: -60000 },
@@ -421,7 +459,7 @@ describe("get_budget_health", () => {
       expect(critical.length).toBeGreaterThanOrEqual(1);
       expect(
         critical.some((i: Record<string, string>) =>
-          i.message.includes("Cash overspending"),
+          i.message.includes("Overspending of"),
         ),
       ).toBe(true);
     });
@@ -547,8 +585,8 @@ describe("get_budget_health", () => {
       const result = parseResult(await handler({ month: "2024-06-01" }));
 
       expect(result.overspending.categories).toHaveLength(0);
-      expect(result.overspending.total_cash).toBe(0);
-      expect(result.overspending.total_credit).toBe(0);
+      expect(result.overspending.total).toBe(0);
+      expect(result.net_worth.amount).toBe(0);
       expect(result.underfunded_targets.count).toBe(0);
       expect(result.credit_card_gaps).toHaveLength(0);
       expect(result.uncategorized_count).toBe(0);

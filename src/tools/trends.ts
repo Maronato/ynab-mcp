@@ -2,14 +2,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import {
+  endOfMonthString,
+  monthKeysBack,
+  todayString,
+} from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
-import {
-  asMilliunits,
-  type CurrencyFormatLike,
-  formatCurrency,
-  milliunitsToCurrency,
-} from "../ynab/format.js";
+import { asMilliunits, milliunitsToCurrency } from "../ynab/format.js";
 
 const spendingTrendsSchema = z.object({
   budget_id: z
@@ -59,27 +59,10 @@ function computeDateRange(monthsBack: number): {
   untilDate: string;
   monthKeys: string[];
 } {
-  const now = new Date();
-  // End of the current month
-  const endYear = now.getFullYear();
-  const endMonth = now.getMonth(); // 0-indexed
-  const untilDate = new Date(endYear, endMonth + 1, 0)
-    .toISOString()
-    .slice(0, 10);
-
-  // Start of (monthsBack - 1) months ago (current month counts as one)
-  const startDate = new Date(endYear, endMonth - (monthsBack - 1), 1);
-  const sinceDate = startDate.toISOString().slice(0, 10);
-
-  const monthKeys: string[] = [];
-  const cursor = new Date(startDate);
-  while (cursor <= now || cursor.getMonth() === now.getMonth()) {
-    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
-    monthKeys.push(key);
-    cursor.setMonth(cursor.getMonth() + 1);
-    if (monthKeys.length >= monthsBack) break;
-  }
-
+  // Current month counts as one, so go back (monthsBack - 1) months.
+  const monthKeys = monthKeysBack(monthsBack);
+  const sinceDate = `${monthKeys[0]}-01`;
+  const untilDate = endOfMonthString(`${monthKeys[monthKeys.length - 1]}-01`);
   return { sinceDate, untilDate, monthKeys };
 }
 
@@ -89,9 +72,11 @@ function determineTrend(
 ): {
   direction: "increasing" | "decreasing" | "stable";
   percent_change: number;
-} {
+} | null {
+  // Fewer than two complete months means there is nothing to compare;
+  // report null rather than a fabricated "stable" at 0%.
   if (monthKeys.length < 2) {
-    return { direction: "stable", percent_change: 0 };
+    return null;
   }
 
   const lastMonth = monthKeys[monthKeys.length - 1];
@@ -134,15 +119,8 @@ function computeMovingAverage(
   return result;
 }
 
-function formatMonthAmount(
-  milliunits: number,
-  currencyFormat?: CurrencyFormatLike,
-): { amount: number; amount_display: string } {
-  const m = asMilliunits(milliunits);
-  return {
-    amount: milliunitsToCurrency(m),
-    amount_display: formatCurrency(m, currencyFormat),
-  };
+function toCurrency(milliunits: number): number {
+  return milliunitsToCurrency(asMilliunits(milliunits));
 }
 
 export function registerTrendTools(
@@ -154,7 +132,12 @@ export function registerTrendTools(
     {
       title: "Get Spending Trends",
       description:
-        "Multi-month spending time series with trend detection. Groups spending by category, payee, or category group and identifies increasing/decreasing patterns.",
+        "Multi-month spending time series with trend detection. Groups spending " +
+        "by category, payee, or category group and identifies increasing/decreasing " +
+        "patterns. The in-progress current month is included in the series marked " +
+        "partial, but excluded from trend labels, monthly averages, and moving " +
+        "averages. Trend fields are null when fewer than two complete months " +
+        "are available rather than reporting a fabricated flat trend.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -173,6 +156,15 @@ export function registerTrendTools(
         const { sinceDate, untilDate, monthKeys } = computeDateRange(
           input.months ?? 6,
         );
+
+        // The last month key is the current month. It stays partial for the
+        // whole month *including its final day* — spending can still land at
+        // 23:59 — so trend labels and averages compare complete months only.
+        // A partial month would otherwise read as a systematic decrease.
+        const currentMonthPartial = todayString() <= untilDate;
+        const trendKeys = currentMonthPartial
+          ? monthKeys.slice(0, -1)
+          : monthKeys;
 
         const [transactions, lookups, settings] = await Promise.all([
           context.ynabClient.getTransactionsInRange(
@@ -259,8 +251,18 @@ export function registerTrendTools(
 
         // Build series output
         const series = ranked.map((entity) => {
-          const trend = determineTrend(entity.byMonth, monthKeys);
-          const movingAvg = computeMovingAverage(entity.byMonth, monthKeys, 3);
+          const trend = determineTrend(entity.byMonth, trendKeys);
+          // Moving average over complete months only, matching trend and
+          // average_monthly; the partial current month has no value.
+          const movingAvg = computeMovingAverage(entity.byMonth, trendKeys, 3);
+          const completeTotal = trendKeys.reduce(
+            (sum, key) => sum + (entity.byMonth.get(key)?.total ?? 0),
+            0,
+          );
+          const avgMonthly =
+            trendKeys.length > 0
+              ? Math.round(completeTotal / trendKeys.length)
+              : 0;
 
           return {
             id: entity.id,
@@ -271,42 +273,35 @@ export function registerTrendTools(
             data: monthKeys.map((month, idx) => {
               const bucket = entity.byMonth.get(month);
               const amount = bucket?.total ?? 0;
+              const isPartial =
+                currentMonthPartial && idx === monthKeys.length - 1;
               return {
                 month,
-                ...formatMonthAmount(amount, settings.currency_format),
+                amount: toCurrency(amount),
                 transaction_count: bucket?.count ?? 0,
-                moving_average_3m: milliunitsToCurrency(
-                  asMilliunits(movingAvg[idx]),
-                ),
+                // Undefined for the partial month: a 3-month average that
+                // blended it would carry the bias this tool excludes elsewhere.
+                moving_average_3m: isPartial
+                  ? null
+                  : milliunitsToCurrency(asMilliunits(movingAvg[idx])),
+                ...(isPartial && { partial: true }),
               };
             }),
             total: milliunitsToCurrency(asMilliunits(entity.total)),
-            total_display: formatCurrency(
-              asMilliunits(entity.total),
-              settings.currency_format,
-            ),
-            average_monthly: milliunitsToCurrency(
-              asMilliunits(Math.round(entity.total / monthKeys.length)),
-            ),
-            average_monthly_display: formatCurrency(
-              asMilliunits(Math.round(entity.total / monthKeys.length)),
-              settings.currency_format,
-            ),
-            trend_direction: trend.direction,
-            trend_percent_change: trend.percent_change,
+            average_monthly: milliunitsToCurrency(asMilliunits(avgMonthly)),
+            trend_direction: trend?.direction ?? null,
+            trend_percent_change: trend?.percent_change ?? null,
           };
         });
 
         // Build total_by_month
-        const totalByMonth = monthKeys.map((month) => {
+        const totalByMonth = monthKeys.map((month, idx) => {
           const total = monthTotals.get(month) ?? 0;
+          const isPartial = currentMonthPartial && idx === monthKeys.length - 1;
           return {
             month,
             total: milliunitsToCurrency(asMilliunits(total)),
-            total_display: formatCurrency(
-              asMilliunits(total),
-              settings.currency_format,
-            ),
+            ...(isPartial && { partial: true }),
           };
         });
 
@@ -317,6 +312,8 @@ export function registerTrendTools(
         let biggestReductionPercent = 0;
 
         for (const s of series) {
+          // Series without a computable trend contribute nothing here
+          if (s.trend_percent_change == null) continue;
           if (s.trend_percent_change > highestGrowthPercent) {
             highestGrowthPercent = s.trend_percent_change;
             highestGrowthCategory = s.name;
@@ -329,9 +326,11 @@ export function registerTrendTools(
 
         return jsonToolResult({
           budget_id: context.ynabClient.resolveBudgetId(input.budget_id),
+          currency: settings.currency_format?.iso_code ?? null,
           period_start: sinceDate,
           period_end: untilDate,
           months: monthKeys,
+          current_month_partial: currentMonthPartial,
           total_by_month: totalByMonth,
           series,
           summary: {

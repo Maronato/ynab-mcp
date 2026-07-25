@@ -6,16 +6,24 @@ export type TransactionSort = "date_asc" | "date_desc";
 
 export type TransactionClearedStatus = "cleared" | "uncleared" | "reconciled";
 
-// The YNAB API only accepts these five frequency values on create/update.
-// Compound values (everyOtherWeek, twiceAMonth, etc.) exist in read
-// responses for transactions created through the YNAB app but are
-// rejected by the API on write operations.
+// The current YNAB API spec accepts the same 13 frequency values on
+// create/update as it returns on reads. (Earlier API versions rejected
+// compound values like everyOtherWeek on writes; that restriction is gone
+// from the spec.)
 export type ScheduledFrequency =
   | "never"
   | "daily"
   | "weekly"
+  | "everyOtherWeek"
+  | "twiceAMonth"
+  | "every4Weeks"
   | "monthly"
-  | "yearly";
+  | "everyOtherMonth"
+  | "every3Months"
+  | "every4Months"
+  | "twiceAYear"
+  | "yearly"
+  | "everyOtherYear";
 
 export interface TransactionSearchQuery {
   since_date?: string;
