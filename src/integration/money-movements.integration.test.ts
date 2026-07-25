@@ -39,6 +39,16 @@ function seedMovementsBudget(builder: FakeBudgetBuilder): void {
       from_category_id: "cat-transport",
       to_category_id: "cat-dining",
       moved_at: `${LAST_MONTH}T09:00:00Z`,
+    })
+    // Soft-deleted: the live API returns these with deleted=true and they
+    // must not appear in the audit feed.
+    .withMoneyMovement("mm-deleted", {
+      month: CURRENT_MONTH,
+      amount: 999000,
+      from_category_id: "cat-groceries",
+      to_category_id: "cat-dining",
+      moved_at: `${CURRENT_MONTH}T23:00:00Z`,
+      deleted: true,
     });
 
   builder.build();
@@ -104,6 +114,16 @@ describe("get_money_movements", () => {
     expect(result.total_matching).toBe(1);
     expect(result.movements[0].id).toBe("mm-3");
     expect(result.movements[0].from_category_name).toBe("Transportation");
+  });
+
+  it("omits soft-deleted movements", async () => {
+    const result = (await harness.callTool(
+      "get_money_movements",
+      {},
+    )) as MovementsResult;
+
+    expect(result.movements.map((m) => m.id)).not.toContain("mm-deleted");
+    expect(result.total_matching).toBe(3);
   });
 
   it("respects the limit while reporting the full match count", async () => {

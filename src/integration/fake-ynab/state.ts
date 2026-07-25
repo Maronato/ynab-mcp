@@ -217,6 +217,8 @@ export interface MoneyMovementData {
   from_category_id: string | null;
   to_category_id: string | null;
   amount: number;
+  /** The live API sends this even though the SDK model omits it. */
+  deleted: boolean;
 }
 
 export interface MoneyMovementGroupData {
@@ -225,6 +227,7 @@ export interface MoneyMovementGroupData {
   month: string;
   note: string | null;
   performed_by_user_id: string | null;
+  deleted: boolean;
 }
 
 export class FakeYnabState {
