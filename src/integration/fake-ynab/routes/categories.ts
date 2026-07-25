@@ -270,6 +270,7 @@ export function handlePatchMonthCategory(
   baseCategory.budgeted = budgeted;
 
   state.recordChange(planId, "categories", catId);
+  state.recordChange(planId, "months", `${month.slice(0, 7)}-01`);
 
   return {
     status: 200,

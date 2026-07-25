@@ -267,12 +267,18 @@ export interface FaultRule {
   delayAfterApplyMs?: number;
 }
 
+/** Handle returned by injectFault for asserting on fault application. */
+export interface FaultHandle {
+  /** How many requests this fault has been applied to so far. */
+  readonly applied: number;
+}
+
 export interface FakeYnabServer {
   server: ReturnType<typeof createServer>;
   url: string;
   close: () => Promise<void>;
   /** Inject a fault for subsequent matching requests. */
-  injectFault: (rule: FaultRule) => void;
+  injectFault: (rule: FaultRule) => FaultHandle;
   /** Remove all injected faults. */
   clearFaults: () => void;
   stats: {
@@ -304,6 +310,7 @@ export async function createFakeYnabServer(
     rule: FaultRule;
     remaining: number;
     skipRemaining: number;
+    applied: number;
   }> = [];
   const stats = { abortedRequests: 0, totalRequests: 0 };
 
@@ -323,6 +330,7 @@ export async function createFakeYnabServer(
       return undefined;
     }
     entry.remaining -= 1;
+    entry.applied += 1;
     return entry.rule;
   };
 
@@ -467,11 +475,18 @@ export async function createFakeYnabServer(
     url,
     close,
     injectFault: (rule: FaultRule) => {
-      faults.push({
+      const entry = {
         rule,
         remaining: rule.times ?? Number.POSITIVE_INFINITY,
         skipRemaining: rule.skip ?? 0,
-      });
+        applied: 0,
+      };
+      faults.push(entry);
+      return {
+        get applied() {
+          return entry.applied;
+        },
+      };
     },
     clearFaults: () => {
       faults.length = 0;

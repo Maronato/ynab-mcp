@@ -22,7 +22,7 @@ function createMockClient() {
         snapshotTransaction(tx),
     ),
     snapshotScheduledTransaction: vi.fn(),
-    deleteTransaction: vi.fn().mockResolvedValue(null),
+    deleteTransaction: vi.fn().mockResolvedValue({ id: "deleted-tx" }),
     updateTransactions: vi.fn().mockResolvedValue([]),
     createTransactions: vi.fn().mockResolvedValue([]),
     deleteScheduledTransaction: vi.fn().mockResolvedValue(null),

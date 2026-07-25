@@ -373,22 +373,32 @@ describe("housekeeping", () => {
   it("expires pending operations older than the age cutoff", async () => {
     const fresh = await store.markPending(BUDGET_ID, "fresh operation");
 
-    // Inject a stale pending op directly into the history file.
+    // Inject stale pending ops directly into the history file: one from
+    // yesterday (kept — the cutoff errs long) and one from last week
+    // (expired).
     const filePath = join(dataDir, "history", `${BUDGET_ID}.json`);
     const raw = JSON.parse(await readFile(filePath, "utf8"));
-    raw.pending_operations.push({
-      id: "stale-op",
-      budget_id: BUDGET_ID,
-      timestamp: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
-      description: "stale operation",
-    });
+    raw.pending_operations.push(
+      {
+        id: "yesterday-op",
+        budget_id: BUDGET_ID,
+        timestamp: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+        description: "yesterday's operation",
+      },
+      {
+        id: "ancient-op",
+        budget_id: BUDGET_ID,
+        timestamp: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        description: "ancient operation",
+      },
+    );
     await writeFile(filePath, JSON.stringify(raw), "utf8");
 
     const pending = await store.getPendingOperations(BUDGET_ID);
-    expect(pending.map((op) => op.id)).toEqual([fresh]);
+    expect(pending.map((op) => op.id)).toEqual([fresh, "yesterday-op"]);
   });
 
-  it("drops pending operations with unparseable timestamps", async () => {
+  it("keeps pending operations with unparseable timestamps", async () => {
     const filePath = join(dataDir, "history", `${BUDGET_ID}.json`);
     await mkdir(join(dataDir, "history"), { recursive: true });
     await writeFile(
@@ -408,7 +418,19 @@ describe("housekeeping", () => {
       "utf8",
     );
 
-    expect(await store.getPendingOperations(BUDGET_ID)).toEqual([]);
+    // A malformed marker still warns about an unreconciled write.
+    const pending = await store.getPendingOperations(BUDGET_ID);
+    expect(pending.map((op) => op.id)).toEqual(["bad-ts"]);
+  });
+
+  it("generates distinct pending ids in the same millisecond", async () => {
+    const first = await store.markPending(BUDGET_ID, "op one");
+    const second = await store.markPending(BUDGET_ID, "op two");
+    expect(first).not.toBe(second);
+
+    await store.clearPending(BUDGET_ID, first);
+    const remaining = await store.getPendingOperations(BUDGET_ID);
+    expect(remaining.map((op) => op.id)).toEqual([second]);
   });
 
   it("cleans up aged .tmp and .corrupt-* files but keeps recent ones", async () => {

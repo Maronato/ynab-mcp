@@ -1371,6 +1371,7 @@ export class YnabClient {
     budgetCache.settings = undefined;
     budgetCache.monthSummaries.clear();
     budgetCache.monthCategories.clear();
+    budgetCache.moneyMovements.clear();
 
     budgetCache.accounts.stale = true;
     budgetCache.categories.stale = true;

@@ -185,7 +185,7 @@ describe("undoOperations — conflict detection for 'create' undo type", () => {
 });
 
 describe("undoOperations — conflict detection for update/delete undo types", () => {
-  it("returns conflict when entity no longer exists", async () => {
+  it("treats a delete-type undo of a missing entity as already satisfied", async () => {
     const entry = createMockUndoEntry({
       undo_action: {
         type: "delete",
@@ -193,6 +193,27 @@ describe("undoOperations — conflict detection for update/delete undo types", (
         entity_id: "tx-1",
         expected_state: { id: "tx-1", amount: 5000 },
         restore_state: {},
+      },
+    });
+    mockStore.getEntriesByIds.mockResolvedValue([entry]);
+    mockClient.getTransactionById.mockResolvedValue(null);
+    mockClient.deleteTransaction.mockResolvedValue(null);
+
+    const result = await engine.undoOperations([entry.id], false);
+
+    // The goal state (entity absent) is already reached — not a conflict.
+    expect(result.results[0].status).toBe("undone");
+    expect(result.results[0].message).toContain("already deleted");
+  });
+
+  it("returns conflict when an update-type undo's entity no longer exists", async () => {
+    const entry = createMockUndoEntry({
+      undo_action: {
+        type: "update",
+        entity_type: "transaction",
+        entity_id: "tx-1",
+        expected_state: { id: "tx-1", amount: 5000 },
+        restore_state: { id: "tx-1", amount: 4000 },
       },
     });
     mockStore.getEntriesByIds.mockResolvedValue([entry]);

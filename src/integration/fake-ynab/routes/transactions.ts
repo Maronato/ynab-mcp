@@ -259,6 +259,7 @@ export function createTransactions(
     txMap.set(tx.id, tx);
     adjustAccountBalance(state, planId, tx.account_id, tx.amount);
     state.recordChange(planId, "transactions", tx.id);
+    state.recordChange(planId, "months", `${tx.date.slice(0, 7)}-01`);
     created.push(tx);
     transactionIds.push(tx.id);
   }
@@ -368,6 +369,7 @@ export function updateTransactions(
     }
 
     state.recordChange(planId, "transactions", existing.id);
+    state.recordChange(planId, "months", `${existing.date.slice(0, 7)}-01`);
     updated.push(existing);
     transactionIds.push(existing.id);
   }
@@ -408,6 +410,7 @@ export function deleteTransaction(
   // since the MCP server handles it via cache invalidation).
 
   state.recordChange(planId, "transactions", tx.id);
+  state.recordChange(planId, "months", `${tx.date.slice(0, 7)}-01`);
 
   return {
     status: 200,

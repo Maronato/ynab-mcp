@@ -364,6 +364,13 @@ export class UndoEngine {
     }
 
     if (!currentState) {
+      // A delete-type undo whose target is already gone has reached its
+      // goal state — treat it as satisfiable, not as a permanent conflict
+      // (e.g. cleanup-debris entries whose stray transaction was removed
+      // by hand).
+      if (entry.undo_action.type === "delete") {
+        return null;
+      }
       return {
         entry_id: entry.id,
         reason: "Entity no longer exists.",
@@ -418,8 +425,13 @@ export class UndoEngine {
     const restore = entry.undo_action.restore_state;
 
     if (entry.undo_action.type === "delete") {
-      await this.client.deleteTransaction(entry.budget_id, resolvedEntityId);
-      return "Deleted transaction as undo action.";
+      const deleted = await this.client.deleteTransaction(
+        entry.budget_id,
+        resolvedEntityId,
+      );
+      return deleted
+        ? "Deleted transaction as undo action."
+        : "Transaction was already deleted.";
     }
 
     if (entry.undo_action.type === "update") {
@@ -536,11 +548,13 @@ export class UndoEngine {
     const restore = entry.undo_action.restore_state;
 
     if (entry.undo_action.type === "delete") {
-      await this.client.deleteScheduledTransaction(
+      const deleted = await this.client.deleteScheduledTransaction(
         entry.budget_id,
         resolvedEntityId,
       );
-      return "Deleted scheduled transaction as undo action.";
+      return deleted
+        ? "Deleted scheduled transaction as undo action."
+        : "Scheduled transaction was already deleted.";
     }
 
     if (entry.undo_action.type === "update") {

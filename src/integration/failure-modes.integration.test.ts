@@ -7,10 +7,11 @@ import {
 } from "./harness.js";
 import { seedStandardBudget } from "./seed.js";
 
-let harness: IntegrationHarness;
+let harness: IntegrationHarness | undefined;
 
 afterEach(async () => {
-  await harness.close();
+  await harness?.close();
+  harness = undefined;
 });
 
 describe("write timeouts", () => {
@@ -43,8 +44,9 @@ describe("write timeouts", () => {
 
     // The fetch-level abort must actually reach the server: its response
     // stream closes before anything was written.
+    const fakeStats = harness.fake.stats;
     await expect
-      .poll(() => harness.fake.stats.abortedRequests, { timeout: 2_000 })
+      .poll(() => fakeStats.abortedRequests, { timeout: 2_000 })
       .toBeGreaterThanOrEqual(1);
 
     // The pending marker survives with an explanatory note, so the
@@ -375,6 +377,41 @@ describe("write-ambiguity bookkeeping", () => {
   });
 });
 
+describe("undo of already-deleted entities", () => {
+  it("resolves a delete-type undo whose target is already gone", async () => {
+    harness = await createIntegrationHarness({ seed: seedStandardBudget });
+
+    const created = (await harness.callTool("create_transactions", {
+      transactions: [
+        {
+          account_id: "acct-checking",
+          date: "2025-01-15",
+          amount: -8.0,
+          memo: "Already-gone test",
+          category_id: "cat-groceries",
+        },
+      ],
+    })) as {
+      transactions: Array<{ id: string }>;
+      undo_history_ids: string[];
+    };
+    const createEntryId = created.undo_history_ids[0];
+
+    // The entity disappears out-of-band (deleted directly, not undone).
+    await harness.callTool("delete_transactions", {
+      transaction_ids: [created.transactions[0].id],
+    });
+
+    // Undoing the create (a delete-type undo) finds its goal state already
+    // achieved — previously a permanent "Entity no longer exists" conflict.
+    const undo = (await harness.callTool("undo_operations", {
+      undo_history_ids: [createEntryId],
+    })) as { results: Array<{ status: string; message?: string }> };
+    expect(undo.results[0].status).toBe("undone");
+    expect(undo.results[0].message).toMatch(/already deleted/);
+  });
+});
+
 describe("crash recovery", () => {
   it("surfaces pending operations left behind by a crashed process", async () => {
     harness = await createIntegrationHarness({ seed: seedStandardBudget });
@@ -467,12 +504,20 @@ describe("read retries", () => {
       maxRetries: 1,
     });
 
-    harness.fake.injectFault({
+    const fault = harness.fake.injectFault({
       method: "GET",
       pathIncludes: "/accounts",
       status: 503,
+      body: {
+        error: { id: "503", name: "injected_error", detail: "Injected fault" },
+      },
     });
 
-    await expect(harness.callTool("get_accounts", {})).rejects.toThrow();
+    // The failure must be the injected one, not something incidental.
+    await expect(harness.callTool("get_accounts", {})).rejects.toThrow(
+      /Injected fault/,
+    );
+    // maxRetries=1 means exactly two attempts: the original and one retry.
+    expect(fault.applied).toBe(2);
   });
 });

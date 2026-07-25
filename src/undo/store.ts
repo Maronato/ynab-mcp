@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   mkdir,
   readdir,
@@ -17,12 +18,13 @@ const DEFAULT_HISTORY: UndoHistoryFile = {
 };
 
 /**
- * Pending-operation markers describe an interrupted (or ambiguous) write
- * and are only actionable while the user can still meaningfully verify the
- * budget's state; after this age they expire on read and are dropped from
- * the file on the next persisted write.
+ * Pending-operation markers describe an interrupted (or ambiguous) write.
+ * They exist precisely because nobody has reconciled the outcome yet, so
+ * the expiry errs long — a week, not a day, since an unattended marker can
+ * easily span a weekend — after which they expire on read and are dropped
+ * from the file on the next persisted write.
  */
-const PENDING_OPERATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const PENDING_OPERATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Leftover atomic-write temp files older than this are deleted; younger
  * ones might belong to a live writer (possibly another process). */
@@ -158,7 +160,9 @@ export class UndoStore {
   }
 
   async markPending(budgetId: string, description: string): Promise<string> {
-    const id = `${budgetId}::pending::${Date.now()}`;
+    // The random suffix keeps same-millisecond markers distinct, so
+    // clearing one cannot delete another.
+    const id = `${budgetId}::pending::${Date.now()}::${randomUUID().slice(0, 8)}`;
     const op: PendingOperation = {
       id,
       budget_id: budgetId,
@@ -314,7 +318,10 @@ export class UndoStore {
 
   private isExpiredPendingOperation(op: PendingOperation): boolean {
     const timestamp = Date.parse(op.timestamp);
-    if (!Number.isFinite(timestamp)) return true;
+    // An unparseable timestamp is kept, not silently dropped: the marker
+    // is a warning about an unreconciled write, and losing it is worse
+    // than showing a malformed one.
+    if (!Number.isFinite(timestamp)) return false;
     return Date.now() - timestamp > PENDING_OPERATION_MAX_AGE_MS;
   }
 
