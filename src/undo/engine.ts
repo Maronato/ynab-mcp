@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { matchesExpectedState } from "../shared/object.js";
 import type { YnabClient } from "../ynab/client.js";
-import { extractErrorMessage } from "../ynab/errors.js";
+import {
+  extractErrorMessage,
+  isAmbiguousWriteOutcome,
+} from "../ynab/errors.js";
 import { asMilliunits, milliunitsToCurrency } from "../ynab/format.js";
 import type { UndoStore } from "./store.js";
 import type {
@@ -282,18 +285,60 @@ export class UndoEngine {
         };
       }
 
-      const message = await this.applyUndo(entry, resolvedEntityId);
-      return {
-        entry_id: entry.id,
-        status: "undone",
-        message,
-      };
+      // Undo applications are writes too. Bracket them with a pending
+      // marker so an ambiguous failure (timeout, dropped connection) stays
+      // visible: the entry remains "active" after such a failure, and
+      // blindly retrying it can duplicate the restored entity.
+      const pendingId = await this.store.markPending(
+        entry.budget_id,
+        `Undoing ${entry.operation} entry ${entry.id}`,
+      );
+      try {
+        const message = await this.applyUndo(entry, resolvedEntityId);
+        await this.clearPendingSafe(entry.budget_id, pendingId);
+        return {
+          entry_id: entry.id,
+          status: "undone",
+          message,
+        };
+      } catch (error) {
+        if (isAmbiguousWriteOutcome(error)) {
+          try {
+            await this.store.annotatePending(
+              entry.budget_id,
+              pendingId,
+              `Undoing entry ${entry.id} failed with an unknown outcome ` +
+                "(timeout or dropped connection). The undo write may have " +
+                "been applied even though the entry is still marked active " +
+                "— verify the budget's current state before retrying, as a " +
+                "retry may duplicate the restored change.",
+            );
+          } catch {
+            // Best-effort; the leftover marker is the signal.
+          }
+        } else {
+          await this.clearPendingSafe(entry.budget_id, pendingId);
+        }
+        throw error;
+      }
     } catch (error) {
       return {
         entry_id: entry.id,
         status: "error",
         message: extractErrorMessage(error, "Failed to apply undo operation."),
       };
+    }
+  }
+
+  private async clearPendingSafe(
+    budgetId: string,
+    pendingId: string,
+  ): Promise<void> {
+    try {
+      await this.store.clearPending(budgetId, pendingId);
+    } catch {
+      // Best-effort: a stale marker over-warns and expires later; it must
+      // not turn a completed undo into a reported failure.
     }
   }
 

@@ -256,6 +256,15 @@ export interface FaultRule {
   times?: number;
   /** Let this many matching requests through unharmed before applying. */
   skip?: number;
+  /** Destroy the socket without responding (simulates a connection drop). */
+  destroySocket?: boolean;
+  /**
+   * Route and APPLY the request normally, then delay before writing the
+   * response. Simulates the case where the server applied a write but the
+   * client gave up waiting — the one case where an ambiguous-outcome
+   * marker is truthful.
+   */
+  delayAfterApplyMs?: number;
 }
 
 export interface FakeYnabServer {
@@ -327,18 +336,25 @@ export async function createFakeYnabServer(
         const parsedUrl = new URL(req.url ?? "/", "http://localhost");
         const method = req.method ?? "GET";
 
-        const fault = takeMatchingFault(method, parsedUrl.pathname);
-        if (fault?.delayMs) {
-          // Sleep, but wake early if the client aborts so the test's
-          // event loop isn't held open by orphaned timers.
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, fault.delayMs);
+        // Sleep, but wake early if the client aborts so the test's
+        // event loop isn't held open by orphaned timers.
+        const abortAwareSleep = (ms: number): Promise<void> =>
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, ms);
             res.once("close", () => {
               clearTimeout(timer);
               resolve();
             });
           });
+
+        const fault = takeMatchingFault(method, parsedUrl.pathname);
+        if (fault?.delayMs) {
+          await abortAwareSleep(fault.delayMs);
           if (res.destroyed || req.destroyed) return;
+        }
+        if (fault?.destroySocket) {
+          req.socket.destroy();
+          return;
         }
         if (fault?.status) {
           res.writeHead(fault.status, { "Content-Type": "application/json" });
@@ -398,6 +414,13 @@ export async function createFakeYnabServer(
           query,
           body,
         );
+
+        // The state mutation (if any) has already been applied; delaying
+        // here makes the client abort AFTER the server did the work.
+        if (fault?.delayAfterApplyMs) {
+          await abortAwareSleep(fault.delayAfterApplyMs);
+          if (res.destroyed || req.destroyed) return;
+        }
 
         // The live API no longer sends X-Rate-Limit (and never sent it on
         // 429s); emit it only when explicitly enabled for header tests.

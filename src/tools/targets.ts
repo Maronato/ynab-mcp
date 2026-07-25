@@ -78,7 +78,7 @@ export function registerTargetTools(
           context.undoEngine,
           budgetId,
           `Updating ${input.targets.length} category target${input.targets.length === 1 ? "" : "s"}`,
-          async () => {
+          async (ambiguity) => {
             // Fetch current state for all categories in parallel
             const prefetchResults = await Promise.all(
               input.targets.map(async (target) => ({
@@ -188,6 +188,7 @@ export function registerTargetTools(
                     },
                   };
                 } catch (error) {
+                  ambiguity.note(error);
                   return {
                     result: {
                       category_id: target.category_id,

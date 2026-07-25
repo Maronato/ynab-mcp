@@ -367,7 +367,7 @@ export function registerTransactionTools(
           context.undoEngine,
           resolvedBudgetId,
           `Updating ${transactions.length} transaction${transactions.length === 1 ? "" : "s"}`,
-          async () => {
+          async (ambiguity) => {
             const beforeById = new Map<
               string,
               ReturnType<typeof snapshotTransaction>
@@ -542,6 +542,7 @@ export function registerTransactionTools(
                   targetEntityId: after.id,
                 });
               } catch (error) {
+                ambiguity.note(error);
                 results.push({
                   transaction_id: update.transaction_id,
                   status: "error",
@@ -612,7 +613,7 @@ export function registerTransactionTools(
           context.undoEngine,
           resolvedBudgetId,
           `Deleting ${transactionIds.length} transaction${transactionIds.length === 1 ? "" : "s"}`,
-          async () => {
+          async (ambiguity) => {
             const prefetchResults = await Promise.all(
               transactionIds.map(async (id) => ({
                 id,
@@ -680,6 +681,7 @@ export function registerTransactionTools(
                   },
                 });
               } catch (error) {
+                ambiguity.note(error);
                 results.push({
                   transaction_id: transactionId,
                   status: "error",

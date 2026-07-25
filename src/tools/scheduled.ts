@@ -205,7 +205,7 @@ export function registerScheduledTransactionTools(
           context.undoEngine,
           resolvedBudgetId,
           `Creating ${transactions.length} scheduled transaction${transactions.length === 1 ? "" : "s"}`,
-          async () => {
+          async (ambiguity) => {
             const [lookups, settings] = await Promise.all([
               context.ynabClient.getNameLookup(resolvedBudgetId),
               context.ynabClient.getBudgetSettings(resolvedBudgetId),
@@ -264,6 +264,7 @@ export function registerScheduledTransactionTools(
                   },
                 });
               } catch (error) {
+                ambiguity.note(error);
                 results.push({
                   input_index: inputIndex,
                   status: "error",
@@ -325,7 +326,7 @@ export function registerScheduledTransactionTools(
           context.undoEngine,
           resolvedBudgetId,
           `Updating ${transactions.length} scheduled transaction${transactions.length === 1 ? "" : "s"}`,
-          async () => {
+          async (ambiguity) => {
             const [lookups, settings] = await Promise.all([
               context.ynabClient.getNameLookup(resolvedBudgetId),
               context.ynabClient.getBudgetSettings(resolvedBudgetId),
@@ -394,6 +395,7 @@ export function registerScheduledTransactionTools(
                   },
                 });
               } catch (error) {
+                ambiguity.note(error);
                 results.push({
                   scheduled_transaction_id:
                     transaction.scheduled_transaction_id,
@@ -457,7 +459,7 @@ export function registerScheduledTransactionTools(
           context.undoEngine,
           resolvedBudgetId,
           `Deleting ${scheduledIds.length} scheduled transaction${scheduledIds.length === 1 ? "" : "s"}`,
-          async () => {
+          async (ambiguity) => {
             const results: Array<Record<string, unknown>> = [];
             const undoEntries: Array<{
               operation: "delete_scheduled_transaction";
@@ -527,6 +529,7 @@ export function registerScheduledTransactionTools(
                   },
                 });
               } catch (error) {
+                ambiguity.note(error);
                 results.push({
                   scheduled_transaction_id: scheduledTransactionId,
                   status: "error",

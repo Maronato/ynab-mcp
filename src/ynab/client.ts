@@ -939,8 +939,10 @@ export class YnabClient {
     options?: { skipPhantomFlush?: boolean },
   ): Promise<ynab.TransactionDetail | null> {
     this.assertWriteAllowed();
+    let resolvedBudgetId: string;
+    let deleted: ynab.TransactionDetail | null;
     try {
-      const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+      resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
       const response = await this.api.transactions.deleteTransaction(
         resolvedBudgetId,
         transactionId,
@@ -951,15 +953,18 @@ export class YnabClient {
       ]);
       this.cache.invalidateMonthCaches(resolvedBudgetId);
       this.cache.optimisticRemoveTransaction(resolvedBudgetId, transactionId);
-      const deleted = response.data.transaction;
-      if (deleted && !options?.skipPhantomFlush) {
-        await this.flushSplitPhantoms(resolvedBudgetId, deleted);
-      }
-      return deleted;
+      deleted = response.data.transaction;
     } catch (error) {
       if (isNotFoundError(error)) return null;
       throw error;
     }
+    // Outside the try/catch above: the phantom flush must never fail the
+    // delete that already succeeded, and a flush error must not be
+    // misread as a not-found on the primary delete.
+    if (deleted && !options?.skipPhantomFlush) {
+      await this.flushSplitPhantoms(resolvedBudgetId, deleted);
+    }
+    return deleted;
   }
 
   /**
@@ -969,6 +974,12 @@ export class YnabClient {
    *
    * When {@link replacementTransaction} is provided, categories already present
    * in the replacement are skipped since the create already flushed them.
+   *
+   * Never rejects: this runs after the caller's destructive work has already
+   * succeeded, so a cleanup failure must not be reported as a failure of the
+   * primary operation. The worst outcome of a failed flush *create* is that
+   * the cosmetic phantom activity remains; a failed flush *delete* leaves a
+   * stray cent transaction, which is recorded as an undoable entry.
    */
   private async flushSplitPhantoms(
     budgetId: string,
@@ -1004,16 +1015,23 @@ export class YnabClient {
     if (deletedCategoryIds.size === 0) return;
 
     const categoryIds = [...deletedCategoryIds];
-    const created = await this.createTransactions(
-      budgetId,
-      categoryIds.map((categoryId) => ({
-        account_id: deleted.account_id,
-        date: deleted.date,
-        amount: -0.01,
-        category_id: categoryId,
-        approved: true,
-      })),
-    );
+    let created: ynab.TransactionDetail[];
+    try {
+      created = await this.createTransactions(
+        budgetId,
+        categoryIds.map((categoryId) => ({
+          account_id: deleted.account_id,
+          date: deleted.date,
+          amount: -0.01,
+          category_id: categoryId,
+          approved: true,
+        })),
+      );
+    } catch {
+      // Nothing was created, so there is no debris to record — only the
+      // cosmetic phantom activity remains uncorrected.
+      return;
+    }
 
     // A failed delete here would leave a stray -0.01 transaction in the
     // user's budget. Deleting is idempotent (a repeat delete 404s and maps

@@ -311,7 +311,7 @@ export function registerCategoryTools(
           context.undoEngine,
           budgetId,
           `Setting budgets for ${input.assignments.length} categor${input.assignments.length === 1 ? "y" : "ies"}`,
-          async () => {
+          async (ambiguity) => {
             const prefetchResults = await Promise.all(
               input.assignments.map(async (assignment) => ({
                 assignment,
@@ -377,6 +377,7 @@ export function registerCategoryTools(
                     },
                   };
                 } catch (error) {
+                  ambiguity.note(error);
                   return {
                     result: {
                       assignment,

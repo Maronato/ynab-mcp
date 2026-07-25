@@ -59,7 +59,7 @@ describe("write timeouts", () => {
       /Creating 1 transaction/,
     );
     expect(history.pending_operations?.[0].note).toMatch(
-      /timed out.*may have been applied/s,
+      /unknown outcome.*may have been applied/s,
     );
   });
 
@@ -167,6 +167,211 @@ describe("split-phantom cleanup debris", () => {
       result_sets: Array<{ transactions: Array<{ id: string }> }>;
     };
     expect(searchAfter.result_sets[0].transactions).toHaveLength(0);
+  });
+});
+
+describe("write-ambiguity bookkeeping", () => {
+  it("keeps the ambiguous marker when a batched tool times out per-item", async () => {
+    harness = await createIntegrationHarness({
+      seed: seedStandardBudget,
+      timeoutMs: 200,
+    });
+
+    const search = (await harness.callTool("search_transactions", {
+      queries: [{}],
+    })) as {
+      result_sets: Array<{ transactions: Array<{ id: string }> }>;
+    };
+    const txId = search.result_sets[0].transactions[0].id;
+
+    harness.fake.injectFault({
+      method: "DELETE",
+      pathIncludes: "/transactions/",
+      delayMs: 5_000,
+      times: 1,
+    });
+
+    // Batched tools fold per-item errors into result rows instead of
+    // throwing — the marker must survive anyway.
+    const result = (await harness.callTool("delete_transactions", {
+      transaction_ids: [txId],
+    })) as {
+      results: Array<{ status: string; message?: string }>;
+    };
+    expect(result.results[0].status).toBe("error");
+    expect(result.results[0].message).toMatch(/timed out/);
+
+    const history = (await harness.callTool("list_undo_history", {})) as {
+      warning?: string;
+      pending_operations?: Array<{ note?: string }>;
+    };
+    expect(history.pending_operations).toHaveLength(1);
+    expect(history.pending_operations?.[0].note).toMatch(/unknown outcome/);
+  });
+
+  it("treats a dropped connection during a write as ambiguous", async () => {
+    harness = await createIntegrationHarness({ seed: seedStandardBudget });
+
+    harness.fake.injectFault({
+      method: "POST",
+      pathIncludes: "/transactions",
+      destroySocket: true,
+      times: 1,
+    });
+
+    await expect(
+      harness.callTool("create_transactions", {
+        transactions: [
+          {
+            account_id: "acct-checking",
+            date: "2025-01-15",
+            amount: -5.0,
+            category_id: "cat-groceries",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/fetch failed|socket|terminated/i);
+
+    const history = (await harness.callTool("list_undo_history", {})) as {
+      pending_operations?: Array<{ note?: string }>;
+    };
+    expect(history.pending_operations).toHaveLength(1);
+    expect(history.pending_operations?.[0].note).toMatch(/unknown outcome/);
+  });
+
+  it("keeps a truthful marker when the server applied the write before the abort", async () => {
+    harness = await createIntegrationHarness({
+      seed: seedStandardBudget,
+      timeoutMs: 200,
+    });
+
+    harness.fake.injectFault({
+      method: "POST",
+      pathIncludes: "/transactions",
+      delayAfterApplyMs: 5_000,
+      times: 1,
+    });
+
+    await expect(
+      harness.callTool("create_transactions", {
+        transactions: [
+          {
+            account_id: "acct-checking",
+            date: "2025-01-15",
+            amount: -6.0,
+            memo: "Truthful ambiguity test",
+            category_id: "cat-groceries",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/timed out/);
+
+    // The server DID apply the write — the marker is not a false alarm.
+    harness.fake.clearFaults();
+    const search = (await harness.callTool("search_transactions", {
+      queries: [{ memo_contains: "Truthful ambiguity" }],
+    })) as {
+      result_sets: Array<{ transactions: Array<{ id: string }> }>;
+    };
+    expect(search.result_sets[0].transactions).toHaveLength(1);
+
+    const history = (await harness.callTool("list_undo_history", {})) as {
+      pending_operations?: Array<{ note?: string }>;
+    };
+    expect(history.pending_operations).toHaveLength(1);
+  });
+
+  it("does not fail a delete whose phantom-flush create fails", async () => {
+    harness = await createIntegrationHarness({
+      seed: seedStandardBudget,
+      maxRetries: 0,
+    });
+
+    const created = (await harness.callTool("create_transactions", {
+      transactions: [
+        {
+          account_id: "acct-checking",
+          date: "2025-01-15",
+          amount: -100.0,
+          memo: "Flush-create failure split",
+          subtransactions: [
+            { amount: -60.0, category_id: "cat-groceries" },
+            { amount: -40.0, category_id: "cat-dining" },
+          ],
+        },
+      ],
+    })) as { transactions: Array<{ id: string }> };
+    const splitId = created.transactions[0].id;
+
+    // Every POST from here on fails — including the phantom-flush create.
+    harness.fake.injectFault({
+      method: "POST",
+      pathIncludes: "/transactions",
+      status: 500,
+    });
+
+    const result = (await harness.callTool("delete_transactions", {
+      transaction_ids: [splitId],
+    })) as {
+      results: Array<{ status: string }>;
+      undo_history_ids: string[];
+    };
+    expect(result.results[0].status).toBe("deleted");
+    expect(result.undo_history_ids.length).toBeGreaterThan(0);
+
+    harness.fake.clearFaults();
+    const search = (await harness.callTool("search_transactions", {
+      queries: [{ memo_contains: "Flush-create failure" }],
+    })) as {
+      result_sets: Array<{ transactions: Array<{ id: string }> }>;
+    };
+    expect(search.result_sets[0].transactions).toHaveLength(0);
+  });
+
+  it("marks pending when an undo write fails ambiguously", async () => {
+    harness = await createIntegrationHarness({
+      seed: seedStandardBudget,
+      timeoutMs: 200,
+    });
+
+    const created = (await harness.callTool("create_transactions", {
+      transactions: [
+        {
+          account_id: "acct-checking",
+          date: "2025-01-15",
+          amount: -7.0,
+          memo: "Undo ambiguity test",
+          category_id: "cat-groceries",
+        },
+      ],
+    })) as { transactions: Array<{ id: string }> };
+
+    const deleted = (await harness.callTool("delete_transactions", {
+      transaction_ids: [created.transactions[0].id],
+    })) as { undo_history_ids: string[] };
+    const deleteEntryId = deleted.undo_history_ids[0];
+
+    // Undoing the delete re-creates the transaction (a POST) — time it out.
+    harness.fake.injectFault({
+      method: "POST",
+      pathIncludes: "/transactions",
+      delayMs: 5_000,
+      times: 1,
+    });
+
+    const undo = (await harness.callTool("undo_operations", {
+      undo_history_ids: [deleteEntryId],
+    })) as { results: Array<{ status: string; message?: string }> };
+    expect(undo.results[0].status).toBe("error");
+
+    const history = (await harness.callTool("list_undo_history", {})) as {
+      pending_operations?: Array<{ description: string; note?: string }>;
+    };
+    expect(history.pending_operations).toHaveLength(1);
+    expect(history.pending_operations?.[0].description).toMatch(/Undoing/);
+    expect(history.pending_operations?.[0].note).toMatch(
+      /may have been applied/,
+    );
   });
 });
 

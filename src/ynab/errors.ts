@@ -39,19 +39,43 @@ export function unwrapSdkError(error: unknown): unknown {
   return current;
 }
 
+/** Socket-level error codes where the request may already have been sent. */
+const AMBIGUOUS_SOCKET_CODES = new Set([
+  "ECONNRESET",
+  "ECONNABORTED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_ABORTED",
+]);
+
 /**
  * True when a failed operation's server-side outcome is unknown: the request
  * may have reached the server and been applied even though the client saw an
- * error. Definitive API rejections (the server responded with an error body)
- * are not ambiguous.
+ * error. That covers our own timeouts (the request was aborted mid-flight)
+ * and socket-level failures (undici's "fetch failed" TypeError, connection
+ * resets) — a connection refused outright never reached the server, but it
+ * is not reliably distinguishable from a mid-request drop, and for writes a
+ * false "maybe applied" warning is far cheaper than a silent maybe-applied
+ * write. Definitive API rejections (the server responded with an error
+ * body) are not ambiguous.
  */
 export function isAmbiguousWriteOutcome(error: unknown): boolean {
   let current: unknown = error;
   const seen = new Set<unknown>();
-  while (current instanceof Error && !seen.has(current)) {
+  while (current !== null && current !== undefined && !seen.has(current)) {
     if (current instanceof YnabApiTimeoutError) return true;
+    if (current instanceof TypeError && current.message.includes("fetch")) {
+      return true;
+    }
+    if (typeof current === "object" && "code" in current) {
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === "string" && AMBIGUOUS_SOCKET_CODES.has(code)) {
+        return true;
+      }
+    }
     seen.add(current);
-    current = current.cause;
+    current = (current as { cause?: unknown }).cause;
   }
   return false;
 }
