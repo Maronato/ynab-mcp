@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { matchesExpectedState } from "../shared/object.js";
 import type { YnabClient } from "../ynab/client.js";
-import { extractErrorMessage } from "../ynab/errors.js";
+import {
+  extractErrorMessage,
+  isAmbiguousWriteOutcome,
+} from "../ynab/errors.js";
 import { asMilliunits, milliunitsToCurrency } from "../ynab/format.js";
 import type { UndoStore } from "./store.js";
 import type {
@@ -77,6 +80,14 @@ export class UndoEngine {
 
   async clearPending(budgetId: string, pendingId: string): Promise<void> {
     return this.store.clearPending(budgetId, pendingId);
+  }
+
+  async annotatePending(
+    budgetId: string,
+    pendingId: string,
+    note: string,
+  ): Promise<void> {
+    return this.store.annotatePending(budgetId, pendingId, note);
   }
 
   async listHistory(
@@ -274,18 +285,60 @@ export class UndoEngine {
         };
       }
 
-      const message = await this.applyUndo(entry, resolvedEntityId);
-      return {
-        entry_id: entry.id,
-        status: "undone",
-        message,
-      };
+      // Undo applications are writes too. Bracket them with a pending
+      // marker so an ambiguous failure (timeout, dropped connection) stays
+      // visible: the entry remains "active" after such a failure, and
+      // blindly retrying it can duplicate the restored entity.
+      const pendingId = await this.store.markPending(
+        entry.budget_id,
+        `Undoing ${entry.operation} entry ${entry.id}`,
+      );
+      try {
+        const message = await this.applyUndo(entry, resolvedEntityId);
+        await this.clearPendingSafe(entry.budget_id, pendingId);
+        return {
+          entry_id: entry.id,
+          status: "undone",
+          message,
+        };
+      } catch (error) {
+        if (isAmbiguousWriteOutcome(error)) {
+          try {
+            await this.store.annotatePending(
+              entry.budget_id,
+              pendingId,
+              `Undoing entry ${entry.id} failed with an unknown outcome ` +
+                "(timeout or dropped connection). The undo write may have " +
+                "been applied even though the entry is still marked active " +
+                "— verify the budget's current state before retrying, as a " +
+                "retry may duplicate the restored change.",
+            );
+          } catch {
+            // Best-effort; the leftover marker is the signal.
+          }
+        } else {
+          await this.clearPendingSafe(entry.budget_id, pendingId);
+        }
+        throw error;
+      }
     } catch (error) {
       return {
         entry_id: entry.id,
         status: "error",
         message: extractErrorMessage(error, "Failed to apply undo operation."),
       };
+    }
+  }
+
+  private async clearPendingSafe(
+    budgetId: string,
+    pendingId: string,
+  ): Promise<void> {
+    try {
+      await this.store.clearPending(budgetId, pendingId);
+    } catch {
+      // Best-effort: a stale marker over-warns and expires later; it must
+      // not turn a completed undo into a reported failure.
     }
   }
 
@@ -311,6 +364,13 @@ export class UndoEngine {
     }
 
     if (!currentState) {
+      // A delete-type undo whose target is already gone has reached its
+      // goal state — treat it as satisfiable, not as a permanent conflict
+      // (e.g. cleanup-debris entries whose stray transaction was removed
+      // by hand).
+      if (entry.undo_action.type === "delete") {
+        return null;
+      }
       return {
         entry_id: entry.id,
         reason: "Entity no longer exists.",
@@ -351,6 +411,10 @@ export class UndoEngine {
       return this.applyScheduledTransactionUndo(entry, resolvedEntityId);
     }
 
+    if (entry.undo_action.entity_type === "category_target") {
+      return this.applyCategoryTargetUndo(entry);
+    }
+
     return this.applyCategoryBudgetUndo(entry);
   }
 
@@ -361,8 +425,13 @@ export class UndoEngine {
     const restore = entry.undo_action.restore_state;
 
     if (entry.undo_action.type === "delete") {
-      await this.client.deleteTransaction(entry.budget_id, resolvedEntityId);
-      return "Deleted transaction as undo action.";
+      const deleted = await this.client.deleteTransaction(
+        entry.budget_id,
+        resolvedEntityId,
+      );
+      return deleted
+        ? "Deleted transaction as undo action."
+        : "Transaction was already deleted.";
     }
 
     if (entry.undo_action.type === "update") {
@@ -479,11 +548,13 @@ export class UndoEngine {
     const restore = entry.undo_action.restore_state;
 
     if (entry.undo_action.type === "delete") {
-      await this.client.deleteScheduledTransaction(
+      const deleted = await this.client.deleteScheduledTransaction(
         entry.budget_id,
         resolvedEntityId,
       );
-      return "Deleted scheduled transaction as undo action.";
+      return deleted
+        ? "Deleted scheduled transaction as undo action."
+        : "Scheduled transaction was already deleted.";
     }
 
     if (entry.undo_action.type === "update") {
@@ -543,6 +614,28 @@ export class UndoEngine {
     return "Re-created deleted scheduled transaction.";
   }
 
+  private async applyCategoryTargetUndo(entry: UndoEntry): Promise<string> {
+    const restore = entry.undo_action.restore_state;
+    await this.client.updateCategory(
+      entry.budget_id,
+      asRequiredString(restore.category_id),
+      {
+        goal_target:
+          restore.goal_target == null ? null : asNumber(restore.goal_target),
+        goal_target_date: asOptionalNullableString(restore.goal_target_date),
+        ...("goal_needs_whole_amount" in restore
+          ? {
+              goal_needs_whole_amount:
+                restore.goal_needs_whole_amount == null
+                  ? null
+                  : Boolean(restore.goal_needs_whole_amount),
+            }
+          : {}),
+      },
+    );
+    return "Restored category target.";
+  }
+
   private async applyCategoryBudgetUndo(entry: UndoEntry): Promise<string> {
     const restore = entry.undo_action.restore_state;
     await this.client.setCategoryBudget(entry.budget_id, {
@@ -581,6 +674,29 @@ export class UndoEngine {
       }
 
       return this.client.snapshotScheduledTransaction(transaction);
+    }
+
+    if (entry.undo_action.entity_type === "category_target") {
+      const categoryId = asRequiredString(
+        entry.undo_action.restore_state.category_id,
+      );
+      const category = await this.client.getCategoryById(
+        entry.budget_id,
+        categoryId,
+      );
+
+      if (!category) {
+        return null;
+      }
+
+      // Conflict detection only compares keys present in expected_state,
+      // so entries recorded before a field existed stay compatible.
+      return {
+        category_id: category.id,
+        goal_target: category.goal_target ?? null,
+        goal_target_date: category.goal_target_date ?? null,
+        goal_needs_whole_amount: category.goal_needs_whole_amount ?? null,
+      };
     }
 
     const categoryId = asRequiredString(

@@ -27,7 +27,7 @@ import {
   handleGetMoneyMovements,
   handleGetMoneyMovementsByMonth,
 } from "./routes/money-movements.js";
-import { handleGetMonth } from "./routes/months.js";
+import { handleGetMonth, handleGetMonths } from "./routes/months.js";
 import { handleGetPayees } from "./routes/payees.js";
 import { handleGetPlanSettings, handleGetPlans } from "./routes/plans.js";
 import {
@@ -157,6 +157,11 @@ const routes: RouteDefinition[] = [
   },
   {
     method: "GET",
+    segments: ["plans", ":planId", "months"],
+    handler: handleGetMonths,
+  },
+  {
+    method: "GET",
     segments: ["plans", ":planId", "months", ":month"],
     handler: handleGetMonth,
   },
@@ -230,19 +235,151 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-// ── Public API ──
+// ── Fault injection ──
 
-export async function createFakeYnabServer(state: FakeYnabState): Promise<{
+/**
+ * A fault to inject into matching requests, for exercising the client's
+ * failure paths (timeouts, retries, rate limiting) end-to-end.
+ */
+export interface FaultRule {
+  /** Only match this HTTP method (e.g. "POST"). Matches all when omitted. */
+  method?: string;
+  /** Only match paths containing this substring. Matches all when omitted. */
+  pathIncludes?: string;
+  /** Delay before responding (or before applying `status`), in ms. */
+  delayMs?: number;
+  /** Respond with this status instead of routing to a handler. */
+  status?: number;
+  /** Response body for `status`; a YNAB-style error body by default. */
+  body?: unknown;
+  /** Apply to at most this many matching requests. Unlimited when omitted. */
+  times?: number;
+  /** Let this many matching requests through unharmed before applying. */
+  skip?: number;
+  /** Destroy the socket without responding (simulates a connection drop). */
+  destroySocket?: boolean;
+  /**
+   * Route and APPLY the request normally, then delay before writing the
+   * response. Simulates the case where the server applied a write but the
+   * client gave up waiting — the one case where an ambiguous-outcome
+   * marker is truthful.
+   */
+  delayAfterApplyMs?: number;
+}
+
+/** Handle returned by injectFault for asserting on fault application. */
+export interface FaultHandle {
+  /** How many requests this fault has been applied to so far. */
+  readonly applied: number;
+}
+
+export interface FakeYnabServer {
   server: ReturnType<typeof createServer>;
   url: string;
   close: () => Promise<void>;
-}> {
+  /** Inject a fault for subsequent matching requests. */
+  injectFault: (rule: FaultRule) => FaultHandle;
+  /** Remove all injected faults. */
+  clearFaults: () => void;
+  stats: {
+    /** Requests whose client went away before a response was written. */
+    abortedRequests: number;
+    /** Total requests received, including faulted and aborted ones. */
+    totalRequests: number;
+  };
+}
+
+// ── Public API ──
+
+export interface FakeYnabServerOptions {
+  /**
+   * Emit an X-Rate-Limit "used/limit" header on responses. The live API
+   * stopped sending this header (verified 2026-07); the default mirrors
+   * that. Enable to exercise the client's header-reconciliation path,
+   * which is kept in case the header returns.
+   */
+  sendRateLimitHeader?: boolean;
+}
+
+export async function createFakeYnabServer(
+  state: FakeYnabState,
+  options?: FakeYnabServerOptions,
+): Promise<FakeYnabServer> {
   let requestCount = 0;
+  const faults: Array<{
+    rule: FaultRule;
+    remaining: number;
+    skipRemaining: number;
+    applied: number;
+  }> = [];
+  const stats = { abortedRequests: 0, totalRequests: 0 };
+
+  const takeMatchingFault = (
+    method: string,
+    pathname: string,
+  ): FaultRule | undefined => {
+    const entry = faults.find(
+      ({ rule, remaining }) =>
+        remaining > 0 &&
+        (!rule.method || rule.method === method) &&
+        (!rule.pathIncludes || pathname.includes(rule.pathIncludes)),
+    );
+    if (!entry) return undefined;
+    if (entry.skipRemaining > 0) {
+      entry.skipRemaining -= 1;
+      return undefined;
+    }
+    entry.remaining -= 1;
+    entry.applied += 1;
+    return entry.rule;
+  };
+
   const httpServer = createServer(
     async (req: IncomingMessage, res: ServerResponse) => {
+      stats.totalRequests += 1;
+      res.once("close", () => {
+        if (!res.writableEnded) stats.abortedRequests += 1;
+      });
       try {
         const parsedUrl = new URL(req.url ?? "/", "http://localhost");
         const method = req.method ?? "GET";
+
+        // Sleep, but wake early if the client aborts so the test's
+        // event loop isn't held open by orphaned timers.
+        const abortAwareSleep = (ms: number): Promise<void> =>
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, ms);
+            res.once("close", () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+
+        const fault = takeMatchingFault(method, parsedUrl.pathname);
+        if (fault?.delayMs) {
+          await abortAwareSleep(fault.delayMs);
+          if (res.destroyed || req.destroyed) return;
+        }
+        if (fault?.destroySocket) {
+          req.socket.destroy();
+          return;
+        }
+        if (fault?.status) {
+          res.writeHead(fault.status, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify(
+              fault.body ?? {
+                error: {
+                  id: String(fault.status),
+                  name: "injected_error",
+                  detail: "Injected fault",
+                },
+              },
+            ),
+          );
+          return;
+        }
+
         const pathSegments = parsedUrl.pathname
           .split("/")
           .filter((s) => s.length > 0);
@@ -286,18 +423,26 @@ export async function createFakeYnabServer(state: FakeYnabState): Promise<{
           body,
         );
 
-        // Like the live API: an X-Rate-Limit "used/limit" header on
-        // responses, omitted on 429s.
+        // The state mutation (if any) has already been applied; delaying
+        // here makes the client abort AFTER the server did the work.
+        if (fault?.delayAfterApplyMs) {
+          await abortAwareSleep(fault.delayAfterApplyMs);
+          if (res.destroyed || req.destroyed) return;
+        }
+
+        // The live API no longer sends X-Rate-Limit (and never sent it on
+        // 429s); emit it only when explicitly enabled for header tests.
         requestCount += 1;
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
-        if (result.status !== 429) {
+        if (options?.sendRateLimitHeader && result.status !== 429) {
           headers["X-Rate-Limit"] = `${Math.min(requestCount, 200)}/200`;
         }
         res.writeHead(result.status, headers);
         res.end(JSON.stringify(result.body));
       } catch (err) {
+        if (res.destroyed || res.headersSent) return;
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
@@ -325,5 +470,27 @@ export async function createFakeYnabServer(state: FakeYnabState): Promise<{
       httpServer.close((err) => (err ? reject(err) : resolve()));
     });
 
-  return { server: httpServer, url, close };
+  return {
+    server: httpServer,
+    url,
+    close,
+    injectFault: (rule: FaultRule) => {
+      const entry = {
+        rule,
+        remaining: rule.times ?? Number.POSITIVE_INFINITY,
+        skipRemaining: rule.skip ?? 0,
+        applied: 0,
+      };
+      faults.push(entry);
+      return {
+        get applied() {
+          return entry.applied;
+        },
+      };
+    },
+    clearFaults: () => {
+      faults.length = 0;
+    },
+    stats,
+  };
 }

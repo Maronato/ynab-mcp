@@ -1,4 +1,13 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 
 import type { PendingOperation, UndoEntry, UndoHistoryFile } from "./types.js";
@@ -7,6 +16,22 @@ const DEFAULT_HISTORY: UndoHistoryFile = {
   entries: [],
   id_mappings: {},
 };
+
+/**
+ * Pending-operation markers describe an interrupted (or ambiguous) write.
+ * They exist precisely because nobody has reconciled the outcome yet, so
+ * the expiry errs long — a week, not a day, since an unattended marker can
+ * easily span a weekend — after which they expire on read and are dropped
+ * from the file on the next persisted write.
+ */
+const PENDING_OPERATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Leftover atomic-write temp files older than this are deleted; younger
+ * ones might belong to a live writer (possibly another process). */
+const TMP_FILE_MAX_AGE_MS = 60 * 60 * 1000;
+
+/** Quarantined corrupt history files are kept a while for debugging. */
+const CORRUPT_FILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface ListHistoryOptions {
   limit: number;
@@ -25,6 +50,8 @@ export class UndoStore {
   private readonly maxEntriesPerBudget: number;
 
   private readonly budgetLocks = new Map<string, Promise<void>>();
+
+  private housekeepingStarted = false;
 
   // The history file is reparsed and rewritten whole on every write
   // operation (up to three times per tool call, counting pending markers),
@@ -133,7 +160,9 @@ export class UndoStore {
   }
 
   async markPending(budgetId: string, description: string): Promise<string> {
-    const id = `${budgetId}::pending::${Date.now()}`;
+    // The random suffix keeps same-millisecond markers distinct, so
+    // clearing one cannot delete another.
+    const id = `${budgetId}::pending::${Date.now()}::${randomUUID().slice(0, 8)}`;
     const op: PendingOperation = {
       id,
       budget_id: budgetId,
@@ -150,6 +179,22 @@ export class UndoStore {
     });
 
     return id;
+  }
+
+  async annotatePending(
+    budgetId: string,
+    pendingId: string,
+    note: string,
+  ): Promise<void> {
+    await this.withBudgetLock(budgetId, async () => {
+      const history = await this.readBudgetHistoryUnsafe(budgetId);
+      const operation = (history.pending_operations ?? []).find(
+        (op) => op.id === pendingId,
+      );
+      if (!operation) return;
+      operation.note = note;
+      await this.writeBudgetHistoryUnsafe(budgetId, history);
+    });
   }
 
   async clearPending(budgetId: string, pendingId: string): Promise<void> {
@@ -222,9 +267,10 @@ export class UndoStore {
           parsed.id_mappings && typeof parsed.id_mappings === "object"
             ? parsed.id_mappings
             : {},
-        pending_operations: Array.isArray(parsed.pending_operations)
+        pending_operations: (Array.isArray(parsed.pending_operations)
           ? parsed.pending_operations
-          : [],
+          : []
+        ).filter((op) => !this.isExpiredPendingOperation(op)),
       };
     } catch (error) {
       const nodeError = error as NodeJS.ErrnoException;
@@ -270,8 +316,51 @@ export class UndoStore {
     }
   }
 
+  private isExpiredPendingOperation(op: PendingOperation): boolean {
+    const timestamp = Date.parse(op.timestamp);
+    // An unparseable timestamp is kept, not silently dropped: the marker
+    // is a warning about an unreconciled write, and losing it is worse
+    // than showing a malformed one.
+    if (!Number.isFinite(timestamp)) return false;
+    return Date.now() - timestamp > PENDING_OPERATION_MAX_AGE_MS;
+  }
+
   private async ensureHistoryDirectory(): Promise<void> {
     await mkdir(this.historyDirectory, { recursive: true });
+    if (!this.housekeepingStarted) {
+      this.housekeepingStarted = true;
+      // Best-effort, off the hot path: stale artifacts are only ever noise.
+      void this.cleanupStaleArtifacts().catch(() => {});
+    }
+  }
+
+  /**
+   * Delete leftover `.tmp` files (from atomic writes that never renamed)
+   * and aged-out `.corrupt-*` quarantine files. Age thresholds keep live
+   * writers' temp files and recent corruption evidence intact.
+   */
+  private async cleanupStaleArtifacts(): Promise<void> {
+    const names = await readdir(this.historyDirectory);
+    const now = Date.now();
+
+    await Promise.all(
+      names.map(async (name) => {
+        const isTmp = name.endsWith(".tmp");
+        const isCorrupt = name.includes(".corrupt-");
+        if (!isTmp && !isCorrupt) return;
+
+        const maxAge = isTmp ? TMP_FILE_MAX_AGE_MS : CORRUPT_FILE_MAX_AGE_MS;
+        const filePath = join(this.historyDirectory, name);
+        try {
+          const info = await stat(filePath);
+          if (now - info.mtimeMs > maxAge) {
+            await unlink(filePath);
+          }
+        } catch {
+          // Raced with another cleaner or writer; nothing to do.
+        }
+      }),
+    );
   }
 
   private getBudgetHistoryPath(budgetId: string): string {
@@ -290,6 +379,18 @@ export class UndoStore {
     }
   }
 
+  /**
+   * Serialize read-modify-write cycles per budget WITHIN THIS PROCESS.
+   *
+   * The lock is deliberately in-process only. Two server processes sharing
+   * the same data directory cannot corrupt a history file (writes go
+   * through an atomic temp-file rename), but they can lose each other's
+   * updates: both read, both modify, last rename wins. Advisory file locks
+   * were considered and rejected — they hang on some network filesystems,
+   * need stale-lock recovery after crashes, and the multi-process case
+   * (several MCP servers pointed at one YNAB_MCP_DATA_DIR) is explicitly
+   * unsupported. Run one server per data directory instead.
+   */
   private async withBudgetLock<T>(
     budgetId: string,
     callback: () => Promise<T>,

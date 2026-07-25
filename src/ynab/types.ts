@@ -117,6 +117,8 @@ export interface CategoryLookupEntry {
   name: string;
   group_id: string;
   group_name: string;
+  /** Category-level internal flag ("Inflow: Ready to Assign", "Uncategorized"). */
+  internal: boolean;
 }
 
 export interface NameLookup {

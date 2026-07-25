@@ -55,7 +55,7 @@ export function registerBudgetTools(
       description:
         "Force a fresh sync of all cached budget data (accounts, categories, payees, transactions, scheduled transactions) " +
         "from the YNAB API. Use this when you suspect external changes (e.g., bank imports, mobile app edits) " +
-        "that may not be reflected yet. Costs up to 5 API requests against the 200/hour rate limit.",
+        "that may not be reflected yet. Costs up to 6 API requests against the 200/hour rate limit.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,

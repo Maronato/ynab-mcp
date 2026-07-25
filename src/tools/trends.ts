@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import { isInternalCategory } from "../shared/categories.js";
 import {
   endOfMonthString,
   monthKeysBack,
@@ -179,7 +180,7 @@ export function registerTrendTools(
         // Build internal category set for exclusion
         const internalCategoryIds = new Set<string>();
         for (const [id, info] of lookups.categoryById) {
-          if (info.group_name === "Internal Master Category") {
+          if (isInternalCategory(info, info.group_name)) {
             internalCategoryIds.add(id);
           }
         }

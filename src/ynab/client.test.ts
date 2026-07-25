@@ -90,6 +90,9 @@ function createMockApi() {
           },
         },
       }),
+      getPlanMonths: vi.fn().mockResolvedValue({
+        data: { months: [], server_knowledge: 100 },
+      }),
     },
   };
 }
@@ -2619,5 +2622,137 @@ describe("getTransactionById freshness", () => {
     const result = await client.getTransactionById("b", "t-deleted");
 
     expect(result?.id).toBe("t-deleted");
+  });
+});
+
+describe("concurrent refresh coalescing", () => {
+  it("joins concurrent account refreshes into one fetch", async () => {
+    let resolveFetch!: (value: unknown) => void;
+    mockApi.accounts.getAccounts.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+
+    const first = client.getAccounts("b");
+    const second = client.getAccounts("b");
+    await vi.waitFor(() => {
+      expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(1);
+    });
+    resolveFetch({ data: { accounts: [account()], server_knowledge: 1 } });
+
+    const [resultA, resultB] = await Promise.all([first, second]);
+    expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(1);
+    expect(resultA).toEqual(resultB);
+  });
+
+  it("joins concurrent transaction fetches with identical coverage", async () => {
+    let resolveFetch!: (value: unknown) => void;
+    mockApi.transactions.getTransactions.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+
+    const first = client.searchTransactions("b", { since_date: "2024-06-01" });
+    const second = client.searchTransactions("b", { since_date: "2024-06-01" });
+    await vi.waitFor(() => {
+      expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(1);
+    });
+    resolveFetch({ data: { transactions: [tx()], server_knowledge: 1 } });
+
+    await Promise.all([first, second]);
+    expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-fetches when a joined refresh does not cover an older since_date", async () => {
+    let resolveFirst!: (value: unknown) => void;
+    mockApi.transactions.getTransactions
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        data: { transactions: [], server_knowledge: 2 },
+      });
+
+    const first = client.searchTransactions("b", { since_date: "2024-06-01" });
+    const second = client.searchTransactions("b", { since_date: "2020-01-01" });
+    await vi.waitFor(() => {
+      expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(1);
+    });
+    resolveFirst({ data: { transactions: [], server_knowledge: 1 } });
+
+    await Promise.all([first, second]);
+    expect(mockApi.transactions.getTransactions).toHaveBeenCalledTimes(2);
+    expect(mockApi.transactions.getTransactions).toHaveBeenNthCalledWith(
+      1,
+      "b",
+      "2024-06-01",
+    );
+    expect(mockApi.transactions.getTransactions).toHaveBeenNthCalledWith(
+      2,
+      "b",
+      "2020-01-01",
+    );
+  });
+});
+
+describe("write-vs-refresh invalidation epoch", () => {
+  it("re-marks a collection stale when a write lands during its refresh", async () => {
+    // Prime the accounts cache (fetch 1).
+    mockApi.accounts.getAccounts.mockResolvedValueOnce({
+      data: {
+        accounts: [account({ id: "acc-1", balance: 999 })],
+        server_knowledge: 1,
+      },
+    });
+    await client.getAccounts("b");
+
+    // A write marks accounts stale.
+    await client.createTransactions("b", [
+      { account_id: "acc-1", date: "2024-01-15", amount: -1 },
+    ]);
+
+    // Fetch 2 starts (deferred) — then another write lands mid-flight.
+    let resolveRefresh!: (value: unknown) => void;
+    mockApi.accounts.getAccounts.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
+    const inFlight = client.getAccounts("b");
+    await vi.waitFor(() => {
+      expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(2);
+    });
+    await client.createTransactions("b", [
+      { account_id: "acc-1", date: "2024-01-16", amount: -2 },
+    ]);
+
+    // The refresh resolves with a PRE-write snapshot.
+    resolveRefresh({
+      data: {
+        accounts: [account({ id: "acc-1", balance: 999 })],
+        server_knowledge: 2,
+      },
+    });
+    await inFlight;
+
+    // Because the epoch advanced mid-flight, the collection stayed stale:
+    // the next read reconciles instead of serving pre-write data for a TTL.
+    mockApi.accounts.getAccounts.mockResolvedValueOnce({
+      data: {
+        accounts: [account({ id: "acc-1", balance: 100 })],
+        server_knowledge: 3,
+      },
+    });
+    const after = await client.getAccounts("b");
+    expect(mockApi.accounts.getAccounts).toHaveBeenCalledTimes(3);
+    expect(after[0].balance).toBe(100);
   });
 });

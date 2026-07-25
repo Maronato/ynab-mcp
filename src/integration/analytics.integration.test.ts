@@ -344,6 +344,48 @@ describe("set_category_targets", () => {
     expect(result.results[0].after?.goal_target).toBe(10000.0);
     expect(result.undo_history_ids.length).toBeGreaterThan(0);
   });
+
+  it("sets goal_needs_whole_amount and restores it on undo", async () => {
+    const result = (await harness.callTool("set_category_targets", {
+      targets: [
+        {
+          category_id: "cat-emergency",
+          goal_target: 500.0,
+          goal_needs_whole_amount: true,
+        },
+      ],
+    })) as {
+      results: Array<{
+        status: string;
+        before?: { goal_needs_whole_amount: boolean | null };
+        after?: { goal_needs_whole_amount: boolean | null };
+      }>;
+      undo_history_ids: string[];
+    };
+
+    expect(result.results[0].status).toBe("updated");
+    expect(result.results[0].after?.goal_needs_whole_amount).toBe(true);
+
+    // Undoing a category-target entry restores the previous target,
+    // including the whole-amount preference.
+    const undo = (await harness.callTool("undo_operations", {
+      undo_history_ids: result.undo_history_ids,
+    })) as { results: Array<{ status: string; message?: string }> };
+    expect(undo.results[0].status).toBe("undone");
+
+    const after = (await harness.callTool("set_category_targets", {
+      targets: [{ category_id: "cat-emergency", goal_target: 1.0 }],
+    })) as {
+      results: Array<{
+        before?: {
+          goal_target: number | null;
+          goal_needs_whole_amount: boolean | null;
+        };
+      }>;
+    };
+    expect(after.results[0].before?.goal_target).toBeNull();
+    expect(after.results[0].before?.goal_needs_whole_amount).toBeNull();
+  });
 });
 
 // ── get_budget_health ──

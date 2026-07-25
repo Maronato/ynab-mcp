@@ -27,6 +27,11 @@ export interface CollectionCache<T> {
   stale: boolean;
   lastRefreshedAt: number;
   lastDeltas?: SyncDeltas;
+  /** Bumped on every local invalidation (write-driven staleness or
+   * optimistic update). A refresh snapshots this before fetching and
+   * re-marks the collection stale if it advanced mid-flight, so a fetch
+   * that raced a write cannot pin pre-write data for a full TTL. */
+  epoch: number;
 }
 
 export interface TransactionCache {
@@ -36,6 +41,8 @@ export interface TransactionCache {
   stale: boolean;
   lastRefreshedAt: number;
   lastDeltas?: SyncDeltas;
+  /** See {@link CollectionCache.epoch}. */
+  epoch: number;
 }
 
 export interface SimpleCache<T> {
@@ -61,6 +68,10 @@ export interface BudgetCache {
   payees: CollectionCache<ynab.Payee>;
   scheduledTransactions: CollectionCache<ynab.ScheduledTransactionDetail>;
   transactions: TransactionCache;
+  /** All month summaries, keyed by month date (YYYY-MM-01). Delta-capable
+   * via the months-list endpoint; one call replaces up to 12 per-month
+   * fetches for aggregate-only consumers. */
+  months: CollectionCache<ynab.MonthSummary>;
   categoryGroups: Map<string, ynab.CategoryGroupWithCategories>;
   settings?: SimpleCache<ynab.PlanSettings>;
   monthSummaries: Map<string, SimpleCache<ynab.MonthDetail>>;
@@ -102,20 +113,28 @@ export class CacheManager {
     }
 
     const cache: BudgetCache = {
-      accounts: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
-      categories: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
-      payees: { byId: new Map(), stale: false, lastRefreshedAt: 0 },
+      accounts: { byId: new Map(), stale: false, lastRefreshedAt: 0, epoch: 0 },
+      categories: {
+        byId: new Map(),
+        stale: false,
+        lastRefreshedAt: 0,
+        epoch: 0,
+      },
+      payees: { byId: new Map(), stale: false, lastRefreshedAt: 0, epoch: 0 },
       scheduledTransactions: {
         byId: new Map(),
         stale: false,
         lastRefreshedAt: 0,
+        epoch: 0,
       },
       transactions: {
         byId: new Map(),
         coveredSinceDate: "",
         stale: false,
         lastRefreshedAt: 0,
+        epoch: 0,
       },
+      months: { byId: new Map(), stale: false, lastRefreshedAt: 0, epoch: 0 },
       categoryGroups: new Map(),
       monthSummaries: new Map(),
       monthCategories: new Map(),
@@ -135,6 +154,7 @@ export class CacheManager {
     const cache = this.getBudgetCache(budgetId);
     for (const key of keys) {
       cache[key].stale = true;
+      cache[key].epoch += 1;
     }
   }
 
@@ -142,6 +162,10 @@ export class CacheManager {
     const cache = this.getBudgetCache(budgetId);
     cache.monthSummaries.clear();
     cache.monthCategories.clear();
+    // The months collection is delta-capable, so a cheap delta refresh
+    // (rather than a full drop) picks up the write's effects.
+    cache.months.stale = true;
+    cache.months.epoch += 1;
     // Budget writes create money movements server-side
     cache.moneyMovements.clear();
   }
@@ -196,11 +220,13 @@ export class CacheManager {
         txCache.byId.set(tx.id, tx);
       }
     }
+    txCache.epoch += 1;
   }
 
   optimisticRemoveTransaction(budgetId: string, transactionId: string): void {
     const cache = this.getBudgetCache(budgetId);
     cache.transactions.byId.delete(transactionId);
+    cache.transactions.epoch += 1;
   }
 
   optimisticUpdateScheduledTransaction(
@@ -210,6 +236,7 @@ export class CacheManager {
     const cache = this.getBudgetCache(budgetId);
     if (cache.scheduledTransactions.serverKnowledge == null) return;
     cache.scheduledTransactions.byId.set(transaction.id, transaction);
+    cache.scheduledTransactions.epoch += 1;
   }
 
   optimisticRemoveScheduledTransaction(
@@ -218,6 +245,7 @@ export class CacheManager {
   ): void {
     const cache = this.getBudgetCache(budgetId);
     cache.scheduledTransactions.byId.delete(scheduledTransactionId);
+    cache.scheduledTransactions.epoch += 1;
   }
 
   // -------------------------------------------------------------------------
@@ -248,6 +276,36 @@ export class CacheManager {
     cache.accounts.lastDeltas = deltas;
 
     return [...cache.accounts.byId.values()];
+  }
+
+  // -------------------------------------------------------------------------
+  // Collection refresh: months
+  // -------------------------------------------------------------------------
+
+  applyMonthDeltas(
+    budgetId: string,
+    months: ynab.MonthSummary[],
+    serverKnowledge: number,
+  ): ynab.MonthSummary[] {
+    const cache = this.getBudgetCache(budgetId);
+    const deltas: SyncDeltas = { added: 0, updated: 0, deleted: 0 };
+    cache.months.serverKnowledge = serverKnowledge;
+    for (const month of months) {
+      if (month.deleted) {
+        if (cache.months.byId.delete(month.month)) deltas.deleted++;
+      } else if (cache.months.byId.has(month.month)) {
+        cache.months.byId.set(month.month, month);
+        deltas.updated++;
+      } else {
+        cache.months.byId.set(month.month, month);
+        deltas.added++;
+      }
+    }
+    cache.months.stale = false;
+    cache.months.lastRefreshedAt = Date.now();
+    cache.months.lastDeltas = deltas;
+
+    return [...cache.months.byId.values()];
   }
 
   // -------------------------------------------------------------------------

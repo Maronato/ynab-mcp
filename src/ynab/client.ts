@@ -1,6 +1,11 @@
 import * as ynab from "ynab";
 import { CacheManager, type MoneyMovementsSnapshot } from "./cache.js";
-import { extractErrorMessage, isNotFoundError } from "./errors.js";
+import {
+  extractErrorMessage,
+  isNotFoundError,
+  unwrapSdkError,
+  YnabApiTimeoutError,
+} from "./errors.js";
 import {
   asCurrency,
   asMilliunits,
@@ -13,6 +18,7 @@ import { RateLimiter } from "./rate-limiter.js";
 import { filterAndSortTransactions } from "./search.js";
 import type {
   CategoryBudgetAssignment,
+  CategoryLookupEntry,
   CreateScheduledTransactionInput,
   CreateTransactionInput,
   NameLookup,
@@ -30,6 +36,15 @@ const FULL_HISTORY_SINCE_DATE = "2000-01-01";
 
 /** Default timeout for individual YNAB API requests. */
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * Extra headroom for the promise-race backstop over the fetch-level abort.
+ * The abort in {@link RateLimitTrackingApi} is the authoritative timeout —
+ * it kills the underlying HTTP request. The race only exists to catch
+ * hangs the abort can't reach (e.g. response-body parsing), so it fires
+ * strictly later to guarantee the abort path wins when both apply.
+ */
+const TIMEOUT_BACKSTOP_GRACE_MS = 5_000;
 
 /** Maximum number of retries for transient failures on read operations. */
 const DEFAULT_MAX_RETRIES = 2;
@@ -64,11 +79,11 @@ function isNotDeleted<T extends { deleted?: boolean }>(item: T): boolean {
 function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
-  message: string,
+  makeError: () => Error,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout>;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+    timeoutId = setTimeout(() => reject(makeError()), ms);
   });
   return Promise.race([promise, timeoutPromise]).finally(() =>
     clearTimeout(timeoutId),
@@ -76,6 +91,9 @@ function withTimeout<T>(
 }
 
 function isTransientError(error: unknown): boolean {
+  if (error instanceof YnabApiTimeoutError) {
+    return true;
+  }
   // Timeout errors from our own wrapper
   if (error instanceof Error && error.message.includes("timed out")) {
     return true;
@@ -151,6 +169,21 @@ const DEFAULT_ACCOUNT_OPTIONS: Required<
   includeClosed: false,
 };
 
+/**
+ * Callback for recording workaround debris that could not be cleaned up:
+ * a temporary flush transaction (see {@link YnabClient.flushSplitPhantoms})
+ * whose delete failed and which therefore remains in the user's budget.
+ * Wired to the undo engine in server.ts so the leftover transaction shows
+ * up in undo history as an undoable create.
+ */
+export interface OrphanedCleanupRecorder {
+  recordOrphanedCleanupTransaction(
+    budgetId: string,
+    transaction: ynab.TransactionDetail,
+    error: unknown,
+  ): Promise<void>;
+}
+
 const DEFAULT_CATEGORIES_OPTIONS: Required<
   Pick<GetCategoriesOptions, "includeHidden">
 > = {
@@ -160,21 +193,67 @@ const DEFAULT_CATEGORIES_OPTIONS: Required<
 /**
  * ynab.API subclass whose Configuration routes requests through a custom
  * fetch. This is the only clean hook the SDK offers for reading response
- * headers (X-Rate-Limit) and intercepting 429s — its error path otherwise
- * throws the parsed JSON body with no access to status or headers.
+ * headers and intercepting 429s — its error path otherwise throws the
+ * parsed JSON body with no access to status or headers. It also owns the
+ * per-request abort timer (see below).
+ *
+ * Note on X-Rate-Limit: the live API stopped sending this header entirely
+ * (verified 2026-07 against spec 1.86), so the local call tracker is the
+ * primary budget signal. The reconciliation path is kept and harmless —
+ * it simply never fires unless the header returns.
  */
 class RateLimitTrackingApi extends ynab.API {
   constructor(
     accessToken: string,
     endpointUrl: string | undefined,
     rateLimiter: RateLimiter,
+    timeoutMs: number,
   ) {
     super(accessToken, endpointUrl);
+
+    // Abort the underlying HTTP request when it exceeds the time budget.
+    // Racing a timer against the SDK promise is not enough on its own: an
+    // abandoned-but-still-running write can be applied server-side after
+    // the client has already reported failure, leaving no undo entry for a
+    // change that actually happened.
+    const fetchWithAbortableTimeout = async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const controller = new AbortController();
+      let timedOut = false;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      // Compose with any caller-provided signal by forwarding its abort.
+      // (AbortSignal.any would be cleaner but needs Node >= 20.3, and the
+      // package only requires >= 20.)
+      const upstreamSignal = init?.signal ?? undefined;
+      const forwardAbort = () => controller.abort(upstreamSignal?.reason);
+      if (upstreamSignal) {
+        if (upstreamSignal.aborted) forwardAbort();
+        else
+          upstreamSignal.addEventListener("abort", forwardAbort, {
+            once: true,
+          });
+      }
+      try {
+        return await fetch(input, { ...init, signal: controller.signal });
+      } catch (error) {
+        if (timedOut) throw new YnabApiTimeoutError(timeoutMs);
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+        upstreamSignal?.removeEventListener("abort", forwardAbort);
+      }
+    };
+
     this._configuration = new ynab.Configuration({
       accessToken,
       basePath: endpointUrl ?? ynab.BASE_PATH,
       fetchApi: async (input: string | URL | Request, init?: RequestInit) => {
-        const response = await fetch(input, init);
+        const response = await fetchWithAbortableTimeout(input, init);
         const header = response.headers.get("X-Rate-Limit");
         if (header) {
           const used = Number(header.split("/")[0]);
@@ -203,6 +282,18 @@ export class YnabClient {
 
   private resolvedLastUsedId: string | null = null;
 
+  /**
+   * In-flight collection refreshes, keyed by `${budgetId}:${collection}`.
+   * Overlapping reads join the same promise instead of double-fetching and
+   * double-applying deltas. (This dedups concurrent *reads*; a write's
+   * optimistic cache update can still race a full fetch that started
+   * earlier — coalescing narrows that window but a delta refresh after the
+   * next TTL remains the backstop.)
+   */
+  private readonly inFlightRefreshes = new Map<string, Promise<unknown>>();
+
+  private orphanedCleanupRecorder: OrphanedCleanupRecorder | undefined;
+
   readonly readOnly: boolean;
 
   private readonly timeoutMs: number;
@@ -228,7 +319,12 @@ export class YnabClient {
     });
     const rateLimiter = new RateLimiter();
     this.api = this.withRateLimitAndResilience(
-      new RateLimitTrackingApi(accessToken, endpointUrl, rateLimiter),
+      new RateLimitTrackingApi(
+        accessToken,
+        endpointUrl,
+        rateLimiter,
+        this.timeoutMs,
+      ),
       rateLimiter,
     );
     this.readOnly = options?.readOnly ?? false;
@@ -271,9 +367,13 @@ export class YnabClient {
                 );
                 if (result instanceof Promise) {
                   return withTimeout(
-                    result,
-                    timeoutMs,
-                    `YNAB API request timed out after ${timeoutMs / 1000} seconds.`,
+                    // Surface our own timeout / rate-limit errors instead of
+                    // the SDK runtime's generic FetchError wrapper.
+                    result.catch((error) => {
+                      throw unwrapSdkError(error);
+                    }),
+                    timeoutMs + TIMEOUT_BACKSTOP_GRACE_MS,
+                    () => new YnabApiTimeoutError(timeoutMs),
                   );
                 }
                 return result;
@@ -292,6 +392,10 @@ export class YnabClient {
         });
       },
     });
+  }
+
+  setOrphanedCleanupRecorder(recorder: OrphanedCleanupRecorder): void {
+    this.orphanedCleanupRecorder = recorder;
   }
 
   private assertWriteAllowed(): void {
@@ -481,6 +585,19 @@ export class YnabClient {
     return monthSummary;
   }
 
+  /**
+   * All month summaries for a budget in one delta-capable call
+   * (aggregates only — per-category month data still requires
+   * {@link getMonthSummary}). Sorted by month ascending.
+   */
+  async getMonthSummaries(budgetId?: string): Promise<ynab.MonthSummary[]> {
+    const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+    const months = await this.refreshMonths(resolvedBudgetId);
+    return months
+      .filter((month) => !month.deleted)
+      .sort((left, right) => left.month.localeCompare(right.month));
+  }
+
   async getScheduledTransactions(
     budgetId?: string,
     options: GetScheduledTransactionsOptions = {},
@@ -597,10 +714,7 @@ export class YnabClient {
     const accountById = new Map(
       accounts.map((account) => [account.id, account.name]),
     );
-    const categoryById = new Map<
-      string,
-      { name: string; group_id: string; group_name: string }
-    >();
+    const categoryById = new Map<string, CategoryLookupEntry>();
 
     for (const group of categories) {
       for (const category of group.categories) {
@@ -608,6 +722,7 @@ export class YnabClient {
           name: category.name,
           group_id: group.id,
           group_name: group.name,
+          internal: category.internal === true,
         });
       }
     }
@@ -865,8 +980,10 @@ export class YnabClient {
     options?: { skipPhantomFlush?: boolean },
   ): Promise<ynab.TransactionDetail | null> {
     this.assertWriteAllowed();
+    let resolvedBudgetId: string;
+    let deleted: ynab.TransactionDetail | null;
     try {
-      const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
+      resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
       const response = await this.api.transactions.deleteTransaction(
         resolvedBudgetId,
         transactionId,
@@ -877,15 +994,18 @@ export class YnabClient {
       ]);
       this.cache.invalidateMonthCaches(resolvedBudgetId);
       this.cache.optimisticRemoveTransaction(resolvedBudgetId, transactionId);
-      const deleted = response.data.transaction;
-      if (deleted && !options?.skipPhantomFlush) {
-        await this.flushSplitPhantoms(resolvedBudgetId, deleted);
-      }
-      return deleted;
+      deleted = response.data.transaction;
     } catch (error) {
       if (isNotFoundError(error)) return null;
       throw error;
     }
+    // Outside the try/catch above: the phantom flush must never fail the
+    // delete that already succeeded, and a flush error must not be
+    // misread as a not-found on the primary delete.
+    if (deleted && !options?.skipPhantomFlush) {
+      await this.flushSplitPhantoms(resolvedBudgetId, deleted);
+    }
+    return deleted;
   }
 
   /**
@@ -895,6 +1015,12 @@ export class YnabClient {
    *
    * When {@link replacementTransaction} is provided, categories already present
    * in the replacement are skipped since the create already flushed them.
+   *
+   * Never rejects: this runs after the caller's destructive work has already
+   * succeeded, so a cleanup failure must not be reported as a failure of the
+   * primary operation. The worst outcome of a failed flush *create* is that
+   * the cosmetic phantom activity remains; a failed flush *delete* leaves a
+   * stray cent transaction, which is recorded as an undoable entry.
    */
   private async flushSplitPhantoms(
     budgetId: string,
@@ -930,21 +1056,54 @@ export class YnabClient {
     if (deletedCategoryIds.size === 0) return;
 
     const categoryIds = [...deletedCategoryIds];
-    const created = await this.createTransactions(
-      budgetId,
-      categoryIds.map((categoryId) => ({
-        account_id: deleted.account_id,
-        date: deleted.date,
-        amount: -0.01,
-        category_id: categoryId,
-        approved: true,
-      })),
-    );
+    let created: ynab.TransactionDetail[];
+    try {
+      created = await this.createTransactions(
+        budgetId,
+        categoryIds.map((categoryId) => ({
+          account_id: deleted.account_id,
+          date: deleted.date,
+          amount: -0.01,
+          category_id: categoryId,
+          approved: true,
+        })),
+      );
+    } catch {
+      // Nothing was created, so there is no debris to record — only the
+      // cosmetic phantom activity remains uncorrected.
+      return;
+    }
 
+    // A failed delete here would leave a stray -0.01 transaction in the
+    // user's budget. Deleting is idempotent (a repeat delete 404s and maps
+    // to null), so retry transient failures; if the delete still fails,
+    // record the leftover transaction as an undoable create so it is
+    // visible in undo history and removable via undo_operations. A failure
+    // must not reject the caller: the primary operation already succeeded.
     await Promise.all(
-      created.map((t) =>
-        this.deleteTransaction(budgetId, t.id, { skipPhantomFlush: true }),
-      ),
+      created.map(async (t) => {
+        try {
+          await withRetry(
+            () =>
+              this.deleteTransaction(budgetId, t.id, {
+                skipPhantomFlush: true,
+              }),
+            this.maxRetries,
+            isTransientError,
+          );
+        } catch (error) {
+          try {
+            await this.orphanedCleanupRecorder?.recordOrphanedCleanupTransaction(
+              budgetId,
+              t,
+              error,
+            );
+          } catch {
+            // Best-effort: recording failed, but the primary operation
+            // succeeded and must not be reported as failed.
+          }
+        }
+      }),
     );
   }
 
@@ -1134,7 +1293,11 @@ export class YnabClient {
   async updateCategory(
     budgetId: string,
     categoryId: string,
-    updates: { goal_target?: number | null; goal_target_date?: string | null },
+    updates: {
+      goal_target?: number | null;
+      goal_target_date?: string | null;
+      goal_needs_whole_amount?: boolean | null;
+    },
   ): Promise<ynab.Category> {
     this.assertWriteAllowed();
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
@@ -1240,6 +1403,7 @@ export class YnabClient {
     payees: { added: number; updated: number; deleted: number };
     scheduled_transactions: { added: number; updated: number; deleted: number };
     transactions: { added: number; updated: number; deleted: number };
+    months: { added: number; updated: number; deleted: number };
   }> {
     const resolvedBudgetId = await this.resolveRealBudgetId(budgetId);
     const budgetCache = this.cache.getBudgetCache(resolvedBudgetId);
@@ -1248,18 +1412,21 @@ export class YnabClient {
     budgetCache.settings = undefined;
     budgetCache.monthSummaries.clear();
     budgetCache.monthCategories.clear();
+    budgetCache.moneyMovements.clear();
 
     budgetCache.accounts.stale = true;
     budgetCache.categories.stale = true;
     budgetCache.payees.stale = true;
     budgetCache.scheduledTransactions.stale = true;
     budgetCache.transactions.stale = true;
+    budgetCache.months.stale = true;
 
     await Promise.all([
       this.refreshAccounts(resolvedBudgetId),
       this.refreshCategories(resolvedBudgetId),
       this.refreshPayees(resolvedBudgetId),
       this.refreshScheduledTransactions(resolvedBudgetId),
+      this.refreshMonths(resolvedBudgetId),
       budgetCache.transactions.serverKnowledge != null
         ? this.refreshTransactions(resolvedBudgetId)
         : this.fullFetchTransactions(
@@ -1276,6 +1443,7 @@ export class YnabClient {
       scheduled_transactions:
         budgetCache.scheduledTransactions.lastDeltas ?? zero,
       transactions: budgetCache.transactions.lastDeltas ?? zero,
+      months: budgetCache.months.lastDeltas ?? zero,
     };
   }
 
@@ -1283,22 +1451,46 @@ export class YnabClient {
   // Collection refresh methods (with freshness short-circuit)
   // ---------------------------------------------------------------------------
 
+  /**
+   * Join an already-in-flight refresh for `key` or start `fn` as the new
+   * in-flight refresh. Every joiner receives the same settled result.
+   */
+  private coalesceRefresh<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const existing = this.inFlightRefreshes.get(key);
+    if (existing) return existing as Promise<T>;
+
+    const promise = fn().finally(() => {
+      this.inFlightRefreshes.delete(key);
+    });
+    this.inFlightRefreshes.set(key, promise);
+    return promise;
+  }
+
   private async refreshAccounts(budgetId: string): Promise<ynab.Account[]> {
     const budgetCache = this.cache.getBudgetCache(budgetId);
     if (!this.cache.needsRefresh(budgetCache.accounts)) {
       return [...budgetCache.accounts.byId.values()];
     }
 
-    const response = await this.api.accounts.getAccounts(
-      budgetId,
-      budgetCache.accounts.serverKnowledge,
-    );
+    return this.coalesceRefresh(`${budgetId}:accounts`, async () => {
+      const epochAtStart = budgetCache.accounts.epoch;
+      const response = await this.api.accounts.getAccounts(
+        budgetId,
+        budgetCache.accounts.serverKnowledge,
+      );
 
-    return this.cache.applyAccountDeltas(
-      budgetId,
-      response.data.accounts,
-      response.data.server_knowledge,
-    );
+      const applied = this.cache.applyAccountDeltas(
+        budgetId,
+        response.data.accounts,
+        response.data.server_knowledge,
+      );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.accounts.epoch !== epochAtStart) {
+        budgetCache.accounts.stale = true;
+      }
+      return applied;
+    });
   }
 
   private async refreshCategories(
@@ -1309,16 +1501,25 @@ export class YnabClient {
       return [...budgetCache.categoryGroups.values()];
     }
 
-    const response = await this.api.categories.getCategories(
-      budgetId,
-      budgetCache.categories.serverKnowledge,
-    );
+    return this.coalesceRefresh(`${budgetId}:categories`, async () => {
+      const epochAtStart = budgetCache.categories.epoch;
+      const response = await this.api.categories.getCategories(
+        budgetId,
+        budgetCache.categories.serverKnowledge,
+      );
 
-    return this.cache.applyCategoryDeltas(
-      budgetId,
-      response.data.category_groups,
-      response.data.server_knowledge,
-    );
+      const applied = this.cache.applyCategoryDeltas(
+        budgetId,
+        response.data.category_groups,
+        response.data.server_knowledge,
+      );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.categories.epoch !== epochAtStart) {
+        budgetCache.categories.stale = true;
+      }
+      return applied;
+    });
   }
 
   private async refreshPayees(budgetId: string): Promise<ynab.Payee[]> {
@@ -1327,16 +1528,52 @@ export class YnabClient {
       return [...budgetCache.payees.byId.values()];
     }
 
-    const response = await this.api.payees.getPayees(
-      budgetId,
-      budgetCache.payees.serverKnowledge,
-    );
+    return this.coalesceRefresh(`${budgetId}:payees`, async () => {
+      const epochAtStart = budgetCache.payees.epoch;
+      const response = await this.api.payees.getPayees(
+        budgetId,
+        budgetCache.payees.serverKnowledge,
+      );
 
-    return this.cache.applyPayeeDeltas(
-      budgetId,
-      response.data.payees,
-      response.data.server_knowledge,
-    );
+      const applied = this.cache.applyPayeeDeltas(
+        budgetId,
+        response.data.payees,
+        response.data.server_knowledge,
+      );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.payees.epoch !== epochAtStart) {
+        budgetCache.payees.stale = true;
+      }
+      return applied;
+    });
+  }
+
+  private async refreshMonths(budgetId: string): Promise<ynab.MonthSummary[]> {
+    const budgetCache = this.cache.getBudgetCache(budgetId);
+    if (!this.cache.needsRefresh(budgetCache.months)) {
+      return [...budgetCache.months.byId.values()];
+    }
+
+    return this.coalesceRefresh(`${budgetId}:months`, async () => {
+      const epochAtStart = budgetCache.months.epoch;
+      const response = await this.api.months.getPlanMonths(
+        budgetId,
+        budgetCache.months.serverKnowledge,
+      );
+
+      const applied = this.cache.applyMonthDeltas(
+        budgetId,
+        response.data.months,
+        response.data.server_knowledge,
+      );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.months.epoch !== epochAtStart) {
+        budgetCache.months.stale = true;
+      }
+      return applied;
+    });
   }
 
   private async refreshScheduledTransactions(
@@ -1347,17 +1584,26 @@ export class YnabClient {
       return [...budgetCache.scheduledTransactions.byId.values()];
     }
 
-    const response =
-      await this.api.scheduledTransactions.getScheduledTransactions(
-        budgetId,
-        budgetCache.scheduledTransactions.serverKnowledge,
-      );
+    return this.coalesceRefresh(`${budgetId}:scheduled`, async () => {
+      const epochAtStart = budgetCache.scheduledTransactions.epoch;
+      const response =
+        await this.api.scheduledTransactions.getScheduledTransactions(
+          budgetId,
+          budgetCache.scheduledTransactions.serverKnowledge,
+        );
 
-    return this.cache.applyScheduledTransactionDeltas(
-      budgetId,
-      response.data.scheduled_transactions,
-      response.data.server_knowledge,
-    );
+      const applied = this.cache.applyScheduledTransactionDeltas(
+        budgetId,
+        response.data.scheduled_transactions,
+        response.data.server_knowledge,
+      );
+      // A write invalidated this collection while the fetch was in
+      // flight; keep it stale so the next read reconciles via delta.
+      if (budgetCache.scheduledTransactions.epoch !== epochAtStart) {
+        budgetCache.scheduledTransactions.stale = true;
+      }
+      return applied;
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1369,68 +1615,97 @@ export class YnabClient {
    * - If uncovered or requesting older data: full fetch (resets SK).
    * - If covered but stale/TTL-expired: delta refresh.
    * - If covered and fresh: no-op.
+   *
+   * An in-flight transaction refresh is joined first and the requirement is
+   * then re-evaluated: the joined refresh may have satisfied it (typical
+   * concurrent-read case) or may have covered a narrower date range, in
+   * which case this caller starts its own fetch.
    */
   private async ensureTransactionsCovered(
     budgetId: string,
     sinceDate?: string,
   ): Promise<void> {
-    const budgetCache = this.cache.getBudgetCache(budgetId);
-    const txCache = budgetCache.transactions;
     const effectiveSinceDate = sinceDate ?? "";
+    const refreshKey = `${budgetId}:transactions`;
 
-    const isCovered =
-      txCache.serverKnowledge != null &&
-      txCache.coveredSinceDate <= effectiveSinceDate;
+    for (;;) {
+      const inFlight = this.inFlightRefreshes.get(refreshKey);
+      if (inFlight) {
+        await inFlight;
+        continue;
+      }
 
-    if (!isCovered) {
-      // Full fetch: either first time, or requesting older data than cached
-      await this.fullFetchTransactions(budgetId, effectiveSinceDate);
+      const txCache = this.cache.getBudgetCache(budgetId).transactions;
+      const isCovered =
+        txCache.serverKnowledge != null &&
+        txCache.coveredSinceDate <= effectiveSinceDate;
+
+      if (!isCovered) {
+        // Full fetch: either first time, or requesting older data than cached
+        await this.fullFetchTransactions(budgetId, effectiveSinceDate);
+        return;
+      }
+
+      if (this.cache.needsRefresh(txCache)) {
+        await this.refreshTransactions(budgetId);
+      }
       return;
-    }
-
-    if (this.cache.needsRefresh(txCache)) {
-      await this.refreshTransactions(budgetId);
     }
   }
 
   /** Full fetch (no SK). Replaces the transaction cache entirely. */
-  private async fullFetchTransactions(
+  private fullFetchTransactions(
     budgetId: string,
     sinceDate: string,
   ): Promise<void> {
-    // Always pass an explicit since_date: the live API defaults a missing
-    // since_date to one year ago, which would silently truncate a "full
-    // history" fetch while the cache still claims full coverage.
-    const response = await this.api.transactions.getTransactions(
-      budgetId,
-      sinceDate || FULL_HISTORY_SINCE_DATE,
-    );
+    return this.coalesceRefresh(`${budgetId}:transactions`, async () => {
+      const txCache = this.cache.getBudgetCache(budgetId).transactions;
+      const epochAtStart = txCache.epoch;
+      // Always pass an explicit since_date: the live API defaults a missing
+      // since_date to one year ago, which would silently truncate a "full
+      // history" fetch while the cache still claims full coverage.
+      const response = await this.api.transactions.getTransactions(
+        budgetId,
+        sinceDate || FULL_HISTORY_SINCE_DATE,
+      );
 
-    this.cache.applyFullTransactionFetch(
-      budgetId,
-      response.data.transactions,
-      sinceDate,
-      response.data.server_knowledge,
-    );
+      this.cache.applyFullTransactionFetch(
+        budgetId,
+        response.data.transactions,
+        sinceDate,
+        response.data.server_knowledge,
+      );
+      // A write landed while the fetch was in flight (its optimistic update
+      // may just have been clobbered by the full snapshot); keep the cache
+      // stale so the next read reconciles via delta.
+      if (txCache.epoch !== epochAtStart) {
+        txCache.stale = true;
+      }
+    });
   }
 
   /** Delta refresh using stored SK + coveredSinceDate. */
-  private async refreshTransactions(budgetId: string): Promise<void> {
-    const budgetCache = this.cache.getBudgetCache(budgetId);
-    const txCache = budgetCache.transactions;
+  private refreshTransactions(budgetId: string): Promise<void> {
+    return this.coalesceRefresh(`${budgetId}:transactions`, async () => {
+      const txCache = this.cache.getBudgetCache(budgetId).transactions;
+      const epochAtStart = txCache.epoch;
 
-    const response = await this.api.transactions.getTransactions(
-      budgetId,
-      txCache.coveredSinceDate || FULL_HISTORY_SINCE_DATE,
-      undefined,
-      undefined,
-      txCache.serverKnowledge,
-    );
+      const response = await this.api.transactions.getTransactions(
+        budgetId,
+        txCache.coveredSinceDate || FULL_HISTORY_SINCE_DATE,
+        undefined,
+        undefined,
+        txCache.serverKnowledge,
+      );
 
-    this.cache.applyTransactionDeltas(
-      budgetId,
-      response.data.transactions,
-      response.data.server_knowledge,
-    );
+      this.cache.applyTransactionDeltas(
+        budgetId,
+        response.data.transactions,
+        response.data.server_knowledge,
+      );
+      if (txCache.epoch !== epochAtStart) {
+        txCache.stale = true;
+      }
+    });
   }
 }

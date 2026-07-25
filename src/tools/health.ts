@@ -2,6 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { AppContext } from "../context.js";
+import {
+  isCreditCardPaymentsGroup,
+  isSystemCategoryGroup,
+} from "../shared/categories.js";
 import { currentMonthString, endOfMonthString } from "../shared/dates.js";
 import { errorToolResult, jsonToolResult } from "../shared/mcp.js";
 import { extractErrorMessage } from "../ynab/errors.js";
@@ -12,13 +16,6 @@ import {
   formatCurrency,
   milliunitsToCurrency,
 } from "../ynab/format.js";
-
-const INTERNAL_GROUP_NAMES = new Set([
-  "Internal Master Category",
-  "Credit Card Payments",
-]);
-
-const CREDIT_CARD_PAYMENTS_GROUP = "Credit Card Payments";
 
 const budgetHealthSchema = z.object({
   budget_id: z
@@ -109,16 +106,29 @@ export function registerHealthTools(
         );
 
         // --- Build credit card payment category lookup ---
-        // YNAB puts one category per credit card in the "Credit Card Payments" group.
-        // The category name matches the account name.
+        // YNAB puts one category per credit account in its payments group.
+        // The category name matches the account name. Lines of credit get
+        // payment categories too, so include them in the pairing set even
+        // though gap detection below focuses on cards.
+        const creditAccountNames = new Set(
+          openAccounts
+            .filter((a) => a.type === "creditCard" || a.type === "lineOfCredit")
+            .map((a) => a.name),
+        );
         const paymentCategoryByName = new Map<
           string,
           { id: string; balance: number }
         >();
         for (const group of categoryGroups) {
-          if (group.name === CREDIT_CARD_PAYMENTS_GROUP) {
+          if (isCreditCardPaymentsGroup(group, creditAccountNames)) {
             for (const cat of group.categories) {
-              if (!cat.hidden && !cat.deleted) {
+              // First qualifying group wins a name: a user category must
+              // never overwrite a real payment category's balance.
+              if (
+                !cat.hidden &&
+                !cat.deleted &&
+                !paymentCategoryByName.has(cat.name)
+              ) {
                 paymentCategoryByName.set(cat.name, {
                   id: cat.id,
                   balance: cat.balance,
@@ -147,7 +157,7 @@ export function registerHealthTools(
         let totalUnderfunded = 0;
 
         for (const group of categoryGroups) {
-          if (INTERNAL_GROUP_NAMES.has(group.name)) continue;
+          if (isSystemCategoryGroup(group, creditAccountNames)) continue;
 
           for (const cat of group.categories) {
             if (cat.hidden || cat.deleted) continue;

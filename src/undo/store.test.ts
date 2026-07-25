@@ -1,7 +1,15 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMockUndoEntry } from "../test-utils.js";
 import { UndoStore } from "./store.js";
@@ -358,5 +366,101 @@ describe("error handling", () => {
         ),
       ]),
     );
+  });
+});
+
+describe("housekeeping", () => {
+  it("expires pending operations older than the age cutoff", async () => {
+    const fresh = await store.markPending(BUDGET_ID, "fresh operation");
+
+    // Inject stale pending ops directly into the history file: one from
+    // yesterday (kept — the cutoff errs long) and one from last week
+    // (expired).
+    const filePath = join(dataDir, "history", `${BUDGET_ID}.json`);
+    const raw = JSON.parse(await readFile(filePath, "utf8"));
+    raw.pending_operations.push(
+      {
+        id: "yesterday-op",
+        budget_id: BUDGET_ID,
+        timestamp: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+        description: "yesterday's operation",
+      },
+      {
+        id: "ancient-op",
+        budget_id: BUDGET_ID,
+        timestamp: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        description: "ancient operation",
+      },
+    );
+    await writeFile(filePath, JSON.stringify(raw), "utf8");
+
+    const pending = await store.getPendingOperations(BUDGET_ID);
+    expect(pending.map((op) => op.id)).toEqual([fresh, "yesterday-op"]);
+  });
+
+  it("keeps pending operations with unparseable timestamps", async () => {
+    const filePath = join(dataDir, "history", `${BUDGET_ID}.json`);
+    await mkdir(join(dataDir, "history"), { recursive: true });
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        entries: [],
+        id_mappings: {},
+        pending_operations: [
+          {
+            id: "bad-ts",
+            budget_id: BUDGET_ID,
+            timestamp: "not-a-date",
+            description: "corrupt timestamp",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    // A malformed marker still warns about an unreconciled write.
+    const pending = await store.getPendingOperations(BUDGET_ID);
+    expect(pending.map((op) => op.id)).toEqual(["bad-ts"]);
+  });
+
+  it("generates distinct pending ids in the same millisecond", async () => {
+    const first = await store.markPending(BUDGET_ID, "op one");
+    const second = await store.markPending(BUDGET_ID, "op two");
+    expect(first).not.toBe(second);
+
+    await store.clearPending(BUDGET_ID, first);
+    const remaining = await store.getPendingOperations(BUDGET_ID);
+    expect(remaining.map((op) => op.id)).toEqual([second]);
+  });
+
+  it("cleans up aged .tmp and .corrupt-* files but keeps recent ones", async () => {
+    const historyDir = join(dataDir, "history");
+    await mkdir(historyDir, { recursive: true });
+
+    const oldTmp = join(historyDir, "b.json.123.456.tmp");
+    const freshTmp = join(historyDir, "b.json.123.789.tmp");
+    const oldCorrupt = join(historyDir, "b.json.corrupt-1-2");
+    const freshCorrupt = join(historyDir, "b.json.corrupt-3-4");
+    for (const file of [oldTmp, freshTmp, oldCorrupt, freshCorrupt]) {
+      await writeFile(file, "{}", "utf8");
+    }
+    const twoHoursAgo = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+    const eightDaysAgo = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
+    await utimes(oldTmp, twoHoursAgo, twoHoursAgo);
+    await utimes(oldCorrupt, eightDaysAgo, eightDaysAgo);
+
+    // Housekeeping runs lazily on first store use; a fresh store instance
+    // triggers it.
+    const freshStore = new UndoStore(dataDir);
+    await freshStore.getPendingOperations(BUDGET_ID);
+    await vi.waitFor(async () => {
+      const names = await readdir(historyDir);
+      expect(names).not.toContain("b.json.123.456.tmp");
+      expect(names).not.toContain("b.json.corrupt-1-2");
+    });
+
+    const names = await readdir(historyDir);
+    expect(names).toContain("b.json.123.789.tmp");
+    expect(names).toContain("b.json.corrupt-3-4");
   });
 });

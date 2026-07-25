@@ -15,7 +15,7 @@ An MCP server for YNAB with batch operations, deterministic analysis tools, and 
 - **Built-in knowledge base** — YNAB methodology docs (credit cards, targets, overspending, reconciliation) served as MCP resources
 - **5 workflow prompts** — monthly reviews, spending reports, unapproved triage, budget optimization, and subscription audits
 - **Read-only mode** — write tools are not even registered, so clients only see tools they can use
-- **Efficient caching** — delta sync with YNAB's server knowledge system, configurable TTLs, and rate-limit reconciliation with the API's X-Rate-Limit header
+- **Efficient caching** — delta sync with YNAB's server knowledge system, configurable TTLs, and client-side rate-limit tracking
 
 ## Setup
 
@@ -178,7 +178,7 @@ Knowledge base resources for YNAB methodology. Workflow prompts reference these 
 
 **Read-only mode** — Set `YNAB_READ_ONLY=true` to hide and block all write operations. Useful for exploring your budget safely or restricting an MCP client to read-only access.
 
-**Rate limiting** — The YNAB API allows 200 requests per rolling hour. The server tracks usage locally, reconciles with the API's `X-Rate-Limit` header, and reports when capacity frees up if the limit is reached. Tools that cost one API call per item say so in their descriptions.
+**Rate limiting** — The YNAB API allows 200 requests per rolling hour. The server tracks usage locally and reports when capacity frees up if the limit is reached. (The API used to expose an `X-Rate-Limit` header the tracker reconciled against; the live API no longer sends it, so the local tracker is the sole signal until a 429 confirms exhaustion.) Tools that cost one API call per item say so in their descriptions.
 
 ## Development
 
