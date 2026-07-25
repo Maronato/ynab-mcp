@@ -184,6 +184,87 @@ describe("create_scheduled_transactions", () => {
   });
 });
 
+describe("frequency rejection fallback", () => {
+  // The tools accept the full 13-value frequency enum from the current API
+  // spec. An older API build rejected the compound values on write, and the
+  // api-quirks knowledge doc promises that if the live API ever rejects one,
+  // the per-item error surfaces it rather than failing the batch. This pins
+  // that promise without needing a live token.
+  it("surfaces an API frequency rejection as a per-item error", async () => {
+    const created = createMockScheduledTransaction({
+      id: "stx-monthly",
+      amount: -50000,
+    });
+    ctx.ynabClient.createScheduledTransaction
+      .mockResolvedValueOnce(created)
+      .mockRejectedValueOnce({
+        error: {
+          id: "400",
+          name: "bad_request",
+          detail: "frequency is invalid",
+        },
+      });
+    ctx.undoEngine.recordEntries.mockResolvedValue([{ id: "u1" }]);
+
+    const result = parseResult(
+      await tools.create_scheduled_transactions({
+        transactions: [
+          {
+            account_id: "acc-1",
+            date: "2099-01-01",
+            amount: -50,
+            frequency: "monthly",
+          },
+          {
+            account_id: "acc-1",
+            date: "2099-01-01",
+            amount: -50,
+            frequency: "everyOtherWeek",
+          },
+        ],
+      }),
+    );
+
+    // The accepted item still succeeds and stays undoable
+    expect(result.created_count).toBe(1);
+    expect(result.results[0].status).toBe("created");
+    expect(result.undo_history_ids).toHaveLength(1);
+
+    // The rejected item reports the API's reason, pointing at frequency
+    expect(result.results[1].status).toBe("error");
+    expect(result.results[1].message).toContain("frequency");
+  });
+
+  it("surfaces a frequency rejection on update as a per-item error", async () => {
+    const existing = createMockScheduledTransaction({
+      id: "stx-1",
+      amount: -50000,
+    });
+    ctx.ynabClient.getScheduledTransactionById.mockResolvedValue(existing);
+    ctx.ynabClient.updateScheduledTransaction.mockRejectedValue({
+      error: {
+        id: "400",
+        name: "bad_request",
+        detail: "frequency is invalid",
+      },
+    });
+
+    const result = parseResult(
+      await tools.update_scheduled_transactions({
+        transactions: [
+          {
+            scheduled_transaction_id: "stx-1",
+            frequency: "twiceAMonth",
+          },
+        ],
+      }),
+    );
+
+    expect(result.results[0].status).toBe("error");
+    expect(result.results[0].message).toContain("frequency");
+  });
+});
+
 describe("update_scheduled_transactions", () => {
   it("prefetches existing and passes before to update call", async () => {
     const before = createMockScheduledTransaction({

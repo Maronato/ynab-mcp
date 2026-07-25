@@ -289,8 +289,9 @@ export function registerCategoryTools(
       title: "Set Category Budgets",
       description:
         "Set budgeted amounts for one or more category/month pairs in a single " +
-        "request. Costs one YNAB API call per pair against the 200/hour rate " +
-        "limit — keep batches small.",
+        "request. Costs up to two YNAB API calls per pair against the 200/hour " +
+        "rate limit (the prior amount is read before it is written, and the " +
+        "read may be served from cache) — keep batches small.",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

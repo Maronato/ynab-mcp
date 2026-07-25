@@ -56,7 +56,7 @@ const topics: ReadonlyArray<{
     name: "api-quirks",
     title: "YNAB API Quirks and Limitations",
     description:
-      "Known YNAB API limitations: scheduled transaction frequencies, compound frequency read-only behavior, split transaction handling and ID changes, date validation on updates.",
+      "Known YNAB API limitations: scheduled transaction frequencies, split transaction handling and ID changes, scheduled-transaction date and split constraints.",
     file: "api-quirks.md",
   },
 ];

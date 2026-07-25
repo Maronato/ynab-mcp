@@ -75,10 +75,27 @@ export function monthKeysBack(count: number): string[] {
   return keys;
 }
 
-/** Date `months` months before today, as YYYY-MM-DD in local time. */
+/**
+ * Date `months` months before today, as YYYY-MM-DD in local time.
+ *
+ * Clamps to the target month's last day instead of rolling over: plain
+ * setMonth turns 2026-03-31 minus one month into 2026-03-03 (February has
+ * no 31st), which silently shortens history windows.
+ */
 export function dateMonthsAgo(months: number): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - months);
+  const now = new Date();
+  const targetYear = now.getFullYear();
+  const targetMonthIndex = now.getMonth() - months;
+  const lastDayOfTarget = new Date(
+    targetYear,
+    targetMonthIndex + 1,
+    0,
+  ).getDate();
+  const d = new Date(
+    targetYear,
+    targetMonthIndex,
+    Math.min(now.getDate(), lastDayOfTarget),
+  );
   return localDateString(d);
 }
 
