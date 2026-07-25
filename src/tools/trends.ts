@@ -72,9 +72,11 @@ function determineTrend(
 ): {
   direction: "increasing" | "decreasing" | "stable";
   percent_change: number;
-} {
+} | null {
+  // Fewer than two complete months means there is nothing to compare;
+  // report null rather than a fabricated "stable" at 0%.
   if (monthKeys.length < 2) {
-    return { direction: "stable", percent_change: 0 };
+    return null;
   }
 
   const lastMonth = monthKeys[monthKeys.length - 1];
@@ -133,7 +135,9 @@ export function registerTrendTools(
         "Multi-month spending time series with trend detection. Groups spending " +
         "by category, payee, or category group and identifies increasing/decreasing " +
         "patterns. The in-progress current month is included in the series marked " +
-        "partial, but excluded from trend labels and monthly averages.",
+        "partial, but excluded from trend labels, monthly averages, and moving " +
+        "averages. Trend fields are null when fewer than two complete months " +
+        "are available rather than reporting a fabricated flat trend.",
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
@@ -153,10 +157,11 @@ export function registerTrendTools(
           input.months ?? 6,
         );
 
-        // The last month key is the current month; treat it as partial until
-        // its final day so trend labels compare complete months only. A
-        // partial month would otherwise read as a systematic decrease.
-        const currentMonthPartial = todayString() < untilDate;
+        // The last month key is the current month. It stays partial for the
+        // whole month *including its final day* — spending can still land at
+        // 23:59 — so trend labels and averages compare complete months only.
+        // A partial month would otherwise read as a systematic decrease.
+        const currentMonthPartial = todayString() <= untilDate;
         const trendKeys = currentMonthPartial
           ? monthKeys.slice(0, -1)
           : monthKeys;
@@ -247,7 +252,9 @@ export function registerTrendTools(
         // Build series output
         const series = ranked.map((entity) => {
           const trend = determineTrend(entity.byMonth, trendKeys);
-          const movingAvg = computeMovingAverage(entity.byMonth, monthKeys, 3);
+          // Moving average over complete months only, matching trend and
+          // average_monthly; the partial current month has no value.
+          const movingAvg = computeMovingAverage(entity.byMonth, trendKeys, 3);
           const completeTotal = trendKeys.reduce(
             (sum, key) => sum + (entity.byMonth.get(key)?.total ?? 0),
             0,
@@ -272,16 +279,18 @@ export function registerTrendTools(
                 month,
                 amount: toCurrency(amount),
                 transaction_count: bucket?.count ?? 0,
-                moving_average_3m: milliunitsToCurrency(
-                  asMilliunits(movingAvg[idx]),
-                ),
+                // Undefined for the partial month: a 3-month average that
+                // blended it would carry the bias this tool excludes elsewhere.
+                moving_average_3m: isPartial
+                  ? null
+                  : milliunitsToCurrency(asMilliunits(movingAvg[idx])),
                 ...(isPartial && { partial: true }),
               };
             }),
             total: milliunitsToCurrency(asMilliunits(entity.total)),
             average_monthly: milliunitsToCurrency(asMilliunits(avgMonthly)),
-            trend_direction: trend.direction,
-            trend_percent_change: trend.percent_change,
+            trend_direction: trend?.direction ?? null,
+            trend_percent_change: trend?.percent_change ?? null,
           };
         });
 
@@ -303,6 +312,8 @@ export function registerTrendTools(
         let biggestReductionPercent = 0;
 
         for (const s of series) {
+          // Series without a computable trend contribute nothing here
+          if (s.trend_percent_change == null) continue;
           if (s.trend_percent_change > highestGrowthPercent) {
             highestGrowthPercent = s.trend_percent_change;
             highestGrowthCategory = s.name;

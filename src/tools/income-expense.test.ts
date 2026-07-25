@@ -123,14 +123,20 @@ describe("get_income_expense_summary", () => {
   });
 
   describe("averages", () => {
-    it("computes averages across all months correctly", async () => {
+    it("computes averages across complete months only", async () => {
+      // The current month is always partial, so request one extra month:
+      // offsets -3..-1 are the three complete months under test and the
+      // current month (offset 0) must not influence the averages.
       setupMonthSummaries([
-        { offset: -2, income: 4000000, activity: -2000000 },
-        { offset: -1, income: 5000000, activity: -3000000 },
-        { offset: 0, income: 6000000, activity: -4000000 },
+        { offset: -3, income: 4000000, activity: -2000000 },
+        { offset: -2, income: 5000000, activity: -3000000 },
+        { offset: -1, income: 6000000, activity: -4000000 },
+        { offset: 0, income: 9999000, activity: -9999000 },
       ]);
 
-      const result = parseResult(await handler({ months: 3 }));
+      const result = parseResult(await handler({ months: 4 }));
+
+      expect(result.complete_month_count).toBe(3);
 
       // Avg income: (4000 + 5000 + 6000) / 3 = 5000
       expect(result.averages.avg_income).toBe(5000);
@@ -215,11 +221,12 @@ describe("get_income_expense_summary", () => {
 
     it("handles all months with zero income", async () => {
       setupMonthSummaries([
-        { offset: -1, income: 0, activity: -500000 },
-        { offset: 0, income: 0, activity: -300000 },
+        { offset: -2, income: 0, activity: -500000 },
+        { offset: -1, income: 0, activity: -300000 },
+        { offset: 0, income: 0, activity: -100000 },
       ]);
 
-      const result = parseResult(await handler({ months: 2 }));
+      const result = parseResult(await handler({ months: 3 }));
 
       expect(result.averages.avg_savings_rate).toBe(0);
       expect(result.trend.recent_savings_rate).toBe(0);
@@ -298,6 +305,25 @@ describe("get_income_expense_summary", () => {
       // expenses $3000 — unaffected by the nearly-empty current month.
       expect(result.averages.avg_income).toBe(5000);
       expect(result.averages.avg_expenses).toBe(3000);
+      expect(result.averages.avg_savings_rate).toBe(40);
+    });
+
+    it("reports a null trend rather than a fabricated 0% for months=2", async () => {
+      // The review's exact repro: months=2 mid-month leaves a single
+      // complete month, so there is nothing to compare. Previously both
+      // trend windows collapsed to [] and each rate fell through to 0,
+      // producing "you saved 40%" and "savings rate 0%, flat" in one payload.
+      vi.setSystemTime(new Date(2026, 5, 15, 12, 0, 0)); // 2026-06-15
+      setupMonthSummaries([
+        { offset: -1, income: 5000000, activity: -3000000 },
+        { offset: 0, income: 0, activity: -500000 },
+      ]);
+
+      const result = parseResult(await handler({ months: 2 }));
+
+      expect(result.complete_month_count).toBe(1);
+      expect(result.trend).toBeNull();
+      // The averages still describe the one complete month honestly
       expect(result.averages.avg_savings_rate).toBe(40);
     });
   });
