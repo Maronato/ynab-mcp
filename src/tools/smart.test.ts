@@ -261,15 +261,44 @@ describe("suggest_transaction_categories", () => {
     const tx = createMockTransaction({
       id: "tx-low",
       category_id: null,
-      payee_id: "unknown-payee",
+      payee_id: "payee-1",
     });
+    // An ambiguous payee history: the dominant category holds only 2 of 5
+    // (40%), which is below the medium threshold, so the analyzer emits a
+    // low-confidence weak_signal suggestion that still names a category.
+    // (A no-signal payee would yield an empty suggested_category_id, which
+    // the pre-existing truthiness filter drops regardless of the gate — so
+    // it cannot exercise this behavior.)
+    const ambiguousProfile = new Map([
+      [
+        "payee-1",
+        makeProfile({
+          payee_id: "payee-1",
+          payee_name: "Corner Store",
+          category_counts: new Map([
+            ["cat-groceries", 2],
+            ["cat-dining", 2],
+            ["cat-electric", 1],
+          ]),
+          recency_weighted: new Map([
+            ["cat-groceries", 2],
+            ["cat-dining", 1.5],
+            ["cat-electric", 1],
+          ]),
+          total_count: 5,
+        }),
+      ],
+    ]);
+
     context.ynabClient.searchTransactions
       .mockResolvedValueOnce([tx])
       .mockResolvedValueOnce([]);
     setupDefaultMocks(context);
-    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(new Map());
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(
+      ambiguousProfile,
+    );
 
-    // Default: a low-confidence suggestion stays out of update_actions
+    // Default (high): the suggestion is present but withheld from actions
     const gated = JSON.parse(
       (
         await handlers.suggest_transaction_categories({
@@ -278,12 +307,16 @@ describe("suggest_transaction_categories", () => {
       ).content[0].text,
     );
     expect(gated.suggestions[0].confidence).toBe("low");
+    expect(gated.suggestions[0].suggested_category_id).toBeTruthy();
     expect(gated.update_actions).toEqual([]);
 
-    // Opt in explicitly to receive low-confidence actions
+    // Opting in to low confidence yields the action for that same suggestion
     context.ynabClient.searchTransactions
       .mockResolvedValueOnce([tx])
       .mockResolvedValueOnce([]);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(
+      ambiguousProfile,
+    );
     const opted = JSON.parse(
       (
         await handlers.suggest_transaction_categories({
@@ -292,12 +325,70 @@ describe("suggest_transaction_categories", () => {
         })
       ).content[0].text,
     );
-    expect(opted.update_actions.length).toBe(
-      opted.suggestions.filter(
-        (s: { suggested_category_id: string | null }) =>
-          s.suggested_category_id,
-      ).length,
+    expect(opted.update_actions).toEqual([
+      {
+        transaction_id: "tx-low",
+        category_id: gated.suggestions[0].suggested_category_id,
+      },
+    ]);
+  });
+
+  it("includes medium suggestions only at or below the medium threshold", async () => {
+    const { context, handlers } = setup();
+    const tx = createMockTransaction({
+      id: "tx-medium",
+      category_id: null,
+      payee_id: "payee-1",
+    });
+    // 3 of 5 (60%) clears the medium bar but not high.
+    const mediumProfile = new Map([
+      [
+        "payee-1",
+        makeProfile({
+          payee_id: "payee-1",
+          payee_name: "Corner Store",
+          category_counts: new Map([
+            ["cat-groceries", 3],
+            ["cat-dining", 2],
+          ]),
+          recency_weighted: new Map([
+            ["cat-groceries", 3],
+            ["cat-dining", 2],
+          ]),
+          total_count: 5,
+        }),
+      ],
+    ]);
+
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([tx])
+      .mockResolvedValueOnce([]);
+    setupDefaultMocks(context);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(mediumProfile);
+
+    const gated = JSON.parse(
+      (
+        await handlers.suggest_transaction_categories({
+          budget_id: "budget-1",
+        })
+      ).content[0].text,
     );
+    expect(gated.suggestions[0].confidence).toBe("medium");
+    expect(gated.update_actions).toEqual([]);
+
+    context.ynabClient.searchTransactions
+      .mockResolvedValueOnce([tx])
+      .mockResolvedValueOnce([]);
+    context.payeeProfileAnalyzer.getProfiles.mockResolvedValue(mediumProfile);
+    const opted = JSON.parse(
+      (
+        await handlers.suggest_transaction_categories({
+          budget_id: "budget-1",
+          action_confidence: "medium",
+        })
+      ).content[0].text,
+    );
+    expect(opted.update_actions).toHaveLength(1);
   });
 
   it("excludes transfers by default", async () => {
