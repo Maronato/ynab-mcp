@@ -171,6 +171,7 @@ export function formatTransactionForOutput(
     payee_id?: string | null;
     category_id?: string | null;
     flag_color?: string | null;
+    matched_transaction_id?: string | null;
     subtransactions?: SubtransactionLike[];
   },
   lookups: NameLookup,
@@ -186,6 +187,10 @@ export function formatTransactionForOutput(
     cleared: transaction.cleared,
     approved: transaction.approved,
     flag_color: transaction.flag_color ?? null,
+    // Non-null means YNAB already paired this with an imported transaction: both
+    // records exist in the API but the balance counts one. Without this, callers
+    // read a matched pair as a duplicate.
+    matched_transaction_id: transaction.matched_transaction_id ?? null,
     is_split: isSplit,
     account_id: transaction.account_id,
     account_name: lookups.accountById.get(transaction.account_id) ?? null,
