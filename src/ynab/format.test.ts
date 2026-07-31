@@ -403,6 +403,22 @@ describe("formatTransactionForOutput", () => {
     expect(result.payee_name).toBeNull();
   });
 
+  it("surfaces matched_transaction_id so matched imports are not read as duplicates", () => {
+    const tx = createMockTransaction({ matched_transaction_id: "tx-import-1" });
+    const lookups = createMockNameLookup();
+    const result = formatTransactionForOutput(tx, lookups);
+
+    expect(result.matched_transaction_id).toBe("tx-import-1");
+  });
+
+  it("returns null matched_transaction_id for an unmatched transaction", () => {
+    const tx = createMockTransaction();
+    const lookups = createMockNameLookup();
+    const result = formatTransactionForOutput(tx, lookups);
+
+    expect(result.matched_transaction_id).toBeNull();
+  });
+
   it("falls back to null when lookup does not contain the ID", () => {
     const tx = createMockTransaction({
       account_id: "unknown-acc",
